@@ -10,7 +10,7 @@ struct ContentView: View {
         // The title bar is hidden; its height is the top safe area, and the
         // header fills exactly that row so it centres on the traffic lights.
         GeometryReader { geometry in
-            VStack(spacing: 12) {
+            VStack(spacing: 0) {
                 header.frame(height: max(geometry.safeAreaInsets.top, 28))
                 screen
             }
