@@ -72,11 +72,13 @@ struct DropView: View {
                     Text(dragging ? "Drop to clean it" : "Drop a file or paste text")
                         .font(.system(size: 30, weight: .semibold))
                         .tracking(-0.6)
-                    Text("Personal details are replaced with realistic stand-ins. Works fully offline, with Apple's on-device name recognition.")
+                    (Text("Replaces personal details with realistic stand-ins. Runs offline; nothing you drop here leaves your Mac. ")
+                        + Text(Image(systemName: "info.circle")).foregroundStyle(Color.evergreen))
                         .font(.system(size: 15))
                         .foregroundStyle(Color.slate)
                         .multilineTextAlignment(.center)
                         .frame(width: 440)
+                        .help(Copy.howItWorks)
                 }
                 VStack(spacing: 14) {
                     HStack(spacing: 8) {

@@ -1,6 +1,20 @@
 import Foundation
 
 enum Copy {
+    static let howItWorks = """
+    How Scrub works
+
+    1. Finds personal details three ways: field names such as "password" or "email", \
+    patterns for emails, card numbers, IBANs, IDs, IP addresses and secrets, \
+    and Apple's on-device recognition of names, places, phone numbers and addresses.
+    2. Replaces each one with a realistic stand-in. The same person or value gets \
+    the same stand-in everywhere in the file.
+    3. Checks the result again and replaces anything that slipped through.
+    4. Keeps the file's structure: JSON, CSV and XML stay valid.
+
+    The app is sandboxed by macOS with no network access, so nothing can be sent anywhere.
+    """
+
     static let formats = "JSON · XML · CSV · TXT · MD · LOG"
 
     static func label(_ entity: String) -> String {
