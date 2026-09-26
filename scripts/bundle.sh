@@ -1,0 +1,16 @@
+#!/bin/bash
+# Builds Scrub.app into build/. Signs ad hoc unless SCRUB_SIGN_IDENTITY names a
+# Developer ID; either way with the hardened runtime and the App Sandbox.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+IDENTITY="${SCRUB_SIGN_IDENTITY:--}"
+swift build -c release --product Scrub
+APP=build/Scrub.app
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp "$(swift build -c release --show-bin-path)/Scrub" "$APP/Contents/MacOS/Scrub"
+cp Support/Info.plist "$APP/Contents/Info.plist"
+TIMESTAMP=$([ "$IDENTITY" = "-" ] && echo "--timestamp=none" || echo "--timestamp")
+codesign --force --sign "$IDENTITY" --options runtime $TIMESTAMP --entitlements Support/Scrub.entitlements "$APP"
+codesign --verify --strict "$APP"
+echo "Built $APP"
