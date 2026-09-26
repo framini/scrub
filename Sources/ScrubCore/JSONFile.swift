@@ -21,12 +21,16 @@ public enum JSONFile: FileFormat {
                 }
             case .array(let values):
                 for (index, child) in values.enumerated() {
-                    collect(child, key: key, path: path + "/" + String(index), records: records, keys: keys)
+                    collect(child, key: key, path: path + "/" + String(index), records: KeyHints.hint(key).map({ ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "USERNAME"].contains($0) }) == true ? [] : records, keys: keys)
                 }
             case .string(let string):
                 guard !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
                 valueIDs[path] = leaves.count
                 leaves.append(DocumentLeaf(string, key: key, records: records, contextWords: Set(keys.flatMap { KeyHints.words($0) })))
+            case .number(let number):
+                guard let entity = numericEntity(key: key, number: number) else { break }
+                valueIDs[path] = leaves.count
+                leaves.append(DocumentLeaf(number, key: key, records: records, numericEntity: entity))
             default: break
             }
         }
@@ -58,17 +62,10 @@ public enum JSONFile: FileFormat {
                 guard let id = valueIDs[path] else { return value }
                 valueMarks[path] = values[id].marks
                 return .string(values[id].text)
-            case .number(let number):
-                guard let entity = numericEntity(key: key, number: number), let value = Double(number), value.isFinite else { return value }
-                let original = String(format: "%.0f", value)
-                let fake: String
-                if entity == "DATE_OF_BIRTH", original.count == 8 {
-                    fake = job.replacement(for: entity, original: original).filter(\.isNumber)
-                } else {
-                    fake = job.number(original, entity: entity)
-                }
-                let shaped = fake.isEmpty ? job.digits(original) : fake
-                return .number(number.contains(".") || number.contains("e") || number.contains("E") ? shaped + ".0" : shaped)
+            case .number:
+                guard let id = valueIDs[path] else { return value }
+                valueMarks[path] = values[id].marks
+                return .number(values[id].text)
             default: return value
             }
         }
@@ -91,7 +88,7 @@ public enum JSONFile: FileFormat {
         }
         return (output, marks)
     }
-    private static func numericEntity(key: String?, number: String) -> String? {
+    static func numericEntity(key: String?, number: String) -> String? {
         if let hint = KeyHints.hint(key) { return hint }
         guard let value = Double(number), value.isFinite else { return nil }
         let floating = number.contains(".") || number.contains("e") || number.contains("E")

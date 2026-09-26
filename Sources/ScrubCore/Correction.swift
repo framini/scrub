@@ -12,12 +12,15 @@ struct Replacement {
 }
 
 enum Correction {
-    static func run(_ initial: String, marks initialMarks: [Mark], job: Job) throws -> (String, [Mark], [Mark]) {
+    static func run(_ initial: String, marks: [Mark], job: Job) throws -> (String, [Mark], [Mark]) {
+        try run(initial, marks: marks, job: job, matcher: OriginalMatcher(job), gazetteer: GazetteerMatcher(job.gazetteer))
+    }
+    static func run(_ initial: String, marks initialMarks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, passes: Int = 3) throws -> (String, [Mark], [Mark]) {
         var output = initial
         var marks = initialMarks
-        for _ in 0..<3 {
+        for _ in 0..<passes {
             try Scrubber.checkCancellation()
-            let spans = Detector.resolve(leftovers(in: output, marks: marks, job: job))
+            let spans = Detector.resolve(leftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer))
             if spans.isEmpty { break }
             for (index, span) in spans.reversed().enumerated() {
                 if index.isMultiple(of: 64) { try Scrubber.checkCancellation() }
@@ -34,13 +37,14 @@ enum Correction {
             }
             marks.sort { $0.range.lowerBound < $1.range.lowerBound }
         }
-        var unresolved = leftovers(in: output, marks: marks, job: job).map { Mark(range: $0.range, entity: $0.entity) }
+        var unresolved = leftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer).map { Mark(range: $0.range, entity: $0.entity) }
         var seen: Set<String> = []
         unresolved = unresolved.filter { seen.insert("\($0.range.lowerBound):\($0.range.upperBound):\($0.entity)").inserted }
         return (output, marks, unresolved)
     }
 
-    private static func leftovers(in output: String, marks: [Mark], job: Job) -> [Span] {
+    private static func leftovers(in output: String, marks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher) -> [Span] {
+        if marks.contains(where: { $0.range == 0..<(output as NSString).length }) { return [] }
         // The name model joins words next to a stand-in into one name ("Scott
         // Hunt Called"); that adds no personal data. A pattern match running
         // past a stand-in can be the tail of a secret, so only exact containment
@@ -52,14 +56,31 @@ enum Correction {
             } || job.isEmitted(TextRanges.substring(output, range))
         }
         var found: [Span] = []
-        let originals = Array(job.sensitiveOriginals.values) + job.replacements.map { SensitiveOriginal(original: $0.original, entity: $0.entity) }
-        for (index, candidate) in originals.enumerated() {
-            if index.isMultiple(of: 64) && Task.isCancelled { return found }
-            for range in TextRanges.ranges(of: candidate.original, in: output) where !ours(range, "") {
-                found.append(Span(range: range, entity: candidate.entity, score: 1.1))
+        for match in matcher.matcher.matches(in: output) where !ours(match.range, "") {
+            found.append(Span(range: match.range, entity: matcher.entities[match.index], score: 1.1))
+        }
+        found.append(contentsOf: job.detector.find(output, matcher: gazetteer).filter { !ours($0.range, $0.entity) })
+        return found
+    }
+}
+
+struct OriginalMatcher {
+    let matcher: Matcher
+    let entities: [String]
+
+    init(_ job: Job) {
+        var originals = Array(job.sensitiveOriginals.values)
+        originals += job.replacements.map { SensitiveOriginal(original: $0.original, entity: $0.entity) }
+        var literals: [String] = []
+        var labels: [String] = []
+        var seen: Set<[UInt16]> = []
+        for candidate in originals where !candidate.original.isEmpty {
+            if seen.insert(Matcher.fold(candidate.original)).inserted {
+                literals.append(candidate.original)
+                labels.append(candidate.entity)
             }
         }
-        found.append(contentsOf: job.detector.find(output, gazetteer: job.gazetteer).filter { !ours($0.range, $0.entity) })
-        return found
+        matcher = Matcher(literals)
+        entities = labels
     }
 }

@@ -1,24 +1,29 @@
 import Foundation
 
 public final class Detector {
+    private let systemDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.phoneNumber.rawValue | NSTextCheckingResult.CheckingType.address.rawValue)
     public init() {}
     public func find(_ text: String, key: String? = nil, gazetteer: [String: Set<String>] = [:], contextWords: Set<String> = []) -> [Span] {
+        find(text, key: key, matcher: GazetteerMatcher(gazetteer), contextWords: contextWords)
+    }
+    func find(_ text: String, key: String? = nil, matcher: GazetteerMatcher, contextWords: Set<String> = []) -> [Span] {
         if let entity = KeyHints.hint(key), !text.isEmpty { return [Span(range: 0..<(text as NSString).length, entity: entity, score: 1)] }
-        var spans = Patterns.find(text, contextWords: Set(KeyHints.words(key)).union(contextWords))
-        spans.append(contentsOf: system(text))
-        spans.append(contentsOf: NameTagger.find(text))
-        for (entity, entries) in gazetteer where ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"].contains(entity) {
-            for entry in entries where !entry.isEmpty {
-                for range in TextRanges.ranges(of: entry, in: text) where wholeWord(range, in: text) {
-                    if Task.isCancelled { return [] }
-                    spans.append(Span(range: range, entity: entity, score: 0.95))
-                }
-            }
+        let plainWord = text.allSatisfy { $0.isASCII && $0.isLowercase }
+            && !Names.firstFolded.contains(text) && !Names.lastFolded.contains(text)
+        var spans: [Span] = []
+        if !plainWord {
+            spans = Patterns.find(text, contextWords: Set(KeyHints.words(key)).union(contextWords))
+            spans.append(contentsOf: system(text))
+            spans.append(contentsOf: NameTagger.find(text))
+        }
+        for match in matcher.matcher.matches(in: text) where wholeWord(match.range, in: text) {
+            let entity = matcher.entities[match.index]
+            spans.append(Span(range: match.range, entity: entity, score: 0.95))
         }
         return Self.resolve(spans)
     }
     private func system(_ text: String) -> [Span] {
-        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.phoneNumber.rawValue | NSTextCheckingResult.CheckingType.address.rawValue) else { return [] }
+        guard let detector = systemDetector else { return [] }
         let matches = detector.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length))
         return matches.compactMap { match in
             let entity: String
@@ -56,5 +61,26 @@ public final class Detector {
             }
         }
         return kept.sorted { $0.range.lowerBound < $1.range.lowerBound }
+    }
+}
+
+struct GazetteerMatcher {
+    let matcher: Matcher
+    let entities: [String]
+
+    init(_ gazetteer: [String: Set<String>]) {
+        var literals: [String] = []
+        var labels: [String] = []
+        var seen: Set<[UInt16]> = []
+        for entity in ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"] {
+            for entry in (gazetteer[entity] ?? []).sorted() where !entry.isEmpty {
+                if seen.insert(Matcher.fold(entry)).inserted {
+                    literals.append(entry)
+                    labels.append(entity)
+                }
+            }
+        }
+        matcher = Matcher(literals)
+        entities = labels
     }
 }

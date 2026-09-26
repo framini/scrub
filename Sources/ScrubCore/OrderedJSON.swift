@@ -76,7 +76,10 @@ enum OrderedJSON {
                 }
                 write(String(repeating: "  ", count: depth) + "]")
             case .string(let string): writeString(string, valueMarks[path] ?? [])
-            case .number(let number): write(number)
+            case .number(let number):
+                let start = (output as NSString).length
+                write(number)
+                for mark in valueMarks[path] ?? [] { marks.append(Mark(range: (start + mark.range.lowerBound)..<(start + mark.range.upperBound), entity: mark.entity)) }
             case .bool(let bool): write(bool ? "true" : "false")
             case .null: write("null")
             }

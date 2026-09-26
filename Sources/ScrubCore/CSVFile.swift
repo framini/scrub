@@ -4,8 +4,7 @@ public enum CSVFile: FileFormat {
     static let previewRows = 500
     public static func process(_ data: Data, job: Job, progress: (Stage, Int, Int) -> Void) throws -> ScrubResult {
         let text = try TextFile.decode(data)
-        let delimiter = sniffDelimiter(text)
-        let quoteCharacter = sniffQuote(text, delimiter: delimiter)
+        let (delimiter, quoteCharacter) = sniffFormat(text)
         let newline = text.contains("\r\n") ? "\r\n" : text.contains("\r") ? "\r" : "\n"
         var rows = try parse(text, delimiter: delimiter, quoteCharacter: quoteCharacter)
         guard !rows.isEmpty else { throw ScrubError.unsupported("empty_file") }
@@ -66,25 +65,24 @@ public enum CSVFile: FileFormat {
         progress(.checking, 1, 1)
         return ScrubResult(format: "csv", output: Data(output.utf8), preview: .table(columns: previewColumns, rows: Array(rows.prefix(previewRows)), rowCount: rows.count, marks: marks), counts: job.counts, unresolved: unresolved, neutralized: neutralized)
     }
-    static func sniffDelimiter(_ text: String) -> Character {
+    static func sniffDelimiter(_ text: String) -> Character { sniffFormat(text).0 }
+    static func sniffQuote(_ text: String, delimiter: Character) -> Character { sniffFormat(text, delimiters: [delimiter]).1 }
+    private static func sniffFormat(_ text: String, delimiters: [Character] = [",", ";", "\t", "|"]) -> (Character, Character) {
         let sample = String(text.prefix(65_536))
-        var best: Character = ","
+        var best: (Character, Character) = (",", "\"")
         var bestScore = -1
-        for candidate: Character in [",", ";", "\t", "|"] {
-            guard let rows = try? parse(sample, delimiter: candidate) else { continue }
-            let widths = rows.prefix(50).map(\.count)
-            guard let common = Dictionary(grouping: widths, by: { $0 }).max(by: { $0.value.count < $1.value.count }), common.key > 1 else { continue }
-            let score = common.value.count * 100 + common.key
-            if score > bestScore { best = candidate; bestScore = score }
+        for delimiter in delimiters {
+            for quote: Character in ["\"", "'"] {
+                guard let rows = try? parse(sample, delimiter: delimiter, quoteCharacter: quote, incompleteFinalRecord: true) else { continue }
+                let widths = rows.prefix(50).map(\.count)
+                guard let common = Dictionary(grouping: widths, by: { $0 }).max(by: { $0.value.count < $1.value.count }), common.key > 1 else { continue }
+                let score = common.value.count * 100 + common.key
+                if score > bestScore { best = (delimiter, quote); bestScore = score }
+            }
         }
         return best
     }
-    static func sniffQuote(_ text: String, delimiter: Character) -> Character {
-        let escaped = NSRegularExpression.escapedPattern(for: String(delimiter))
-        let pattern = "(?:^|[\\r\\n\(escaped)])'[^'\\r\\n]*'(?=[\\r\\n\(escaped)]|$)"
-        return TextRanges.matches(pattern, in: String(text.prefix(65_536))).count >= 2 ? "'" : "\""
-    }
-    static func parse(_ text: String, delimiter: Character, quoteCharacter: Character = "\"") throws -> [[String]] {
+    static func parse(_ text: String, delimiter: Character, quoteCharacter: Character = "\"", incompleteFinalRecord: Bool = false) throws -> [[String]] {
         var rows: [[String]] = []
         var row: [String] = []
         var field = ""
@@ -110,7 +108,10 @@ public enum CSVFile: FileFormat {
             } else { field.unicodeScalars.append(char) }
             index += 1
         }
-        if quoted { throw ScrubError.unsupported("invalid_csv") }
+        if quoted {
+            if incompleteFinalRecord { return rows }
+            throw ScrubError.unsupported("invalid_csv")
+        }
         if !row.isEmpty || !field.isEmpty { row.append(field); rows.append(row) }
         return rows
     }

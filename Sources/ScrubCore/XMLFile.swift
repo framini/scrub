@@ -37,7 +37,10 @@ public enum XMLFile: FileFormat {
                 let currentKeys = keys + [local(element.name) ?? ""]
                 let words = Set(currentKeys.flatMap { KeyHints.words($0) })
                 addName(element, records: ancestry)
-                for namespace in element.namespaces ?? [] { add(namespace, key: nil, records: ancestry, words: words) }
+                for namespace in element.namespaces ?? [] {
+                    addName(namespace, records: ancestry)
+                    add(namespace, key: nil, records: ancestry, words: words)
+                }
                 for attribute in element.attributes ?? [] {
                     addName(attribute, records: ancestry)
                     add(attribute, key: local(attribute.name), records: ancestry, words: words)
@@ -66,32 +69,69 @@ public enum XMLFile: FileFormat {
         }
         let unresolved = values.flatMap(\.unresolved)
         progress(.checking, 0, 1)
-        for (index, node) in namedNodes.enumerated() {
-            guard let name = node.name else { continue }
-            let value = values[nameIDs[index]]
-            let clean = value.marks.isEmpty ? name : value.text.filter { $0.isASCII && ($0.isLetter || $0.isNumber || "_.:-".contains($0)) }
-            let (numbered, digitMarks) = JSONFile.replaceDigits(clean, job: job)
-            var renamed = numbered
+        let originalNames = Set(namedNodes.compactMap(\.name))
+        var usedNames = originalNames
+        var renamedNames: [String: String] = [:]
+        var prefixes: [String: String] = [:]
+        func safeName(_ local: String, original: String, prefix: String? = nil) -> String {
+            let candidate = prefix.map { $0 + ":" + local } ?? local
+            guard candidate != original else { return original }
+            var value = String(local.filter { $0.isASCII && ($0.isLetter || $0.isNumber || "-_.".contains($0)) })
+            if value.first.map({ !$0.isLetter && $0 != "_" }) ?? true { value = "n" + value }
+            let base = value
+            var qualified = prefix.map { $0 + ":" + value } ?? value
+            var counter = 2
+            while usedNames.contains(qualified) && qualified != original {
+                value = base + String(counter)
+                qualified = prefix.map { $0 + ":" + value } ?? value
+                counter += 1
+            }
+            usedNames.insert(qualified)
+            return qualified
+        }
+        func renamed(_ name: String, value: DocumentValue) -> String {
+            var candidate = value.marks.isEmpty ? name : value.text
+            let (numbered, _) = JSONFile.replaceDigits(candidate, job: job)
+            candidate = numbered
             for person in job.gazetteer["PERSON"] ?? [] {
                 let parts = person.split(separator: " ")
                 guard parts.count == 2 else { continue }
                 let camel = String(parts[0]) + String(parts[1])
                 let snake = parts.joined(separator: "_").lowercased()
-                guard renamed.localizedCaseInsensitiveContains(camel) || renamed.localizedCaseInsensitiveContains(snake) else { continue }
+                guard candidate.localizedCaseInsensitiveContains(camel) || candidate.localizedCaseInsensitiveContains(snake) else { continue }
                 let fake = job.replacement(for: "PERSON", original: person).split(separator: " ").map { $0.filter { $0.isASCII && $0.isLetter } }
                 guard fake.count == 2 else { continue }
-                renamed = renamed.replacingOccurrences(of: camel, with: fake.joined(), options: .caseInsensitive)
+                candidate = candidate.replacingOccurrences(of: camel, with: fake.joined(), options: .caseInsensitive)
                     .replacingOccurrences(of: snake, with: fake.joined(separator: "_").lowercased(), options: .caseInsensitive)
             }
-            if renamed != name {
-                node.name = renamed
-                for mark in digitMarks { markedValues.append((TextRanges.substring(renamed, mark.range), mark.entity)) }
-                if digitMarks.isEmpty { markedValues.append((renamed, "PERSON")) }
+            return candidate
+        }
+        for (index, node) in namedNodes.enumerated() where node.kind == .namespace {
+            guard let name = node.name else { continue }
+            let replacement = renamedNames[name] ?? safeName(renamed(name, value: values[nameIDs[index]]), original: name)
+            renamedNames[name] = replacement
+            if replacement != name { prefixes[name] = replacement; node.name = replacement; markedValues.append((replacement, "PERSON")) }
+        }
+        for (index, node) in namedNodes.enumerated() where node.kind != .namespace {
+            guard let name = node.name else { continue }
+            let pieces = name.split(separator: ":", maxSplits: 1).map(String.init)
+            let candidate: String
+            if let existing = renamedNames[name] {
+                candidate = existing
+            } else if pieces.count == 2 {
+                let prefix = prefixes[pieces[0]] ?? pieces[0]
+                let raw = renamed(name, value: values[nameIDs[index]])
+                let local = raw.split(separator: ":").last.map(String.init) ?? raw
+                candidate = safeName(local, original: name, prefix: prefix)
+            } else {
+                candidate = safeName(renamed(name, value: values[nameIDs[index]]), original: name)
             }
+            renamedNames[name] = candidate
+            if candidate != name { node.name = candidate; markedValues.append((candidate, "PERSON")) }
         }
         var output = document.xmlString(options: [.nodePreserveAll])
-        output = output.replacingOccurrences(of: #"^<\?xml[\s\S]*?\?>\s*"#, with: "", options: .regularExpression)
-        if source.hasPrefix("<?xml"), let end = text.range(of: "?>") { output = String(text[..<end.upperBound]) + "\n" + output }
+        output = output.replacingOccurrences(of: #"^<\?xml(?=\s)[\s\S]*?\?>\s*"#, with: "", options: .regularExpression)
+        if declarationEnd(in: source) != nil, let end = text.range(of: "?>") { output = String(text[..<end.upperBound]) + "\n" + output }
         guard parses(Data(output.utf8)) else { throw ScrubError.unsupported("internal") }
         var marks: [Mark] = []
         for (value, entity) in markedValues where !value.isEmpty {
@@ -109,13 +149,18 @@ public enum XMLFile: FileFormat {
         guard !unsafeDeclaration(in: text), let document = try? XMLDocument(data: Data(text.utf8), options: [.nodePreserveAll, .nodeLoadExternalEntitiesNever]) else { return false }
         return document.dtd == nil && document.rootElement() != nil
     }
+    private static func declarationEnd(in text: String) -> String.Index? {
+        let start = text.hasPrefix("\u{FEFF}") ? text.index(after: text.startIndex) : text.startIndex
+        guard text[start...].range(of: #"^<\?xml(?=\s)[\s\S]*?\?>"#, options: .regularExpression)?.lowerBound == start else { return nil }
+        return text[start...].range(of: "?>")?.upperBound
+    }
     private static func normalizedDeclaration(_ text: String) -> String {
-        let text = text.replacingOccurrences(of: #"^\s+"#, with: "", options: .regularExpression)
-        guard text.hasPrefix("<?xml"), let end = text.range(of: "?>") else { return text }
-        var declaration = String(text[..<end.upperBound])
+        let source = text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
+        guard let end = declarationEnd(in: source) else { return source }
+        var declaration = String(source[..<end])
         let pattern = #"\bencoding\s*=\s*(['\"])[^'\"]*\1"#
         declaration = declaration.replacingOccurrences(of: pattern, with: "encoding=\"UTF-8\"", options: .regularExpression)
-        return declaration + text[end.upperBound...]
+        return declaration + source[end...]
     }
     private static func decodeXML(_ data: Data) throws -> String {
         if data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF]) {

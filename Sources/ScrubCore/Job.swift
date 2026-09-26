@@ -25,7 +25,8 @@ public final class Job {
         let email = identified.first { $0.0 == "EMAIL_ADDRESS" }?.1
         if first != nil && last != nil { associate(first: first, last: last, email: email) }
         observeSpans(zip(fields, found).map { ($0.text, $1) })
-        found = fields.map { detector.find($0.text, key: $0.key, gazetteer: gazetteer, contextWords: contextWords) }
+        let matcher = GazetteerMatcher(gazetteer)
+        found = fields.map { detector.find($0.text, key: $0.key, matcher: matcher, contextWords: contextWords) }
         return found
     }
     func observeSpans(_ fields: [(String, [Span])]) {
@@ -71,6 +72,18 @@ public final class Job {
         replacements.append(Replacement(original: original, fake: fake, entity: entity))
         return fake
     }
+    func numericLexeme(_ original: String, entity: String) -> String {
+        let digits = original.filter { $0.isASCII && $0.isNumber }
+        let substitute = standIns.number(digits)
+        var iterator = substitute.makeIterator()
+        let fake = String(original.map { character in
+            character.isASCII && character.isNumber ? iterator.next() ?? character : character
+        })
+        replacements.append(Replacement(original: original, fake: fake, entity: entity))
+        emitted.insert(fake.lowercased())
+        counts[entity, default: 0] += 1
+        return fake
+    }
     @discardableResult
     func associateRecord(first: String?, last: String?, full: String?, email: String?) -> Persona? {
         if first != nil || last != nil {
@@ -107,6 +120,6 @@ public final class Job {
     func scrubValue(_ text: String, key: String? = nil, owner: Persona? = nil, contextWords: Set<String> = []) throws -> (String, [Mark], [Mark]) {
         let spans = observe([(text, key)], contextWords: contextWords)[0]
         let (initial, marks) = try apply(text, spans: spans, owner: owner)
-        return try Correction.run(initial, marks: marks, job: self)
+        return try Correction.run(initial, marks: marks, job: self, matcher: OriginalMatcher(self), gazetteer: GazetteerMatcher(gazetteer))
     }
 }

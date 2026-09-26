@@ -2,21 +2,12 @@ import Foundation
 import NaturalLanguage
 
 enum NameTagger {
+    private static let organisationWords: Set<String> = ["foundation", "inc", "llc", "ltd", "corp", "company", "group", "university", "bank", "institute", "hospital"]
     static func find(_ text: String) -> [Span] {
+        if !text.contains(where: { $0.isUppercase || $0.isWhitespace }) && !Names.firstFolded.contains(text.lowercased()) && !Names.lastFolded.contains(text.lowercased()) { return [] }
         var spans = tag(text, mappedTo: text, variant: false)
         let variant = titleCaseLowercaseWords(text)
         spans.append(contentsOf: tag(variant, mappedTo: text, variant: true))
-        for match in TextRanges.matches(#"(?=(\p{Lu}\p{L}+[ ]+\p{Lu}\p{L}+))"#, in: text) {
-            let captured = match.range(at: 1)
-            let range = captured.location..<NSMaxRange(captured)
-            let parts = TextRanges.substring(text, range).split(separator: " ")
-            guard let first = parts.first else { continue }
-            let known = Names.firstFolded.contains(first.lowercased())
-            let preceding = Context.before(range, in: text, limit: 3)
-            if (known && !Names.ambiguousFirst.contains(first.lowercased())) || !preceding.isDisjoint(with: ["cliente", "paciente", "herr"]) {
-                spans.append(Span(range: range, entity: "PERSON", score: 0.85))
-            }
-        }
         for (index, match) in TextRanges.matches(#"\b[a-z]+\b"#, in: text).enumerated() {
             if index.isMultiple(of: 64) && Task.isCancelled { return spans }
             let range = match.range.location..<NSMaxRange(match.range)
@@ -51,6 +42,12 @@ enum NameTagger {
             let lower = input.utf16.distance(from: input.utf16.startIndex, to: range.lowerBound.samePosition(in: input.utf16) ?? input.utf16.startIndex)
             let upper = input.utf16.distance(from: input.utf16.startIndex, to: range.upperBound.samePosition(in: input.utf16) ?? input.utf16.endIndex)
             var mapped = lower..<upper
+            let written = TextRanges.substring(original, mapped)
+            let following = TextRanges.substring(original, mapped.upperBound..<(original as NSString).length)
+            let nextWord = TextRanges.matches(#"^\s+\p{L}+"#, in: following).first.map {
+                TextRanges.substring(following, $0.range.location..<NSMaxRange($0.range)).trimmingCharacters(in: .whitespaces).lowercased()
+            }
+            if written.split(whereSeparator: { !$0.isLetter }).contains(where: { organisationWords.contains($0.lowercased()) }) || nextWord.map({ organisationWords.contains($0) }) == true { return true }
             if tag == .personalName { mapped = trimmedToWrittenCapitals(mapped, in: original) }
             if tag == .personalName {
                 let value = TextRanges.substring(original, mapped)

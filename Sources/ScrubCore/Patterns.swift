@@ -22,10 +22,14 @@ enum Patterns {
         ("US_ITIN", #"\b9\d{2}(?:5\d|6[0-5]|7\d|8[0-8]|9(?:[0-2]|[4-9]))\d{4}\b"#, 0.3, ["individual", "taxpayer", "itin", "tax", "payer", "taxid", "tin"], []),
         ("US_ITIN", #"\b9\d{2}[- ](?:5\d|6[0-5]|7\d|8[0-8]|9(?:[0-2]|[4-9]))[- ]\d{4}\b"#, 0.5, ["individual", "taxpayer", "itin", "tax", "payer", "taxid", "tin"], [])
     ]
+    private static let compiled = definitions.compactMap { entity, pattern, base, context, options -> (String, NSRegularExpression, Double, Set<String>)? in
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return nil }
+        return (entity, regex, base, context)
+    }
     static func find(_ text: String, contextWords: Set<String> = []) -> [Span] {
         var spans: [Span] = []
-        for (entity, regex, base, context, options) in definitions {
-            for (index, match) in TextRanges.matches(regex, in: text, options: options).enumerated() {
+        for (entity, regex, base, context) in compiled {
+            for (index, match) in regex.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length)).enumerated() {
                 if index.isMultiple(of: 64) && Task.isCancelled { return spans }
                 var range = match.range.location..<NSMaxRange(match.range)
                 if entity == "IBAN_CODE" {

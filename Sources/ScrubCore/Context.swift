@@ -34,10 +34,13 @@ public enum KeyHints {
         ("username login handle screenname nickname", "USERNAME"),
         ("nationalid nationalidnumber nationalidentifier nationalinsurancenumber nino personalnumber personalidnumber personnummer idnumber identitynumber identitycard idcard idcardnumber governmentid passport passportnumber passportno passportid taxid taxnumber taxpayerid tin sin socialinsurancenumber driverlicense driverslicense driverlicensenumber licensenumber nif nie dni cpf curp pesel bsn aadhaar", "ID_NUMBER")
     ]
+    private static let hints = Dictionary(uniqueKeysWithValues: groups.flatMap { names, entity in
+        names.split(separator: " ").map { (String($0), entity) }
+    })
     public static func hint(_ key: String?) -> String? {
         guard let key, !key.isEmpty else { return nil }
         let compact = key.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
-        return groups.first { $0.0.split(separator: " ").contains(Substring(compact)) }?.1
+        return hints[compact]
     }
     public static func words(_ key: String?) -> [String] {
         guard let key else { return [] }
