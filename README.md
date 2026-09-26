@@ -43,7 +43,7 @@ Scrub never checks for updates, since it has no network access. Download a newer
 
 You want to paste a support ticket, a customer export or a log into an AI tool, but it's full of names, emails, phone numbers, cards and keys. Deleting them breaks the file; redacting them to `[REDACTED]` loses the shape the tool needs to be useful.
 
-Scrub swaps each one for a believable stand-in instead. The same person gets the same stand-in everywhere in the file, emails still match their owner's name, and the structure stays exactly as it was.
+Scrub swaps each one for a believable stand-in instead. The same person gets the same stand-in everywhere in the file, emails still match their owner's name, and the file keeps its structure.
 
 ## See it work
 
@@ -75,7 +75,7 @@ Maria Gonzalez
 
 ### JSON
 
-Keys, nesting and non-personal values are kept. Secrets become random strings of the same shape, keeping a known vendor prefix; card numbers keep their issuer and still pass the checksum.
+Nesting and non-personal values are kept; a key is only renamed when it holds personal data itself. Secrets become 24 random characters, keeping a known vendor prefix like `sk_live_`, so their length gives nothing away. Card numbers keep their network, length and grouping, and still pass the checksum. The output is re-indented.
 
 <img src="docs/images/json.png" alt="A customer record after scrubbing: name, contact details, birth date, card and API key replaced">
 
@@ -104,7 +104,7 @@ Keys, nesting and non-personal values are kept. Secrets become random strings of
 
 ### CSV
 
-Spreadsheets get a table preview with every replaced cell marked. Columns that aren't personal, like plan and signup date, are untouched.
+Spreadsheets get a table preview with replaced cells marked. Columns that aren't personal, like plan and signup date, are untouched.
 
 <img src="docs/images/csv.png" alt="A signups spreadsheet after scrubbing: every name, email, phone and city replaced">
 
@@ -114,8 +114,8 @@ The sample files are in [`docs/samples`](docs/samples) if you want to try them y
 
 1. **Finds personal details three ways:** patterns (emails, phone numbers, cards, IBANs, secrets and more), Apple's on-device data detectors, and on-device name recognition.
 2. **Replaces them consistently:** each real person, place or value gets one stand-in across the whole file.
-3. **Re-checks the output** and replaces anything that still matches an original.
-4. **Keeps the structure:** keys, columns, elements and formatting stay as they were.
+3. **Re-checks the output** for originals that slipped through, replaces them, and flags any it can't resolve as *left to review*.
+4. **Keeps the structure:** nesting, columns and elements stay as they were, and values are replaced in place.
 
 Results say *Review before sharing*, never *clean*: detection is statistical, and the counts show what Scrub found and replaced, not proof of what's left.
 
@@ -125,7 +125,14 @@ Results say *Review before sharing*, never *clean*: detection is statistical, an
 - **Nothing is kept.** The map from real values to stand-ins lives in memory for one job only.
 - **Private saves.** Saved files are readable by your user account only.
 - **Clipboard cleanup.** Start over or quit, and Scrub takes back what it copied if it's still on the clipboard.
-- **Safe to open in a spreadsheet.** Cells that look like formulas get a leading `'`.
+- **Formulas defused.** CSV cells that a spreadsheet would run as a formula (starting with `=`, `@`, `+` or `-`, other than plain numbers) get a leading `'`, so they open as text.
+
+## Limits
+
+- Files up to 50 MB of UTF-8 text (XML may also be UTF-16).
+- JSON and XML nested up to 64 levels. XML with a DOCTYPE or entity declarations is refused.
+- The preview shows the first 200,000 characters or 500 table rows. Copy and Save always give the whole result.
+- Detection finds what it recognises. A value only counts as a secret when it looks like one, or sits under a key like `password` or `token`.
 
 ## Keyboard
 
