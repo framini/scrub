@@ -4,6 +4,7 @@ import PackageDescription
 let package = Package(
     name: "Scrub",
     platforms: [.macOS(.v15)],
+    products: [.library(name: "ScrubCore", targets: ["ScrubCore"])],
     targets: [
         .target(name: "ScrubCore"),
         .executableTarget(name: "Scrub", dependencies: ["ScrubCore"]),

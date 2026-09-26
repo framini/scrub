@@ -7,13 +7,15 @@ struct Replacement {
 }
 
 enum Correction {
-    static func run(_ initial: String, marks initialMarks: [Mark], job: Job) -> (String, [Mark], [Mark]) {
+    static func run(_ initial: String, marks initialMarks: [Mark], job: Job) throws -> (String, [Mark], [Mark]) {
         var output = initial
         var marks = initialMarks
         for _ in 0..<3 {
+            try Scrubber.checkCancellation()
             let spans = Detector.resolve(leftovers(in: output, marks: marks, job: job))
             if spans.isEmpty { break }
-            for span in spans.reversed() {
+            for (index, span) in spans.reversed().enumerated() {
+                if index.isMultiple(of: 64) { try Scrubber.checkCancellation() }
                 let original = TextRanges.substring(output, span.range)
                 let fake = job.replacement(for: span.entity, original: original)
                 output = TextRanges.replace(output, span.range, with: fake)
@@ -33,18 +35,25 @@ enum Correction {
         return (output, marks, unresolved)
     }
 
-    /// Originals still in the output, and new detections, outside the stand-ins
-    /// already placed. The model can tag part of a stand-in ("Washington" in a
-    /// fake name), so anything overlapping one is ours, not a leak.
     private static func leftovers(in output: String, marks: [Mark], job: Job) -> [Span] {
-        let ours = { (range: Range<Int>) in marks.contains { $0.range.overlaps(range) } || job.isEmitted(TextRanges.substring(output, range)) }
+        // The name model joins words next to a stand-in into one name ("Scott
+        // Hunt Called"); that adds no personal data. A pattern match running
+        // past a stand-in can be the tail of a secret, so only exact containment
+        // exempts it. Originals next to a stand-in are caught by the sweep below.
+        let ours = { (range: Range<Int>, entity: String) in
+            marks.contains { mark in
+                (mark.range.lowerBound <= range.lowerBound && range.upperBound <= mark.range.upperBound)
+                    || (["PERSON", "LOCATION"].contains(entity) && mark.range.overlaps(range))
+            } || job.isEmitted(TextRanges.substring(output, range))
+        }
         var found: [Span] = []
-        for replacement in job.replacements {
-            for range in TextRanges.ranges(of: replacement.original, in: output) where !ours(range) {
+        for (index, replacement) in job.replacements.enumerated() {
+            if index.isMultiple(of: 64) && Task.isCancelled { return found }
+            for range in TextRanges.ranges(of: replacement.original, in: output) where !ours(range, "") {
                 found.append(Span(range: range, entity: replacement.entity, score: 1.1))
             }
         }
-        found.append(contentsOf: job.detector.find(output, gazetteer: job.gazetteer).filter { !ours($0.range) })
+        found.append(contentsOf: job.detector.find(output, gazetteer: job.gazetteer).filter { !ours($0.range, $0.entity) })
         return found
     }
 }

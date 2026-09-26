@@ -16,9 +16,10 @@ struct ContentView: View {
         .foregroundStyle(Color.ink)
         .onDrop(of: [.fileURL], isTargeted: $dragging) { providers in
             guard let provider = providers.first else { return false }
+            let ticket = model.beginDrop()
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url else { return }
-                Task { @MainActor in model.open(url) }
+                Task { @MainActor in model.open(url, ticket: ticket) }
             }
             return true
         }

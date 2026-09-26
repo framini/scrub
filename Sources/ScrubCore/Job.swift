@@ -8,8 +8,18 @@ public final class Job {
     private var emitted: Set<String> = []
     public private(set) var counts: [String: Int] = [:]
     public init() {}
+    public func associate(first: String?, last: String?, email: String?) {
+        standIns.people.associate(first: first, last: last, email: email)
+    }
     public func observe(_ fields: [(text: String, key: String?)]) -> [[Span]] {
         var found = fields.map { detector.find($0.text, key: $0.key) }
+        let identified = zip(fields, found).flatMap { field, spans in
+            spans.map { ($0.entity, TextRanges.substring(field.text, $0.range)) }
+        }
+        let first = identified.first { $0.0 == "FIRST_NAME" }?.1
+        let last = identified.first { $0.0 == "LAST_NAME" }?.1
+        let email = identified.first { $0.0 == "EMAIL_ADDRESS" }?.1
+        if first != nil && last != nil { associate(first: first, last: last, email: email) }
         for (field, spans) in zip(fields, found) {
             for span in spans where ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"].contains(span.entity) {
                 let value = TextRanges.substring(field.text, span.range)
@@ -36,10 +46,11 @@ public final class Job {
         return fake
     }
     func isEmitted(_ value: String) -> Bool { emitted.contains(value.lowercased()) }
-    public func apply(_ text: String, spans: [Span]) -> (String, [Mark]) {
+    public func apply(_ text: String, spans: [Span]) throws -> (String, [Mark]) {
         var output = text
         var marks: [Mark] = []
-        for span in spans.reversed() {
+        for (index, span) in spans.reversed().enumerated() {
+            if index.isMultiple(of: 64) { try Scrubber.checkCancellation() }
             let fake = replacement(for: span.entity, original: TextRanges.substring(text, span.range))
             output = TextRanges.replace(output, span.range, with: fake)
             let delta = (fake as NSString).length - span.range.count

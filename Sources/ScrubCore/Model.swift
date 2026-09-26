@@ -17,7 +17,7 @@ public struct ScrubResult: Sendable {
         self.format = format; self.output = output; self.preview = preview; self.counts = counts; self.unresolved = unresolved
     }
 }
-public enum ScrubError: Error, Equatable { case notUTF8, tooLarge, empty, unsupported(String) }
+public enum ScrubError: Error, Equatable { case notUTF8, tooLarge, empty, cancelled, unsupported(String) }
 public protocol FileFormat { static func process(_ data: Data, job: Job, progress: (Stage, Int, Int) -> Void) throws -> ScrubResult }
 public struct Span: Sendable, Equatable {
     public let range: Range<Int>
@@ -45,6 +45,7 @@ enum TextRanges {
         var result: [Range<Int>] = []
         var start = 0
         while start < ns.length {
+            if Task.isCancelled { return result }
             let match = ns.range(of: literal, options: options, range: NSRange(location: start, length: ns.length - start))
             if match.location == NSNotFound { break }
             result.append(match.location..<(match.location + match.length))

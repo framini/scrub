@@ -23,6 +23,7 @@ final class Persona {
 final class People {
     private var personas: [Persona] = []
     private var domains: [String: String] = [:]
+    private var associatedEmails: [String: Persona] = [:]
     private var rng = SystemRandomNumberGenerator()
     private func fold(_ value: String) -> String { value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX")).trimmingCharacters(in: .whitespacesAndNewlines) }
     private func pick(_ values: [String]) -> String { values.randomElement(using: &rng) ?? "Alex" }
@@ -34,7 +35,9 @@ final class People {
             found.realFirst = found.realFirst ?? f; found.realLast = found.realLast ?? l
             return found
         }
-        let person = Persona(realFirst: f, realLast: l, first: pick(Names.first), last: pick(Names.last))
+        let firstChoices = Names.first.filter { fold($0) != f }
+        let lastChoices = Names.last.filter { fold($0) != l }
+        let person = Persona(realFirst: f, realLast: l, first: pick(firstChoices), last: pick(lastChoices))
         personas.append(person)
         return person
     }
@@ -59,9 +62,15 @@ final class People {
         return parts == 1 ? person.first : parts == -1 ? person.last : person.full
     }
     func find(email: String) -> Persona? {
+        if let associated = associatedEmails[fold(email)] { return associated }
         let local = String(email.split(separator: "@", maxSplits: 1).first ?? "")
         let matches = personas.filter { $0.matches(local: local) }
         return matches.count == 1 ? matches.first : nil
+    }
+    func associate(first: String?, last: String?, email: String?) {
+        guard first != nil || last != nil else { return }
+        let person = register(first, last)
+        if let email { associatedEmails[fold(email)] = person }
     }
     func email(for person: Persona, original: String) -> String {
         let key = fold(original)

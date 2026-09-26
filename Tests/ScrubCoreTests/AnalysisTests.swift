@@ -52,6 +52,14 @@ func ordinaryWordsThatAreAlsoFirstNamesStayText(_ sentence: String) throws {
     #expect(result.unresolved.isEmpty)
 }
 
+@Test func wordsNextToStandInsSurviveCorrection() throws {
+    for _ in 0..<100 {
+        let result = try Scrubber.scrub(Data("Robert Mitchell called. Later, robert mitchell replied.".utf8), name: "note.txt")
+        let text = try #require(String(data: result.output, encoding: .utf8))
+        #expect(text.contains(" called. Later, ") && text.hasSuffix(" replied."), "\(text)")
+    }
+}
+
 @Test func utf16MarksPointIntoPreview() throws {
     let result = try Scrubber.scrub(Data("😀 Call alice@example.com now.".utf8), name: "note.txt")
     if case let .text(preview, marks, _) = result.preview {

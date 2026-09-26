@@ -14,7 +14,7 @@ enum Context {
         return Set(words.map { TextRanges.substring(suffix, $0.range.location..<NSMaxRange($0.range)).lowercased() })
     }
     static func enhanced(_ base: Double, words: Set<String>, range: Range<Int>, text: String) -> Double {
-        before(range, in: text, limit: 5).isDisjoint(with: words) ? base : min(1, base + 0.35)
+        before(range, in: text, limit: 5).isDisjoint(with: words) ? base : min(1, max(0.4, base + 0.35))
     }
 }
 

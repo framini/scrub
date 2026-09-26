@@ -10,6 +10,7 @@ public final class Detector {
         for (entity, entries) in gazetteer where ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"].contains(entity) {
             for entry in entries where !entry.isEmpty {
                 for range in TextRanges.ranges(of: entry, in: text) where wholeWord(range, in: text) {
+                    if Task.isCancelled { return [] }
                     spans.append(Span(range: range, entity: entity, score: 0.95))
                 }
             }
@@ -45,7 +46,15 @@ public final class Detector {
             return a.range.lowerBound < b.range.lowerBound
         }
         var kept: [Span] = []
-        for span in ordered where !kept.contains(where: { $0.range.overlaps(span.range) }) { kept.append(span) }
+        for (index, span) in ordered.enumerated() {
+            if index.isMultiple(of: 64) && Task.isCancelled { return kept }
+            let conflicts = kept.indices.filter { kept[$0].range.overlaps(span.range) }
+            if conflicts.isEmpty { kept.append(span); continue }
+            if conflicts.allSatisfy({ span.range.lowerBound <= kept[$0].range.lowerBound && span.range.upperBound >= kept[$0].range.upperBound && span.range != kept[$0].range && span.entity != kept[$0].entity }) {
+                kept.removeAll { span.range.overlaps($0.range) }
+                kept.append(span)
+            }
+        }
         return kept.sorted { $0.range.lowerBound < $1.range.lowerBound }
     }
 }

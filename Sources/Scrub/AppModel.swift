@@ -35,6 +35,18 @@ final class AppModel {
     private var work: Task<Void, Never>?
     private var copiedChangeCount: Int?
 
+    func ticket() -> Int { generation }
+
+    func beginDrop() -> Int {
+        stop()
+        return ticket()
+    }
+
+    func open(_ url: URL, ticket: Int) {
+        guard ticket == generation else { return }
+        open(url)
+    }
+
     func clear() {
         stop()
         releaseClipboard()
@@ -86,7 +98,7 @@ final class AppModel {
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            try Self.writePrivately(done.result.output, to: url)
+            try PrivateFile.write(done.result.output, to: url)
             done.savedAs = url.lastPathComponent
             failedSave = false
         } catch {
@@ -144,6 +156,7 @@ final class AppModel {
         case .notUTF8: "not_utf8"
         case .tooLarge: "too_large"
         case .empty: "empty_file"
+        case .cancelled: "cancelled"
         case .unsupported(let code): code
         case nil: "unexpected"
         }
@@ -158,10 +171,4 @@ final class AppModel {
         }
     }
 
-    /// Owner-only, written in one step: Foundation stages the bytes beside the
-    /// target in a location the sandbox allows and renames them over it.
-    static func writePrivately(_ data: Data, to url: URL) throws {
-        try data.write(to: url, options: [.atomic])
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-    }
 }

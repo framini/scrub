@@ -43,7 +43,7 @@ func streetAddressesInFreeText(_ address: String) throws {
     let job = Job()
     let fake = job.replacement(for: "PERSON", original: "Robert Mitchell")
     let initial = "\(fake) wrote to Robert Mitchell."
-    let (text, _, unresolved) = Correction.run(initial, marks: [Mark(range: 0..<(fake as NSString).length, entity: "PERSON")], job: job)
+    let (text, _, unresolved) = try Correction.run(initial, marks: [Mark(range: 0..<(fake as NSString).length, entity: "PERSON")], job: job)
     #expect(!text.contains("Robert Mitchell"))
     #expect(unresolved.isEmpty)
 }
