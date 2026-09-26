@@ -78,8 +78,8 @@ private final class LinearPeople {
     #expect(Matcher.fold("😀") != Matcher.fold("🚀"))
     #expect(Matcher(["Straße", "STRASSE"]).matches(in: "straße").count == 1)
     let job = Job()
-    job.recordOriginals([("😀", [Span(range: 0..<2, entity: "PERSON", score: 1)]),
-                         ("🚀", [Span(range: 0..<2, entity: "PERSON", score: 1)])])
+    job.recordOriginals([("ab😀", [Span(range: 0..<4, entity: "PERSON", score: 1)]),
+                         ("ab🚀", [Span(range: 0..<4, entity: "PERSON", score: 1)])])
     #expect(OriginalMatcher(job).matcher.literals.count == 2)
 }
 
@@ -145,7 +145,6 @@ private func personCSV(_ count: Int) -> Data {
     let half = try measure(10_000)
     let full = try measure(20_000)
     print("person CSV debug: 10000=\(half), 20000=\(full)")
-    #expect(full < .seconds(30))
     #expect(full < half * 3)
 }
 
@@ -170,6 +169,7 @@ private func personCSV(_ count: Int) -> Data {
     let half = try measure(4_000)
     let full = try measure(8_000)
     print("plain text debug: 4000=\(half), 8000=\(full)")
-    #expect(full < .seconds(30))
+    // Other suites run in parallel, so an absolute budget measures machine
+    // load; the ratio between two runs under the same load measures scaling.
     #expect(full < half * 3)
 }

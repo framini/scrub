@@ -7,6 +7,7 @@ public struct Mark: Sendable, Equatable {
     public init(range: Range<Int>, entity: String) { self.range = range; self.entity = entity }
 }
 public struct TableMark: Sendable, Equatable {
+    public static let header = -1
     public let row: Int
     public let column: Int
     public let range: Range<Int>
@@ -52,6 +53,34 @@ enum TextRanges {
         guard range.lowerBound >= 0, range.upperBound <= ns.length else { return "" }
         if range.lowerBound == 0 && range.upperBound == ns.length { return text }
         return ns.substring(with: NSRange(location: range.lowerBound, length: range.count))
+    }
+    /// Whether the characters meeting at `index` belong to one word. A letter
+    /// next to a digit, or a lowercase letter before a capital ("mariaGonzalez"),
+    /// starts a new word.
+    static func joinsWord(_ ns: NSString, at index: Int, underscore: Bool) -> Bool {
+        func scalar(endingAt end: Int) -> Unicode.Scalar? {
+            guard end > 0 else { return nil }
+            let unit = ns.character(at: end - 1)
+            if (0xDC00...0xDFFF).contains(unit), end > 1 { return String(utf16CodeUnits: [ns.character(at: end - 2), unit], count: 2).unicodeScalars.first }
+            return Unicode.Scalar(unit)
+        }
+        func scalar(startingAt start: Int) -> Unicode.Scalar? {
+            guard start < ns.length else { return nil }
+            let unit = ns.character(at: start)
+            if (0xD800...0xDBFF).contains(unit), start + 1 < ns.length { return String(utf16CodeUnits: [unit, ns.character(at: start + 1)], count: 2).unicodeScalars.first }
+            return Unicode.Scalar(unit)
+        }
+        func kind(_ scalar: Unicode.Scalar?) -> Character? {
+            guard let scalar else { return nil }
+            if underscore && scalar == "_" { return "_" }
+            if CharacterSet.decimalDigits.contains(scalar) { return "9" }
+            if CharacterSet.uppercaseLetters.contains(scalar) { return "A" }
+            return CharacterSet.alphanumerics.contains(scalar) ? "a" : nil
+        }
+        switch (kind(scalar(endingAt: index)), kind(scalar(startingAt: index))) {
+        case (nil, _), (_, nil), ("9", "a"), ("9", "A"), ("a", "9"), ("A", "9"), ("a", "A"): return false
+        default: return true
+        }
     }
     static func replace(_ text: String, _ range: Range<Int>, with value: String) -> String {
         (text as NSString).replacingCharacters(in: NSRange(location: range.lowerBound, length: range.count), with: value)

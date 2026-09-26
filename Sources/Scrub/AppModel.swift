@@ -43,6 +43,9 @@ final class AppModel {
     private var work: Task<Void, Never>?
     private var copiedChangeCount: Int?
     private var copyResets = 0
+    private let board: NSPasteboard
+
+    init(board: NSPasteboard = .general) { self.board = board }
 
     func ticket() -> Int { generation }
 
@@ -82,7 +85,6 @@ final class AppModel {
     }
 
     func paste() {
-        let board = NSPasteboard.general
         guard let text = board.string(forType: .string), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             let holdsSomething = !(board.types ?? []).isEmpty
             return fail(Self.pastedName, .paste, holdsSomething ? "clipboard_not_text" : "empty_clipboard")
@@ -105,10 +107,10 @@ final class AppModel {
     /// ⌘C copies a selection when the focused view has one, and otherwise the
     /// whole result. A responder with nothing selected leaves the pasteboard
     /// untouched, which is how the two cases are told apart.
-    func copyCommand() {
-        let before = NSPasteboard.general.changeCount
-        if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil), NSPasteboard.general.changeCount != before {
-            copiedChangeCount = NSPasteboard.general.changeCount
+    func copyCommand(sendCopy: () -> Bool = { NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) }) {
+        let before = board.changeCount
+        if sendCopy(), board.changeCount != before {
+            copiedChangeCount = board.changeCount
             return
         }
         viaShortcut(.copy)
@@ -116,7 +118,6 @@ final class AppModel {
 
     func copy() {
         guard case .finished(var done) = state, let text = String(data: done.result.output, encoding: .utf8) else { return }
-        let board = NSPasteboard.general
         board.clearContents()
         board.setString(text, forType: .string)
         copiedChangeCount = board.changeCount
@@ -154,7 +155,6 @@ final class AppModel {
     func releaseClipboard() {
         guard let ours = copiedChangeCount else { return }
         copiedChangeCount = nil
-        let board = NSPasteboard.general
         if board.changeCount == ours { board.clearContents() }
     }
 

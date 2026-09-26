@@ -76,7 +76,9 @@ public enum JSONFile: FileFormat {
         }
         let scrubbed = try process(root, key: nil, path: "")
         progress(.checking, 0, 1)
-        let (output, marks) = OrderedJSON.render(scrubbed, valueMarks: valueMarks, keyMarks: keyMarks)
+        let (rendered, marks) = OrderedJSON.render(scrubbed, valueMarks: valueMarks, keyMarks: keyMarks)
+        // With nothing replaced, the input goes back byte for byte instead of re-indented.
+        let output = marks.isEmpty ? text : rendered
         progress(.checking, 1, 1)
         let length = (output as NSString).length
         let limit = min(length, 200_000)

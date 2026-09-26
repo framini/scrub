@@ -75,7 +75,7 @@ Maria Gonzalez
 
 ### JSON
 
-Nesting and non-personal values are kept; a key is only renamed when it holds personal data itself. Secrets become 24 random characters, keeping a known vendor prefix like `sk_live_`, so their length gives nothing away. Card numbers keep their network, length and grouping, and still pass the checksum. The output is re-indented.
+Nesting and non-personal values are kept; a key is only renamed when it holds personal data itself. Secrets become 24 random characters, keeping a known vendor prefix like `sk_live_`, so their length gives nothing away. Card numbers keep their network, length and grouping, and still pass the checksum. When anything is replaced the output is re-indented; when nothing is, you get the file back byte for byte.
 
 <img src="docs/images/json.png" alt="A customer record after scrubbing: name, contact details, birth date, card and API key replaced">
 
@@ -132,7 +132,15 @@ Results say *Review before sharing*, never *clean*: detection is statistical, an
 - Files up to 50 MB of UTF-8 text (XML may also be UTF-16).
 - JSON and XML nested up to 64 levels. XML with a DOCTYPE or entity declarations is refused.
 - The preview shows the first 200,000 characters or 500 table rows. Copy and Save always give the whole result.
-- Detection finds what it recognises. A value only counts as a secret when it looks like one, or sits under a key like `password` or `token`.
+- Detection finds what it recognises. A value only counts as a secret when it looks like one, or sits under a key like `password` or `token`. Blank values and `true`/`false` under those keys are left as they are.
+
+Not covered, so check for these yourself:
+
+- Identity numbers from outside the US in free text. They are caught under keys like `national_id`.
+- A first name on its own that Scrub has never seen with a surname, unless it signs off a message, like "Maria" on the line after "Thanks,".
+- Values split across XML markup, as in `alice<em>@</em>example.com`.
+- Personal data that appears only in XML element or attribute names, unless the same person also appears in the data. Runs of seven or more digits in JSON keys and XML names are always replaced.
+- Record identifiers such as `customer_id` values, which are kept so records still line up.
 
 ## Keyboard
 

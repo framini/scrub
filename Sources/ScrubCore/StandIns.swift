@@ -46,10 +46,15 @@ final class StandIns {
             assigned[key] = fake
             return fake
         }
-        var iterator = number(digits).makeIterator()
-        let fake = String(original.map { character in
+        // Only the significant digits are personal: the exponent and a plain
+        // decimal's fraction stay, so 2128675309 and 2128675309.0 share a stand-in.
+        let exponent = original.firstIndex { $0 == "e" || $0 == "E" } ?? original.endIndex
+        let point = exponent == original.endIndex ? original.firstIndex(of: ".") ?? exponent : exponent
+        let significant = original[..<point].contains(where: { $0.isASCII && $0.isNumber }) ? point : exponent
+        var iterator = number(original[..<significant].filter { $0.isASCII && $0.isNumber }).makeIterator()
+        let fake = String(original[..<significant].map { character in
             character.isASCII && character.isNumber ? iterator.next() ?? character : character
-        })
+        }) + original[significant...]
         assigned[key] = fake
         return fake
     }

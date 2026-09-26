@@ -44,14 +44,27 @@ public enum CSVFile: FileFormat {
                 valueIndex += 1
             }
         }
-        for (column, index) in headerIDs.enumerated() { columns[column] = values[index].text }
+        for (column, index) in headerIDs.enumerated() {
+            columns[column] = values[index].text
+            marks += values[index].marks.map { TableMark(row: TableMark.header, column: column, range: $0.range, entity: $0.entity) }
+        }
         let previewWidth = max(columns.count, rows.prefix(previewRows).map(\.count).max() ?? 0)
         let previewColumns = columns + Array(repeating: "", count: previewWidth - columns.count)
         progress(.checking, 0, 1)
         var neutralized = 0
+        func shift(row: Int, column: Int) {
+            for mark in marks.indices where marks[mark].row == row && marks[mark].column == column {
+                let old = marks[mark]
+                marks[mark] = TableMark(row: row, column: column, range: (old.range.lowerBound + 1)..<(old.range.upperBound + 1), entity: old.entity)
+            }
+        }
         if hasHeader {
             for column in columns.indices {
-                if let safe = neutralize(columns[column]) { columns[column] = safe; neutralized += 1 }
+                if let safe = neutralize(columns[column]) {
+                    columns[column] = safe
+                    neutralized += 1
+                    shift(row: TableMark.header, column: column)
+                }
             }
         }
         for row in rows.indices {
@@ -60,10 +73,7 @@ public enum CSVFile: FileFormat {
                 if let safe = neutralize(rows[row][column]) {
                     rows[row][column] = safe
                     neutralized += 1
-                    for mark in marks.indices where marks[mark].row == row && marks[mark].column == column {
-                        let old = marks[mark]
-                        marks[mark] = TableMark(row: row, column: column, range: (old.range.lowerBound + 1)..<(old.range.upperBound + 1), entity: old.entity)
-                    }
+                    if row < previewRows { shift(row: row, column: column) }
                 }
             }
         }

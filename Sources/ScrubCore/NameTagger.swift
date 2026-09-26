@@ -6,6 +6,7 @@ enum NameTagger {
     private static let leadingWord = TextPattern(#"^\s+\p{L}+"#)
     private static let asciiWord = TextPattern(#"[A-Za-z]+"#)
     private static let letterWord = TextPattern(#"\p{L}[\p{L}'’-]*"#)
+    private static let loneLine = TextPattern(#"(?m)^[ \t]*(\p{Lu}\p{Ll}+)[ \t]*\r?$"#)
     private static let organisationWords: Set<String> = ["foundation", "inc", "llc", "ltd", "corp", "company", "group", "university", "bank", "institute", "hospital"]
     static func find(_ text: String, using tagger: NLTagger, isCancelled: () -> Bool) -> [Span] {
         if !text.contains(where: { $0.isUppercase || $0.isWhitespace }) && !Names.firstFolded.contains(text.lowercased()) && !Names.lastFolded.contains(text.lowercased()) { return [] }
@@ -19,7 +20,23 @@ enum NameTagger {
                 spans.append(Span(range: range, entity: "PERSON", score: 0.85))
             }
         }
+        spans.append(contentsOf: signOffs(in: text))
         return spans
+    }
+    // A known first name alone on the line after "Thanks," signs the message.
+    // The model has no sentence to read it in, so it never tags it.
+    private static func signOffs(in text: String) -> [Span] {
+        TextRanges.matches(loneLine, in: text).compactMap { match in
+            let name = match.range(at: 1)
+            guard Names.unambiguousFirst.contains(TextRanges.substring(text, name.location..<NSMaxRange(name)).lowercased()) else { return nil }
+            let ns = text as NSString
+            var end = match.range.location
+            while end > 0, let scalar = Unicode.Scalar(ns.character(at: end - 1)), CharacterSet.whitespacesAndNewlines.contains(scalar) { end -= 1 }
+            guard end > 0, ns.character(at: end - 1) == 44 else { return nil }
+            let line = ns.lineRange(for: NSRange(location: end - 1, length: 0))
+            guard ns.substring(with: NSRange(location: line.location, length: end - line.location)).split(separator: " ").count <= 3 else { return nil }
+            return Span(range: name.location..<NSMaxRange(name), entity: "PERSON", score: 0.85)
+        }
     }
     private static let strongBefore: Set<String> = ["named", "called", "mr", "mrs", "ms", "dr", "contact", "owner", "customer", "patient", "employee"]
     private static let informalBefore: Set<String> = ["its", "it's", "im", "i'm", "with", "w", "spoke", "ask", "tell", "cc"]

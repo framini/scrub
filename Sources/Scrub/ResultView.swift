@@ -150,7 +150,7 @@ private struct TablePreview: View {
                 VStack(spacing: 0) {
                     HStack(spacing: 0) {
                         ForEach(columns.indices, id: \.self) { column in
-                            Text(columns[column])
+                            Text(ResultView.highlighted(columns[column], cellMarks[TableMark.header]?[column] ?? []))
                                 .font(.system(size: 12, weight: .semibold))
                                 .foregroundStyle(Color.slate)
                                 .frame(width: widths[column], alignment: .leading)
@@ -194,10 +194,18 @@ private struct TablePreview: View {
     }
     @ViewBuilder private func cell(row: Int, column: Int) -> some View {
         let value = column < rows[row].count ? rows[row][column] : ""
-        if value.contains("\n") || value.contains("\r") {
-            Text((value.components(separatedBy: .newlines).first ?? "") + " …").help(value)
+        let marks = cellMarks[row]?[column] ?? []
+        let firstLine = (value as NSString).rangeOfCharacter(from: .newlines).location
+        if firstLine != NSNotFound {
+            // Only the first line fits the row; the ellipsis is marked when a
+            // replacement sits in the lines it hides.
+            let shown = marks.compactMap { mark in mark.range.lowerBound < firstLine ? Mark(range: mark.range.lowerBound..<min(mark.range.upperBound, firstLine), entity: mark.entity) : nil }
+            let hidden = marks.contains { $0.range.upperBound > firstLine }
+            let line = (value as NSString).substring(to: firstLine)
+            let length = (line as NSString).length
+            Text(ResultView.highlighted(line + " …", shown + (hidden ? [Mark(range: (length + 1)..<(length + 2), entity: "")] : []))).help(value)
         } else {
-            Text(ResultView.highlighted(value, cellMarks[row]?[column] ?? [])).help(value)
+            Text(ResultView.highlighted(value, marks)).help(value)
         }
     }
 

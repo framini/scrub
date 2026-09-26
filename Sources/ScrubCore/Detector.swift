@@ -31,7 +31,13 @@ public final class Detector {
             if let first = base.first, first.score == 1, first.range == 0..<(text as NSString).length,
                base.count == 1 { return base }
             var spans = base
-            for match in matcher.matcher.matches(in: text, accepting: { wholeWord($0, in: text) }) {
+            let ns = text as NSString
+            func capital(_ index: Int) -> Bool {
+                index < ns.length && Unicode.Scalar(ns.character(at: index)).map(CharacterSet.uppercaseLetters.contains) == true
+            }
+            // A lowercase name part counts only as the head of a camelCase word ("mariaGonzalez").
+            for match in matcher.matcher.matches(in: text, accepting: { wholeWord($0, in: text) })
+            where !matcher.capitalOnly[match.index] || capital(match.range.lowerBound) || capital(match.range.upperBound) {
                 spans.append(Span(range: match.range, entity: matcher.entities[match.index], score: 0.95))
             }
             return Self.resolve(spans)
@@ -53,22 +59,7 @@ public final class Detector {
     }
     private func wholeWord(_ range: Range<Int>, in text: String) -> Bool {
         let ns = text as NSString
-        func word(before index: Int) -> Bool {
-            guard index > 0 else { return false }
-            let end = index - 1
-            let unit = ns.character(at: end)
-            let start = (0xDC00...0xDFFF).contains(unit) && end > 0 ? end - 1 : end
-            guard let scalar = String(ns.substring(with: NSRange(location: start, length: index - start))).unicodeScalars.first else { return false }
-            return CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
-        }
-        func word(after index: Int) -> Bool {
-            guard index < ns.length else { return false }
-            let unit = ns.character(at: index)
-            let length = (0xD800...0xDBFF).contains(unit) && index + 1 < ns.length ? 2 : 1
-            guard let scalar = String(ns.substring(with: NSRange(location: index, length: length))).unicodeScalars.first else { return false }
-            return CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
-        }
-        return !word(before: range.lowerBound) && !word(after: range.upperBound)
+        return !TextRanges.joinsWord(ns, at: range.lowerBound, underscore: true) && !TextRanges.joinsWord(ns, at: range.upperBound, underscore: true)
     }
     static func resolve(_ spans: [Span]) -> [Span] {
         let ordered = spans.sorted { a, b in
@@ -107,11 +98,13 @@ struct GazetteerMatcher {
     static let supportedEntities = ["FIRST_NAME", "LAST_NAME", "PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"]
     let matcher: Matcher
     let entities: [String]
+    let capitalOnly: [Bool]
 
-    init(_ gazetteer: [String: Set<String>]) {
+    init(_ gazetteer: [String: Set<String>], nameParts: Set<String> = []) {
         let (literals, labels) = Self.entries(gazetteer)
         matcher = Matcher(literals)
         entities = labels
+        capitalOnly = zip(literals, labels).map { $1 == "PERSON" && nameParts.contains($0) }
     }
 
     private static func entries(_ gazetteer: [String: Set<String>]) -> ([String], [String]) {

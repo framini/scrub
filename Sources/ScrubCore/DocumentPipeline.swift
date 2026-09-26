@@ -145,7 +145,7 @@ enum DocumentPipeline {
         }
         let owners = associateOwners(leaves, job: job)
         observeInitial(leaves, bases: bases, job: job)
-        let gazetteer = GazetteerMatcher(job.gazetteer)
+        let gazetteer = GazetteerMatcher(job.gazetteer, nameParts: job.nameParts)
         job.setReplacementRecording(false)
         defer { job.setReplacementRecording(true) }
         var values: [DocumentValue] = []

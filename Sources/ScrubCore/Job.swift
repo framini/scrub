@@ -4,6 +4,7 @@ public final class Job {
     public let detector = Detector()
     private let standIns: StandIns
     private(set) var gazetteer: [String: Set<String>] = [:]
+    private(set) var nameParts: Set<String> = []
     private(set) var replacements: [Replacement] = []
     private(set) var sensitiveOriginals: [SensitiveOriginal] = []
     private var emitted: Set<String> = []
@@ -30,7 +31,7 @@ public final class Job {
         let email = identified.first { $0.0 == "EMAIL_ADDRESS" }?.1
         if first != nil && last != nil { associate(first: first, last: last, email: email) }
         observeSpans(zip(fields, found).map { ($0.text, $1) })
-        let matcher = GazetteerMatcher(gazetteer)
+        let matcher = GazetteerMatcher(gazetteer, nameParts: nameParts)
         return zip(fields, bases).map { detector.combined($1, text: $0.text, matcher: matcher) }
     }
     func observeSpans<S: Sequence>(_ fields: S) where S.Element == (String, [Span]) {
@@ -38,8 +39,23 @@ public final class Job {
             for span in spans where GazetteerMatcher.supportedEntities.contains(span.entity) {
                 let value = TextRanges.substring(text, span.range)
                 gazetteer[span.entity, default: []].insert(value)
-                if span.entity == "PERSON" { _ = standIns.people.registerFull(value) }
+                if span.entity == "PERSON" {
+                    _ = standIns.people.registerFull(value)
+                    rememberParts(of: value)
+                }
             }
+        }
+    }
+    // "Thanks, Maria" after "Maria Gonzalez" is the same person. Each end of a
+    // full name is matched on its own, but only where it is written with a
+    // capital, so a surname like "Hunt" still leaves the verb alone.
+    private func rememberParts(of name: String) {
+        let tokens = name.split { $0.isWhitespace || $0 == "," }.map(String.init)
+        guard tokens.count >= 2, let first = tokens.first, let last = tokens.last else { return }
+        for part in [first, last] where part.count >= 2 && part.first?.isUppercase == true
+            && part.allSatisfy({ $0.isLetter || "'’-".contains($0) }) && !Names.ambiguousFirst.contains(part.lowercased()) {
+            gazetteer["PERSON", default: []].insert(part)
+            nameParts.insert(part)
         }
     }
     func recordOriginals<S: Sequence>(_ fields: S) where S.Element == (String, [Span]) {
@@ -117,6 +133,6 @@ public final class Job {
     func scrubValue(_ text: String, key: String? = nil, owner: Persona? = nil, contextWords: Set<String> = []) throws -> (String, [Mark], [Mark]) {
         let spans = observe([(text, key)], contextWords: contextWords)[0]
         let (initial, marks) = try apply(text, spans: spans, owner: owner)
-        return try Correction.run(initial, marks: marks, job: self, matcher: OriginalMatcher(self), gazetteer: GazetteerMatcher(gazetteer))
+        return try Correction.run(initial, marks: marks, job: self, matcher: OriginalMatcher(self), gazetteer: GazetteerMatcher(gazetteer, nameParts: nameParts))
     }
 }

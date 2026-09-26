@@ -13,7 +13,7 @@ struct Replacement {
 
 enum Correction {
     static func run(_ initial: String, marks: [Mark], job: Job) throws -> (String, [Mark], [Mark]) {
-        try run(initial, marks: marks, job: job, matcher: OriginalMatcher(job), gazetteer: GazetteerMatcher(job.gazetteer))
+        try run(initial, marks: marks, job: job, matcher: OriginalMatcher(job), gazetteer: GazetteerMatcher(job.gazetteer, nameParts: job.nameParts))
     }
     static func run(_ initial: String, marks initialMarks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, passes: Int = 3, base: [Span]? = nil) throws -> (String, [Mark], [Mark]) {
         var output = initial
@@ -71,7 +71,7 @@ struct OriginalMatcher {
         entities = labels
     }
     mutating func add(_ replacements: ArraySlice<Replacement>) {
-        let originals = replacements.filter { !$0.original.isEmpty }
+        let originals = replacements.filter { $0.original.filter({ $0.isLetter || $0.isNumber }).count >= 2 }
         guard !originals.isEmpty else { return }
         let literals = originals.map(\.original)
         let labels = originals.map(\.entity)
@@ -83,7 +83,9 @@ struct OriginalMatcher {
         var seen: [FoldHash: Int] = [:]
         var collisions: [FoldHash: [Int]] = [:]
         func add(_ candidate: SensitiveOriginal) {
-            guard !candidate.original.isEmpty else { return }
+            // A one-character original ("a" as a password) is replaced where it
+            // was found; hunting it through the rest of the text only breaks prose.
+            guard candidate.original.filter({ $0.isLetter || $0.isNumber }).count >= 2 else { return }
             let folded = Matcher.fold(candidate.original)
             let key = FoldHash(folded)
             if let first = seen[key] {
@@ -111,15 +113,9 @@ struct OriginalMatcher {
 private extension Matcher {
     func matcherSpans(in text: String, entities: [String]) -> [Span] {
         let ns = text as NSString
-        // An original matched inside a longer word ("Ann" in "annual") is not
-        // that person; the edge only needs a boundary where the original has a
-        // letter or digit.
-        func wordy(_ index: Int) -> Bool {
-            guard index >= 0, index < ns.length, let scalar = Unicode.Scalar(ns.character(at: index)) else { return false }
-            return CharacterSet.alphanumerics.contains(scalar)
-        }
+        // An original matched inside a longer word ("Ann" in "annual") is not that person.
         return matches(in: text, accepting: { range in
-            !(wordy(range.lowerBound) && wordy(range.lowerBound - 1)) && !(wordy(range.upperBound - 1) && wordy(range.upperBound))
+            !TextRanges.joinsWord(ns, at: range.lowerBound, underscore: false) && !TextRanges.joinsWord(ns, at: range.upperBound, underscore: false)
         }).map { Span(range: $0.range, entity: entities[$0.index], score: 1.1) }
     }
 }

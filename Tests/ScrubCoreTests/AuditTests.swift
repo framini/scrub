@@ -98,3 +98,68 @@ func pastedKeyedSecretIsReplaced(_ input: String) throws {
     let (output, _) = try run("The token is valid for an hour and the password policy changed.", name: "")
     #expect(output == "The token is valid for an hour and the password policy changed.")
 }
+
+private let ticket = "From: Maria Gonzalez <maria.gonzalez@northwind.io>\nSent: Tuesday, 3 March\n\nHi,\n\nI was double charged. You can reach me on +1 (415) 555-0132.\n\nThanks,\nMaria\n"
+
+@Test func signOffFirstNameFollowsTheFullName() throws {
+    let (output, _) = try run(ticket, name: "")
+    #expect(!output.contains("Maria"))
+    let header = try #require(output.split(separator: "\n").first?.dropFirst("From: ".count).split(separator: " ").first)
+    #expect(output.hasSuffix("Thanks,\n\(header)\n"))
+}
+
+@Test(arguments: ["Best,\nKevin\n", "Hi,\nThe invoice is late.\n\nCheers,\nDaniel"])
+func knownFirstNameAloneOnASignOffIsReplaced(_ input: String) throws {
+    let (output, _) = try run(input, name: "")
+    #expect(!output.contains("Kevin") && !output.contains("Daniel"))
+}
+
+@Test func greetingStaysAGreeting() throws {
+    let (output, _) = try run(ticket, name: "")
+    #expect(output.contains("\n\nHi,\n\n"))
+}
+
+@Test func namePartsOnlyMatchWhenCapitalised() throws {
+    let (output, _) = try run("Daniel Hunt called about the refund. We will hunt for the invoice.\n", name: "")
+    #expect(!output.contains("Hunt"))
+    #expect(output.contains("We will hunt for the invoice."))
+}
+
+@Test func originalJoinedToAnotherWordIsCaughtAtCaseAndDigitEdges() throws {
+    let (output, _) = try run(#"{"name":"Maria Gonzalez","username":"sam","note":"user mariaGonzalez, sam42 and annual sample"}"#, name: "a.json")
+    let note = try #require(try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: String])["note"]
+    #expect(note?.lowercased().contains("maria") == false)
+    #expect(note?.contains("Gonzalez") == false)
+    #expect(note?.contains("sam42") == false)
+    #expect(note?.hasSuffix("annual sample") == true)
+}
+
+@Test func oneCharacterSecretLeavesProseAlone() throws {
+    let (output, _) = try run(#"{"password":"a","note":"a basic plan, a"}"#, name: "a.json")
+    #expect(output.contains("\"a basic plan, a\""))
+    #expect(!output.contains("\"password\": \"a\""))
+}
+
+@Test func numericPhoneKeepsNotationAndSharesItsStandIn() throws {
+    let (output, _) = try run(#"{"phone":2128675309.0,"mobile":2.128675309e9,"cell":2128675309}"#, name: "a.json")
+    let lines = output.split(separator: "\n").map { $0.split(separator: ":").last?.trimmingCharacters(in: CharacterSet(charactersIn: " ,")) ?? "" }
+    let phone = try #require(lines.first { $0.hasSuffix(".0") }), mobile = try #require(lines.first { $0.hasSuffix("e9") })
+    let cell = try #require(lines.first { !$0.isEmpty && $0.allSatisfy(\.isNumber) })
+    #expect(cell != "2128675309" && cell.count == 10)
+    #expect(phone == cell + ".0")
+    #expect(mobile == String(cell.prefix(1)) + "." + String(cell.dropFirst()) + "e9")
+}
+
+@Test func jsonWithNothingToReplaceComesBackUnchanged() throws {
+    let input = #"{"plan":"Team",  "seats":12}"#
+    let (output, result) = try run(input, name: "a.json")
+    #expect(output == input)
+    #expect(result.counts.isEmpty)
+}
+
+@Test func replacedHeaderCellIsMarked() throws {
+    let (_, result) = try run("name,notes for maria.gonzalez@northwind.io\nMaria Gonzalez,Team\nDaniel Okafor,Pro\n", name: "a.csv")
+    guard case .table(let columns, _, _, let marks) = result.preview else { Issue.record("not a table"); return }
+    #expect(!columns[1].contains("maria.gonzalez"))
+    #expect(marks.contains { $0.row == TableMark.header && $0.column == 1 && $0.entity == "EMAIL_ADDRESS" })
+}

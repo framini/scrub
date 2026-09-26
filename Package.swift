@@ -12,5 +12,6 @@ let package = Package(
         // refuses every network path. Never shipped.
         .executableTarget(name: "NetworkProbe"),
         .testTarget(name: "ScrubCoreTests", dependencies: ["ScrubCore"], resources: [.process("Fixtures")]),
+        .testTarget(name: "ScrubTests", dependencies: ["Scrub"]),
     ]
 )
