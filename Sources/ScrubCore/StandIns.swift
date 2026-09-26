@@ -41,6 +41,11 @@ final class StandIns {
         let key = entity + "\u{0}" + original
         if let existing = assigned[key] { return existing }
         let digits = original.filter { $0.isASCII && $0.isNumber }
+        if digits == original, entity == "CREDIT_CARD" || entity == "DATE_OF_BIRTH" && digits.count == 8 {
+            let fake = make(entity, original, nil)
+            assigned[key] = fake
+            return fake
+        }
         var iterator = number(digits).makeIterator()
         let fake = String(original.map { character in
             character.isASCII && character.isNumber ? iterator.next() ?? character : character
@@ -61,10 +66,7 @@ final class StandIns {
         case "ADDRESS": return "\(digits(3)) \(pick(Names.streets) ?? "Main") Street"
         case "DATE_OF_BIRTH": return dateLike(original)
         case "US_SSN": return "\(digits(3))-\(digits(2))-\(digits(4))"
-        case "CREDIT_CARD":
-            let stem = "4111" + (0..<11).map { _ in digit() }.joined()
-            for check in 0...9 where Patterns.luhn((stem + String(check)).compactMap(\.wholeNumberValue)) { return stem + String(check) }
-            return "4111111111111111"
+        case "CREDIT_CARD": return card(like: original)
         case "IBAN_CODE":
             let body = "GB00BARC" + digits(14)
             for check in 0...98 {
@@ -94,10 +96,23 @@ final class StandIns {
         default: return "[\(entity)]"
         }
     }
+    /// Keeps the network (the first digit, two for 3x cards like Amex), the
+    /// length and the grouping, with a fresh body and a valid check digit.
+    private func card(like original: String) -> String {
+        let source = original.filter { $0.isASCII && $0.isNumber }
+        let length = (13...19).contains(source.count) ? source.count : 16
+        let issuer = source.hasPrefix("3") ? String(source.prefix(2)) : source.first.map(String.init) ?? "4"
+        let stem = issuer + (0..<(length - issuer.count - 1)).map { _ in digit() }.joined()
+        let digits = (0...9).map { stem + String($0) }.first { Patterns.luhn($0.compactMap(\.wholeNumberValue)) } ?? stem + "0"
+        guard source.count == length else { return digits }
+        var iterator = digits.makeIterator()
+        return String(original.map { $0.isASCII && $0.isNumber ? iterator.next() ?? $0 : $0 })
+    }
     private func dateLike(_ original: String) -> String {
         let year = Int.random(in: 1940...1999, using: &rng)
         let month = Int.random(in: 1...12, using: &rng)
         let day = Int.random(in: 1...28, using: &rng)
+        if original.count == 8, original.allSatisfy({ $0.isASCII && $0.isNumber }) { return String(format: "%04d%02d%02d", year, month, day) }
         let parts = original.trimmingCharacters(in: .whitespacesAndNewlines).split(whereSeparator: { "-/ .".contains($0) })
         let separator = original.first(where: { "-/.".contains($0) }) ?? "-"
         guard parts.count == 3 else { return String(format: "%04d-%02d-%02d", year, month, day) }

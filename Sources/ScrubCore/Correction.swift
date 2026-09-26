@@ -110,7 +110,17 @@ struct OriginalMatcher {
 
 private extension Matcher {
     func matcherSpans(in text: String, entities: [String]) -> [Span] {
-        matches(in: text).map { Span(range: $0.range, entity: entities[$0.index], score: 1.1) }
+        let ns = text as NSString
+        // An original matched inside a longer word ("Ann" in "annual") is not
+        // that person; the edge only needs a boundary where the original has a
+        // letter or digit.
+        func wordy(_ index: Int) -> Bool {
+            guard index >= 0, index < ns.length, let scalar = Unicode.Scalar(ns.character(at: index)) else { return false }
+            return CharacterSet.alphanumerics.contains(scalar)
+        }
+        return matches(in: text, accepting: { range in
+            !(wordy(range.lowerBound) && wordy(range.lowerBound - 1)) && !(wordy(range.upperBound - 1) && wordy(range.upperBound))
+        }).map { Span(range: $0.range, entity: entities[$0.index], score: 1.1) }
     }
 }
 

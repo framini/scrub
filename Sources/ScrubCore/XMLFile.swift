@@ -40,6 +40,8 @@ public enum XMLFile: FileFormat {
                 let ancestry = records + [nextRecord]
                 let currentKeys = keys + [local(element.name) ?? ""]
                 let words = Set(currentKeys.flatMap { KeyHints.words($0) })
+                let secret = keys.last { KeyHints.hint($0) == "SECRET" }
+                func key(_ name: String?) -> String? { KeyHints.hint(name) == nil ? secret ?? name : name }
                 addName(element, records: ancestry)
                 for namespace in element.namespaces ?? [] {
                     addName(namespace, records: ancestry)
@@ -47,13 +49,13 @@ public enum XMLFile: FileFormat {
                 }
                 for attribute in element.attributes ?? [] {
                     addName(attribute, records: ancestry)
-                    add(attribute, key: local(attribute.name), records: ancestry, words: words)
+                    add(attribute, key: key(local(attribute.name)), records: ancestry, words: words)
                 }
                 for child in element.children ?? [] {
                     if child is XMLElement { try walk(child, records: ancestry, keys: currentKeys) }
                     else {
                         if child.kind == .processingInstruction { addName(child, records: ancestry) }
-                        add(child, key: child.kind == .text ? local(element.name) : nil, records: records.isEmpty ? ancestry : records, words: words)
+                        add(child, key: child.kind == .text ? key(local(element.name)) : nil, records: records.isEmpty ? ancestry : records, words: words)
                     }
                 }
             } else {

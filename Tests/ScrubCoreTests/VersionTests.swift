@@ -2,5 +2,5 @@ import ScrubCore
 import Testing
 
 @Test func coreLinks() {
-    #expect(ScrubCore.version == "0.2.0")
+    #expect(ScrubCore.version == "0.2.1")
 }

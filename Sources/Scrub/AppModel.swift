@@ -107,7 +107,10 @@ final class AppModel {
     /// untouched, which is how the two cases are told apart.
     func copyCommand() {
         let before = NSPasteboard.general.changeCount
-        if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil), NSPasteboard.general.changeCount != before { return }
+        if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil), NSPasteboard.general.changeCount != before {
+            copiedChangeCount = NSPasteboard.general.changeCount
+            return
+        }
         viaShortcut(.copy)
     }
 

@@ -42,11 +42,16 @@ public enum Scrubber {
         }
         if head.hasPrefix("<"), try XMLFile.parses(Data(head.utf8)) { return "xml" }
         let lines = text.split(whereSeparator: \.isNewline).prefix(20).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        if lines.count >= 3 {
+        if lines.count >= 2 {
             let delimiter = CSVFile.sniffDelimiter(lines.joined(separator: "\n"))
             let quote = CSVFile.sniffQuote(lines.joined(separator: "\n"), delimiter: delimiter)
-            if let rows = try? CSVFile.parse(lines.joined(separator: "\n"), delimiter: delimiter, quoteCharacter: quote), let width = rows.first?.count,
-               width >= 2, rows.allSatisfy({ $0.count == width }) { return "csv" }
+            if let rows = try? CSVFile.parse(lines.joined(separator: "\n"), delimiter: delimiter, quoteCharacter: quote), let header = rows.first,
+               rows.allSatisfy({ $0.count == header.count }) {
+                // A header naming a personal field is strong evidence on its own,
+                // so a one-row or one-column export still gets its field hints.
+                let named = header.contains { KeyHints.hint($0.trimmingCharacters(in: .whitespaces)) != nil }
+                if named || header.count >= 2 && lines.count >= 3 { return "csv" }
+            }
         }
         return "text"
     }

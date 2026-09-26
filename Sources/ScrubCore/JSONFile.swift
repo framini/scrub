@@ -21,7 +21,8 @@ public enum JSONFile: FileFormat {
                     let childPath = path + "/" + String(index)
                     keyIDs[childPath] = leaves.count
                     leaves.append(DocumentLeaf(pair.0))
-                    collect(pair.1, key: pair.0, path: childPath, records: ancestry, keys: keys + [pair.0])
+                    let inherited = KeyHints.hint(pair.0) == nil && KeyHints.hint(key) == "SECRET" ? key : pair.0
+                    collect(pair.1, key: inherited, path: childPath, records: ancestry, keys: keys + [pair.0])
                 }
             case .array(let values):
                 for (index, child) in values.enumerated() {
