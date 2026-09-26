@@ -20,8 +20,9 @@ struct ScrubApp: App {
                 Button("Choose File…") { model.choose() }.keyboardShortcut("o")
             }
             CommandGroup(replacing: .pasteboard) {
+                Button("Copy") { model.copyCommand() }.keyboardShortcut("c")
                 Button("Paste") { model.paste() }.keyboardShortcut("v")
-                Button("Copy Result") { model.viaShortcut(.copy) }.keyboardShortcut("c", modifiers: [.command, .shift])
+                Button("Select All") { NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil) }.keyboardShortcut("a")
             }
             CommandGroup(replacing: .saveItem) {
                 Button("Save…") { model.viaShortcut(.save) }.keyboardShortcut("s")

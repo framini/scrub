@@ -54,7 +54,7 @@ struct SecondaryButton: ButtonStyle {
             .foregroundStyle(Color.ink)
             .padding(.horizontal, 14)
             .frame(height: 32)
-            .background(Color.snow.opacity(configuration.isPressed ? 0.8 : 1), in: .rect(cornerRadius: 7))
+            .background(configuration.isPressed ? Color.lichen : Color.snow, in: .rect(cornerRadius: 7))
             .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.rule))
     }
 }
@@ -77,19 +77,20 @@ struct Card<Content: View>: View {
 struct ShortcutPress: ViewModifier {
     let shortcut: Shortcut
     let pulse: ShortcutPulse?
+    let tint: Color
     @State private var pressed = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content
+            .overlay(RoundedRectangle(cornerRadius: 7).fill(tint).opacity(pressed ? 1 : 0).allowsHitTesting(false))
             .scaleEffect(pressed && !reduceMotion ? 0.96 : 1)
-            .opacity(pressed ? 0.8 : 1)
             .onChange(of: pulse) { _, new in
                 guard new?.shortcut == shortcut else { return }
                 withAnimation(.easeOut(duration: 0.1)) { pressed = true }
                 Task {
-                    try? await Task.sleep(for: .milliseconds(120))
-                    withAnimation(.easeOut(duration: 0.15)) { pressed = false }
+                    try? await Task.sleep(for: .milliseconds(180))
+                    withAnimation(.easeOut(duration: 0.2)) { pressed = false }
                 }
             }
     }

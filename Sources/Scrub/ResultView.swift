@@ -39,15 +39,15 @@ struct ResultView: View {
             .buttonStyle(SecondaryButton())
             .keyboardShortcut(.cancelAction)
             Button { model.copy() } label: {
-                HStack(spacing: 6) { Text(finished.copied ? "Copied" : "Copy"); KeyHint(key: "⇧⌘C") }
+                HStack(spacing: 6) { Text(finished.copied ? "Copied" : "Copy"); KeyHint(key: "⌘C") }
             }
             .buttonStyle(SecondaryButton())
-            .modifier(ShortcutPress(shortcut: .copy, pulse: model.pulse))
+            .modifier(ShortcutPress(shortcut: .copy, pulse: model.pulse, tint: Color.evergreen.opacity(0.14)))
             Button { model.save() } label: {
                 HStack(spacing: 6) { Text(finished.savedAs == nil ? "Save…" : "Save again…"); KeyHint(key: "⌘S", onDark: true) }
             }
             .buttonStyle(PrimaryButton())
-            .modifier(ShortcutPress(shortcut: .save, pulse: model.pulse))
+            .modifier(ShortcutPress(shortcut: .save, pulse: model.pulse, tint: Color.snow.opacity(0.22)))
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)

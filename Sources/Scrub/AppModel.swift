@@ -42,6 +42,7 @@ final class AppModel {
     private var generation = 0
     private var work: Task<Void, Never>?
     private var copiedChangeCount: Int?
+    private var copyResets = 0
 
     func ticket() -> Int { generation }
 
@@ -101,6 +102,15 @@ final class AppModel {
         }
     }
 
+    /// ⌘C copies a selection when the focused view has one, and otherwise the
+    /// whole result. A responder with nothing selected leaves the pasteboard
+    /// untouched, which is how the two cases are told apart.
+    func copyCommand() {
+        let before = NSPasteboard.general.changeCount
+        if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil), NSPasteboard.general.changeCount != before { return }
+        viaShortcut(.copy)
+    }
+
     func copy() {
         guard case .finished(var done) = state, let text = String(data: done.result.output, encoding: .utf8) else { return }
         let board = NSPasteboard.general
@@ -109,6 +119,15 @@ final class AppModel {
         copiedChangeCount = board.changeCount
         done.copied = true
         state = .finished(done)
+        let ticket = generation
+        copyResets += 1
+        let reset = copyResets
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard ticket == generation, reset == copyResets, case .finished(var current) = state else { return }
+            current.copied = false
+            state = .finished(current)
+        }
     }
 
     func save() {
