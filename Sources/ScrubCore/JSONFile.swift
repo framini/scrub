@@ -77,12 +77,12 @@ public enum JSONFile: FileFormat {
         let scrubbed = try process(root, key: nil, path: "")
         progress(.checking, 0, 1)
         let (rendered, marks) = OrderedJSON.render(scrubbed, valueMarks: valueMarks, keyMarks: keyMarks)
-        // With nothing replaced, the input goes back byte for byte instead of re-indented.
         let output = marks.isEmpty ? text : rendered
         progress(.checking, 1, 1)
         let length = (output as NSString).length
         let limit = min(length, 200_000)
-        return ScrubResult(format: "json", output: Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: job.counts, unresolved: unresolved)
+        // With nothing replaced, the input goes back byte for byte (BOM included) instead of re-indented.
+        return ScrubResult(format: "json", output: marks.isEmpty ? data : Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: job.counts, unresolved: unresolved)
     }
     static func replaceDigits(_ text: String, job: Job) -> (String, [Mark]) {
         var output = text

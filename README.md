@@ -75,7 +75,7 @@ Maria Gonzalez
 
 ### JSON
 
-Nesting and non-personal values are kept; a key is only renamed when it holds personal data itself. Secrets become 24 random characters, keeping a known vendor prefix like `sk_live_`, so their length gives nothing away. Card numbers keep their network, length and grouping, and still pass the checksum. When anything is replaced the output is re-indented; when nothing is, you get the file back byte for byte.
+Nesting and non-personal values are kept; a key is only renamed when it holds personal data itself. Secrets become 24 random characters, keeping a known vendor prefix like `sk_live_`, so their length gives nothing away; short numeric codes like a CVV or PIN stay digits of the same length. Card numbers keep their network, length and grouping, and still pass the checksum. When anything is replaced the output is re-indented; when nothing is, you get the file back byte for byte.
 
 <img src="docs/images/json.png" alt="A customer record after scrubbing: name, contact details, birth date, card and API key replaced">
 
@@ -132,12 +132,16 @@ Results say *Review before sharing*, never *clean*: detection is statistical, an
 - Files up to 50 MB of UTF-8 text (XML may also be UTF-16).
 - JSON and XML nested up to 64 levels. XML with a DOCTYPE or entity declarations is refused.
 - The preview shows the first 200,000 characters or 500 table rows. Copy and Save always give the whole result.
-- Detection finds what it recognises. A value only counts as a secret when it looks like one, or sits under a key like `password` or `token`. Blank values and `true`/`false` under those keys are left as they are.
+- Detection finds what it recognises. A value counts as a secret when it looks like one, or sits under a key that names one, like `password`, `db_password`, `api_token` or `webhook_secret`. Blank values and `true`/`false` under those keys are left as they are.
+- Names are found by the on-device recogniser, by the field they sit in (`name`, `assigned_to`, `manager`), and before an email address, as in `Priya Raghunathan <priya@example.com>`.
+- Card numbers keep their network, length and checksum when they sit in a field. In free text a card is always replaced, but can get a different kind of stand-in.
 
 Not covered, so check for these yourself:
 
 - Identity numbers from outside the US in free text. They are caught under keys like `national_id`.
+- Names the recogniser doesn't know, in running text only ("Refund for Priya Raghunathan"), unless the same person also appears in a name field or before an email address.
 - A first name on its own that Scrub has never seen with a surname, unless it signs off a message, like "Maria" on the line after "Thanks,".
+- Pasted XML with a DOCTYPE is scrubbed as plain text, so its field names don't help detection.
 - Values split across XML markup, as in `alice<em>@</em>example.com`.
 - Personal data that appears only in XML element or attribute names, unless the same person also appears in the data. Runs of seven or more digits in JSON keys and XML names are always replaced.
 - Record identifiers such as `customer_id` values, which are kept so records still line up.

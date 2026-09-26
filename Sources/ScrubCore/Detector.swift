@@ -17,6 +17,7 @@ public final class Detector {
     func base(_ text: String, key: String? = nil, contextWords: Set<String> = []) -> [Span] {
         autoreleasepool {
             if let entity = KeyHints.hint(key), !text.isEmpty { return [Span(range: 0..<(text as NSString).length, entity: entity, score: 1)] }
+            if KeyHints.isRole(key), let name = Self.writtenName(text) { return [Span(range: name, entity: "PERSON", score: 1)] }
             let plainWord = text.allSatisfy { $0.isASCII && $0.isLowercase }
                 && !Names.firstFolded.contains(text) && !Names.lastFolded.contains(text)
             guard !plainWord else { return [] }
@@ -42,6 +43,13 @@ public final class Detector {
             }
             return Self.resolve(spans)
         }
+    }
+    private static let nameShape = TextPattern(#"^\s*(\p{Lu}[\p{L}'’.-]*(?:\s+\p{Lu}[\p{L}'’.-]*){1,3})\s*$"#)
+    /// The range of a value written as a full name: two to four capitalised words.
+    static func writtenName(_ text: String) -> Range<Int>? {
+        guard let match = TextRanges.matches(nameShape, in: text).first else { return nil }
+        let range = match.range(at: 1)
+        return range.location..<NSMaxRange(range)
     }
     private func system(_ text: String) -> [Span] {
         guard let detector = systemDetector else { return [] }
@@ -100,19 +108,20 @@ struct GazetteerMatcher {
     let entities: [String]
     let capitalOnly: [Bool]
 
-    init(_ gazetteer: [String: Set<String>], nameParts: Set<String> = []) {
-        let (literals, labels) = Self.entries(gazetteer)
-        matcher = Matcher(literals)
+    init(_ gazetteer: [String: Set<String>], nameParts: Set<String> = [], isCancelled: () -> Bool = { false }) {
+        let (literals, labels) = Self.entries(gazetteer, isCancelled: isCancelled)
+        matcher = Matcher(literals, isCancelled: isCancelled)
         entities = labels
         capitalOnly = zip(literals, labels).map { $1 == "PERSON" && nameParts.contains($0) }
     }
 
-    private static func entries(_ gazetteer: [String: Set<String>]) -> ([String], [String]) {
+    private static func entries(_ gazetteer: [String: Set<String>], isCancelled: () -> Bool) -> ([String], [String]) {
         var literals: [String] = []
         var labels: [String] = []
         var seen: Set<[UInt16]> = []
         for entity in supportedEntities {
-            for entry in (gazetteer[entity] ?? []).sorted() where !entry.isEmpty {
+            for (index, entry) in (gazetteer[entity] ?? []).sorted().enumerated() where !entry.isEmpty {
+                if index.isMultiple(of: 4096) && isCancelled() { return (literals, labels) }
                 if seen.insert(Matcher.fold(entry)).inserted {
                     literals.append(entry)
                     labels.append(entity)

@@ -2,9 +2,9 @@ import Foundation
 
 enum Copy {
     static let howItWorksSteps = [
-        "Finds personal details three ways: field names such as “password” or “email”; patterns for emails, card numbers, IBANs, IDs, IP addresses and secrets; and Apple’s on-device recognition of names, places, phone numbers and addresses.",
+        "Finds personal details three ways: field names such as “password”, “email” or “assigned_to”; patterns for emails, card numbers, IBANs, IDs, IP addresses and secrets; and Apple’s on-device recognition of names, places, phone numbers and addresses.",
         "Replaces each one with a realistic stand-in. The same person or value gets the same stand-in everywhere in the file.",
-        "Checks the result again and replaces anything that slipped through.",
+        "Checks the result again, replaces what slipped through, and shows anything it couldn’t resolve as left to review.",
         "Keeps the file’s structure, so JSON, CSV and XML stay valid.",
     ]
     static let howItWorksFooter = "macOS sandboxes the app with no network access, so nothing can be sent anywhere."
@@ -16,7 +16,7 @@ enum Copy {
         case "PERSON", "FIRST_NAME", "LAST_NAME": "Names"
         case "EMAIL_ADDRESS": "Emails"
         case "PHONE_NUMBER": "Phones"
-        case "ADDRESS": "Addresses"
+        case "ADDRESS", "POSTAL_CODE": "Addresses"
         case "LOCATION": "Places"
         case "DATE_OF_BIRTH": "Birth dates"
         case "US_SSN": "SSNs"

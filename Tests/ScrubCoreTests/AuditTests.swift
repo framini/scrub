@@ -38,7 +38,7 @@ func pastedSmallCSVWithKnownHeaderIsCSV(_ input: String) throws {
 @Test func nestedValuesUnderNameKeyKeepTheirOwnMeaning() throws {
     let (json, _) = try run(#"{"address":{"city":"Austin","country":"US","zip":"78701"}}"#, name: "a.json")
     #expect(json.contains("\"US\""))
-    #expect(json.contains("78701"))
+    #expect(!json.contains("78701") && !json.contains("Austin"))
 }
 
 @Test func recheckRespectsWordBoundaries() throws {
@@ -162,4 +162,64 @@ func knownFirstNameAloneOnASignOffIsReplaced(_ input: String) throws {
     guard case .table(let columns, _, _, let marks) = result.preview else { Issue.record("not a table"); return }
     #expect(!columns[1].contains("maria.gonzalez"))
     #expect(marks.contains { $0.row == TableMark.header && $0.column == 1 && $0.entity == "EMAIL_ADDRESS" })
+}
+
+@Test func qualifiedSecretKeysAreSecrets() throws {
+    let keys = ["db_password", "api_token", "secret_access_key", "webhook_secret", "x-api-key", "signingSecret", "password_hash", "encryption_key", "credentials", "otp_code"]
+    let input = "{" + keys.enumerated().map { "\"\($1)\":\"qzvx\($0)mrtplknb\"" }.joined(separator: ",") + "}"
+    let (output, result) = try run(input, name: "a.json")
+    #expect(!output.contains("mrtplknb"))
+    #expect(result.counts["SECRET"] == keys.count)
+}
+
+@Test func keysThatOnlyMentionASecretWordAreKept() throws {
+    let input = #"{"max_tokens":512,"prompt_tokens":88,"sort_key":"created_at","token_type":"Bearer","file_name":"Report Final"}"#
+    let (output, result) = try run(input, name: "a.json")
+    #expect(output == input)
+    #expect(result.counts.isEmpty)
+}
+
+@Test func shortNumericSecretStaysAShortNumber() throws {
+    let (output, _) = try run(#"{"cvv":"123","pin":"4821"}"#, name: "a.json")
+    let object = try #require(try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: String])
+    #expect(object["cvv"] != "123" && object["cvv"]?.count == 3 && object["cvv"]?.allSatisfy(\.isNumber) == true)
+    #expect(object["pin"] != "4821" && object["pin"]?.count == 4)
+}
+
+@Test func roleKeysReplaceNamesAndKeepOtherValues() throws {
+    let (json, _) = try run(#"{"assigned_to":"Priya Raghunathan","manager":"Oluwaseun Adeyemi","created_by":"u_1234","owner":"platform-team"}"#, name: "a.json")
+    #expect(!json.contains("Priya") && !json.contains("Raghunathan") && !json.contains("Adeyemi"))
+    #expect(json.contains("\"u_1234\"") && json.contains("\"platform-team\""))
+    let (csv, _) = try run("name,assigned_to\nEmily Watson,Priya Raghunathan\n", name: "a.csv")
+    #expect(!csv.contains("Raghunathan"))
+    let (xml, _) = try run("<r><assignee>Priya Raghunathan</assignee></r>", name: "a.xml")
+    #expect(!xml.contains("Raghunathan"))
+}
+
+@Test func postalCodesKeepTheirShape() throws {
+    let (output, result) = try run(#"{"zip":"10016","postcode":"NW1 6XE"}"#, name: "a.json")
+    let object = try #require(try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: String])
+    #expect(object["zip"] != "10016" && object["zip"]?.count == 5 && object["zip"]?.allSatisfy(\.isNumber) == true)
+    #expect(object["postcode"] != "NW1 6XE" && object["postcode"]?.map { $0.isNumber ? "9" : $0.isLetter ? "A" : $0 } == Array("AA9 9AA"))
+    #expect(result.counts["POSTAL_CODE"] == 2)
+}
+
+@Test func unfamiliarDisplayNameBeforeAnEmailIsAPerson() throws {
+    let (output, _) = try run("From: Priya Raghunathan <priya.r@northwind.io>\nSubject: refund\n\nPlease loop in Priya.\n\nThanks,\nPriya\n", name: "")
+    #expect(!output.contains("Priya") && !output.contains("Raghunathan"))
+}
+
+@Test func lowercaseFirstNamesAndHandlesFollowTheFullName() throws {
+    let (output, _) = try run("Maria Gonzalez joined.\nmaria, please send it to Daniel Okafor.\ncc @daniel.okafor and @maria_gonzalez, thanks daniel.\nWe will hunt for it.\n", name: "")
+    let lowered = output.lowercased()
+    #expect(!lowered.contains("maria") && !lowered.contains("daniel") && !lowered.contains("okafor") && !lowered.contains("gonzalez"))
+    #expect(output.contains("We will hunt for it."))
+    let handle = try #require(output.split(separator: "@").dropFirst().first?.prefix { $0.isLetter || $0 == "." })
+    #expect(handle == handle.lowercased() && handle.contains("."))
+}
+
+@Test func untouchedJSONKeepsItsByteOrderMark() throws {
+    let data = Data([0xEF, 0xBB, 0xBF]) + Data(#"{"plan":"Team"}"#.utf8)
+    let result = try Scrubber.scrub(data, name: "a.json", forceFullDetection: false, seed: 42)
+    #expect(result.output == data)
 }

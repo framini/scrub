@@ -143,9 +143,14 @@ enum DocumentPipeline {
         for leaf in leaves {
             if let entity = leaf.numericEntity { job.reserveNumeric(leaf.text, entity: entity) }
         }
+        // These steps stop early when cancelled; the check after each one throws
+        // before anything partial is used.
         let owners = associateOwners(leaves, job: job)
+        try Scrubber.checkCancellation()
         observeInitial(leaves, bases: bases, job: job)
-        let gazetteer = GazetteerMatcher(job.gazetteer, nameParts: job.nameParts)
+        try Scrubber.checkCancellation()
+        let gazetteer = GazetteerMatcher(job.gazetteer, nameParts: job.nameParts, isCancelled: { Task.isCancelled })
+        try Scrubber.checkCancellation()
         job.setReplacementRecording(false)
         defer { job.setReplacementRecording(true) }
         var values: [DocumentValue] = []
@@ -170,7 +175,8 @@ enum DocumentPipeline {
         let maxRecord = leaves.compactMap(\.lastRecord).max() ?? -1
         guard maxRecord >= 0 else { return [] }
         var recordFields = Array<IdentityFields?>(repeating: nil, count: maxRecord + 1)
-        for leaf in leaves {
+        for (index, leaf) in leaves.enumerated() {
+            if index.isMultiple(of: 1024) && Task.isCancelled { return [] }
             guard let record = leaf.lastRecord, let hint = KeyHints.hint(leaf.key), identityHints.contains(hint), !leaf.text.isEmpty else { continue }
             if recordFields[record] == nil { recordFields[record] = IdentityFields() }
             recordFields[record]?.set(leaf.text, for: hint)
@@ -186,6 +192,7 @@ enum DocumentPipeline {
         }
         var owners = Array<Persona?>(repeating: nil, count: maxRecord + 1)
         for record in recordFields.indices {
+            if record.isMultiple(of: 1024) && Task.isCancelled { return [] }
             guard let fields = recordFields[record] else { continue }
             owners[record] = job.associateRecord(first: fields.first, last: fields.last, full: fields.full, email: fields.email)
         }
@@ -193,7 +200,8 @@ enum DocumentPipeline {
     }
 
     private static func observeInitial(_ leaves: [DocumentLeaf], bases: [[Span]?], job: Job) {
-        for (leaf, stored) in zip(leaves, bases) {
+        for (index, (leaf, stored)) in zip(leaves, bases).enumerated() {
+            if index.isMultiple(of: 1024) && Task.isCancelled { return }
             let found = leaf.numericEntity.map { [Span(range: 0..<(leaf.text as NSString).length, entity: $0, score: 1)] }
                 ?? Detector.resolve(base(leaf, stored: stored))
             job.observeSpans([(leaf.text, found)])

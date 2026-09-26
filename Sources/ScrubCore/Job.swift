@@ -48,15 +48,22 @@ public final class Job {
     }
     // "Thanks, Maria" after "Maria Gonzalez" is the same person. Each end of a
     // full name is matched on its own, but only where it is written with a
-    // capital, so a surname like "Hunt" still leaves the verb alone.
+    // capital, so a surname like "Hunt" still leaves the verb alone. A known
+    // first name is no English word, so "thanks daniel" counts too, and so do
+    // handles like "daniel.okafor".
     private func rememberParts(of name: String) {
         let tokens = name.split { $0.isWhitespace || $0 == "," }.map(String.init)
         guard tokens.count >= 2, let first = tokens.first, let last = tokens.last else { return }
-        for part in [first, last] where part.count >= 2 && part.first?.isUppercase == true
-            && part.allSatisfy({ $0.isLetter || "'’-".contains($0) }) && !Names.ambiguousFirst.contains(part.lowercased()) {
-            gazetteer["PERSON", default: []].insert(part)
-            nameParts.insert(part)
+        let parts = [first, last].filter { part in
+            part.count >= 2 && part.first?.isUppercase == true
+                && part.allSatisfy({ $0.isLetter || "'’-".contains($0) }) && !Names.ambiguousFirst.contains(part.lowercased())
         }
+        for part in parts {
+            gazetteer["PERSON", default: []].insert(part)
+            if part != first || !Names.unambiguousFirst.contains(part.lowercased()) { nameParts.insert(part) }
+        }
+        guard parts.count == 2 else { return }
+        for separator in [".", "_"] { gazetteer["PERSON", default: []].insert(first + separator + last) }
     }
     func recordOriginals<S: Sequence>(_ fields: S) where S.Element == (String, [Span]) {
         for (text, spans) in fields {

@@ -60,7 +60,16 @@ final class StandIns {
     }
     private func make(_ entity: String, _ original: String, _ persona: Persona?) -> String {
         switch entity {
-        case "PERSON": return persona?.full ?? people.name(for: original)
+        case "PERSON":
+            if persona == nil, !original.contains(" "), let separator = original.first(where: { $0 == "." || $0 == "_" }) {
+                let parts = original.split(separator: separator)
+                if parts.count == 2 {
+                    let person = people.registerFull(parts.joined(separator: " ")).0
+                    let handle = person.first + String(separator) + person.last
+                    return original == original.lowercased() ? handle.lowercased() : handle
+                }
+            }
+            return persona?.full ?? people.name(for: original)
         case "FIRST_NAME": return (persona ?? people.register(original, nil)).first
         case "LAST_NAME": return (persona ?? people.register(nil, original)).last
         case "EMAIL_ADDRESS":
@@ -88,10 +97,12 @@ final class StandIns {
         case "CRYPTO": return "bc1q" + (0..<38).map { _ in String(pick(Array("023456789acdefghjklmnpqrstuvwxyz")) ?? "a") }.joined()
         case "USERNAME": return people.unrelatedName(first: true).lowercased() + digits(3)
         case "SECRET":
+            // A CVV, PIN or one-time code stays a short number.
+            if (1...8).contains(original.count), original.allSatisfy({ $0.isASCII && $0.isNumber }) { return (0..<original.count).map { _ in digit() }.joined() }
             let prefix = TextRanges.matches(Self.secretPrefix, in: original).first.map { TextRanges.substring(original, $0.range.location..<NSMaxRange($0.range)) } ?? ""
             let kept = prefix.utf16.count < original.utf16.count ? prefix : ""
             return kept + (0..<24).map { _ in String(pick(alphabet) ?? "a") }.joined()
-        case "ID_NUMBER":
+        case "ID_NUMBER", "POSTAL_CODE":
             return String(original.map { char in
                 if char.isNumber { return Character(digit()) }
                 if char.isLowercase { return pick(Array("abcdefghijklmnopqrstuvwxyz")) ?? "a" }

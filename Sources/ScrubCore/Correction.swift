@@ -45,17 +45,36 @@ enum Correction {
         // Hunt Called"); that adds no personal data. A pattern match running
         // past a stand-in can be the tail of a secret, so only exact containment
         // exempts it. Originals next to a stand-in are caught by the sweep below.
+        // Scanning every mark per span is quadratic. With marks in start order,
+        // a running maximum of their ends finds the first one that can reach
+        // the span, and the scan stops at the first one starting after it.
+        let ordered = zip(marks, marks.dropFirst()).allSatisfy({ $0.range.lowerBound <= $1.range.lowerBound }) ? marks : marks.sorted { $0.range.lowerBound < $1.range.lowerBound }
+        var reach: [Int] = []
+        reach.reserveCapacity(ordered.count)
+        for mark in ordered { reach.append(max(reach.last ?? 0, mark.range.upperBound)) }
         let ours = { (range: Range<Int>, entity: String) in
-            marks.contains { mark in
-                (mark.range.lowerBound <= range.lowerBound && range.upperBound <= mark.range.upperBound)
-                    || (["PERSON", "LOCATION"].contains(entity) && mark.range.overlaps(range))
-            } || job.isEmitted(TextRanges.substring(output, range))
+            var low = 0, high = ordered.count
+            while low < high {
+                let middle = (low + high) / 2
+                if reach[middle] <= range.lowerBound { low = middle + 1 } else { high = middle }
+            }
+            var index = low
+            while index < ordered.count, ordered[index].range.lowerBound < max(range.upperBound, range.lowerBound + 1) {
+                let mark = ordered[index].range
+                if (mark.lowerBound <= range.lowerBound && range.upperBound <= mark.upperBound)
+                    || (["PERSON", "LOCATION"].contains(entity) && mark.overlaps(range)) { return true }
+                index += 1
+            }
+            return job.isEmitted(TextRanges.substring(output, range))
         }
         var found: [Span] = []
         found.append(contentsOf: matcher.spans(in: output).filter { !ours($0.range, "") })
         let detected = base.map { job.detector.combined($0, text: output, matcher: gazetteer) }
             ?? job.detector.find(output, matcher: gazetteer)
-        found.append(contentsOf: detected.filter { !ours($0.range, $0.entity) })
+        // Places the first pass found are originals, and the matcher above finds
+        // them. A place detected only now was read from the stand-ins' context
+        // ("Later, Larry Alvarado" makes "Later" a city) and names nothing real.
+        found.append(contentsOf: detected.filter { $0.entity != "LOCATION" && !ours($0.range, $0.entity) })
         return found
     }
 }

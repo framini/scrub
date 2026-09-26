@@ -43,7 +43,7 @@ enum Context {
 
 public enum KeyHints {
     private static let groups: [(String, String)] = [
-        ("name fullname contactname customername displayname", "PERSON"),
+        ("name fullname contactname customername displayname ownername managername authorname reportername assigneename requestername sendername recipientname holdername cardholder cardholdername accountholder accountholdername patientname employeename", "PERSON"),
         ("firstname givenname middlename", "FIRST_NAME"),
         ("lastname surname familyname", "LAST_NAME"),
         ("email emailaddress mail", "EMAIL_ADDRESS"),
@@ -53,17 +53,35 @@ public enum KeyHints {
         ("dob dateofbirth birthdate birthday", "DATE_OF_BIRTH"),
         ("ip ipaddress clientip remoteip", "IP_ADDRESS"),
         ("city town", "LOCATION"),
-        ("password passwd pwd passphrase secret clientsecret apisecret apikey accesskey secretkey privatekey token accesstoken refreshtoken idtoken authtoken sessiontoken bearertoken authorization cookie sessionid otp", "SECRET"),
+        ("zip zipcode postcode postalcode", "POSTAL_CODE"),
+        ("password passwd pwd passphrase secret clientsecret apisecret apikey accesskey secretkey privatekey token accesstoken refreshtoken idtoken authtoken sessiontoken bearertoken authorization cookie sessionid otp credential credentials cvv cvc cvv2 securitycode pin", "SECRET"),
         ("username login handle screenname nickname", "USERNAME"),
         ("nationalid nationalidnumber nationalidentifier nationalinsurancenumber nino personalnumber personalidnumber personnummer idnumber identitynumber identitycard idcard idcardnumber governmentid passport passportnumber passportno passportid taxid taxnumber taxpayerid tin sin socialinsurancenumber driverlicense driverslicense driverlicensenumber licensenumber nif nie dni cpf curp pesel bsn aadhaar", "ID_NUMBER")
     ]
     private static let hints = Dictionary(uniqueKeysWithValues: groups.flatMap { names, entity in
         names.split(separator: " ").map { (String($0), entity) }
     })
+    // Real keys qualify the field ("db_password", "webhook_secret"), so the last
+    // word decides. "max_tokens" or "sort_key" name no secret and stay as they are.
+    private static let secretLast: Set<String> = ["password", "passwd", "pwd", "passphrase", "secret", "token", "credential", "credentials", "cvv", "cvc", "otp"]
+    private static let secretPairs: Set<String> = ["apikey", "accesskey", "secretkey", "privatekey", "encryptionkey", "masterkey", "signingkey", "sshkey", "licensekey", "clientkey", "authkey", "passwordhash", "otpcode", "securitycode", "verificationcode", "recoverycode", "recoverycodes", "backupcodes", "sessionid", "sessioncookie", "authcookie"]
     public static func hint(_ key: String?) -> String? {
         guard let key, !key.isEmpty else { return nil }
         let compact = key.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
-        return hints[compact]
+        if let exact = hints[compact] { return exact }
+        let parts = words(key)
+        guard let last = parts.last else { return nil }
+        if secretLast.contains(last) || parts.count >= 2 && secretPairs.contains(parts[parts.count - 2] + last) { return "SECRET" }
+        return nil
+    }
+    // Keys naming a person's role ("assigned_to", "manager") often hold an ID
+    // or an email, so they only mark a value that is written like a name.
+    private static let roles: Set<String> = ["manager", "approver", "reporter", "author", "assignee", "assignedto", "owner", "requester", "requestedby", "reviewer", "reviewedby", "sender", "recipient", "createdby", "updatedby", "modifiedby", "submittedby", "approvedby", "contact", "contactperson", "agent", "rep", "salesrep", "accountmanager", "supervisor", "signedby", "attendee", "guest", "beneficiary", "emergencycontact", "nextofkin", "spouse", "parent", "guardian"]
+    static func isRole(_ key: String?) -> Bool {
+        guard let key else { return false }
+        let parts = words(key)
+        guard let last = parts.last else { return false }
+        return roles.contains(parts.joined()) || roles.contains(last) || parts.count >= 2 && roles.contains(parts[parts.count - 2] + last)
     }
     public static func words(_ key: String?) -> [String] {
         guard let key else { return [] }

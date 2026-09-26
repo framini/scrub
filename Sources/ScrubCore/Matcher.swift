@@ -13,7 +13,9 @@ struct Matcher {
     private let nextCandidate: [Int32]
     private let shortLengths: Set<Int>
 
-    init(_ literals: [String]) {
+    /// Stops adding literals once `isCancelled` says so; the caller must then
+    /// discard the matcher.
+    init(_ literals: [String], isCancelled: () -> Bool = { false }) {
         self.literals = literals
         var allUnits: [UInt16] = []
         var starts: [Int32] = []
@@ -22,6 +24,11 @@ struct Matcher {
         var short: Set<Int> = []
         starts.reserveCapacity(literals.count)
         for (index, literal) in literals.enumerated() {
+            if index.isMultiple(of: 4096) && isCancelled() {
+                starts.append(contentsOf: Array(repeating: Int32(allUnits.count), count: literals.count - index))
+                links.append(contentsOf: Array(repeating: -1, count: literals.count - index))
+                break
+            }
             let folded = Self.fold(literal)
             let width = folded.count
             starts.append(Int32(allUnits.count))
