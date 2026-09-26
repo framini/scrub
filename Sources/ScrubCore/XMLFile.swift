@@ -2,6 +2,9 @@ import Foundation
 
 public enum XMLFile: FileFormat {
     public static func process(_ data: Data, job: Job, progress: (Stage, Int, Int) -> Void) throws -> ScrubResult {
+        try process(data, job: job, progress: progress, forceFullDetection: false)
+    }
+    static func process(_ data: Data, job: Job, progress: (Stage, Int, Int) -> Void, forceFullDetection: Bool) throws -> ScrubResult {
         let source = try decodeXML(data)
         let text = normalizedDeclaration(source)
         guard !unsafeDeclaration(in: text) else { throw ScrubError.unsupported("xml_doctype") }
@@ -59,7 +62,7 @@ public enum XMLFile: FileFormat {
         }
         for child in document.children ?? [] { try walk(child, records: [], keys: []) }
         progress(.finding, 0, leaves.count)
-        let values = try DocumentPipeline.run(leaves, job: job)
+        let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection)
         progress(.finding, leaves.count, leaves.count)
         var markedValues: [(String, String)] = []
         for (index, node) in nodes.enumerated() {
@@ -169,12 +172,13 @@ public enum XMLFile: FileFormat {
         }
         return try TextFile.decode(data)
     }
+    private static let comment = TextPattern(#"<!--[\s\S]*?-->"#)
+    private static let declarationTokens = TextPattern(#"<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<!\s*(DOCTYPE|ENTITY|ATTLIST|ELEMENT|NOTATION)\b"#, options: [.caseInsensitive])
     private static func unsafeDeclaration(in text: String) -> Bool {
-        for comment in TextRanges.matches(#"<!--[\s\S]*?-->"#, in: text) {
+        for comment in TextRanges.matches(comment, in: text) {
             let content = TextRanges.substring(text, comment.range.location..<NSMaxRange(comment.range))
             if content.contains("?>") && content.range(of: #"<!\s*DOCTYPE\b"#, options: .regularExpression) != nil { return true }
         }
-        let tokens = #"<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<!\s*(DOCTYPE|ENTITY|ATTLIST|ELEMENT|NOTATION)\b"#
-        return TextRanges.matches(tokens, in: text, options: [.caseInsensitive]).contains { $0.range(at: 1).location != NSNotFound }
+        return TextRanges.matches(declarationTokens, in: text).contains { $0.range(at: 1).location != NSNotFound }
     }
 }

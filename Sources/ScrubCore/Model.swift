@@ -39,18 +39,58 @@ public struct Span: Sendable, Equatable {
     public init(range: Range<Int>, entity: String, score: Double) { self.range = range; self.entity = entity; self.score = score }
 }
 
+// Compiling a pattern costs far more than matching it, so patterns are
+// compiled once as static constants rather than at each call.
+struct TextPattern: Sendable {
+    let regex: NSRegularExpression?
+    init(_ pattern: String, options: NSRegularExpression.Options = []) { regex = try? NSRegularExpression(pattern: pattern, options: options) }
+}
+
 enum TextRanges {
     static func substring(_ text: String, _ range: Range<Int>) -> String {
         let ns = text as NSString
         guard range.lowerBound >= 0, range.upperBound <= ns.length else { return "" }
+        if range.lowerBound == 0 && range.upperBound == ns.length { return text }
         return ns.substring(with: NSRange(location: range.lowerBound, length: range.count))
     }
     static func replace(_ text: String, _ range: Range<Int>, with value: String) -> String {
         (text as NSString).replacingCharacters(in: NSRange(location: range.lowerBound, length: range.count), with: value)
     }
-    static func matches(_ pattern: String, in text: String, options: NSRegularExpression.Options = []) -> [NSTextCheckingResult] {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return [] }
+    static func matches(_ pattern: TextPattern, in text: String) -> [NSTextCheckingResult] {
+        guard let regex = pattern.regex else { return [] }
         return regex.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length))
+    }
+    // One pass over the text: replacing edits one at a time copies the whole
+    // text per edit. Edits are sorted by start and disjoint (resolved spans).
+    static func apply(_ edits: [(range: Range<Int>, value: String)], to text: String) -> (String, [Range<Int>]) {
+        let ns = text as NSString
+        let output = NSMutableString(capacity: ns.length)
+        var placed: [Range<Int>] = []
+        var cursor = 0
+        for edit in edits where edit.range.lowerBound >= cursor && edit.range.upperBound <= ns.length {
+            output.append(ns.substring(with: NSRange(location: cursor, length: edit.range.lowerBound - cursor)))
+            let start = output.length
+            output.append(edit.value)
+            placed.append(start..<output.length)
+            cursor = edit.range.upperBound
+        }
+        output.append(ns.substring(from: cursor))
+        return (String(output), placed)
+    }
+    // Drops marks that overlap an edit and moves the rest by the length change
+    // of the edits before them.
+    static func shift(_ marks: [Mark], by edits: [(range: Range<Int>, value: String)]) -> [Mark] {
+        var offsets = [0]
+        for edit in edits { offsets.append(offsets[offsets.count - 1] + (edit.value as NSString).length - edit.range.count) }
+        return marks.compactMap { mark in
+            var low = 0, high = edits.count
+            while low < high {
+                let middle = (low + high) / 2
+                if edits[middle].range.upperBound <= mark.range.lowerBound { low = middle + 1 } else { high = middle }
+            }
+            if low < edits.count && edits[low].range.overlaps(mark.range) { return nil }
+            return Mark(range: (mark.range.lowerBound + offsets[low])..<(mark.range.upperBound + offsets[low]), entity: mark.entity)
+        }
     }
     static func ranges(of literal: String, in text: String, options: NSString.CompareOptions = [.caseInsensitive]) -> [Range<Int>] {
         guard !literal.isEmpty else { return [] }

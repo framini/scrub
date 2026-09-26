@@ -3,19 +3,21 @@ import Foundation
 public enum CSVFile: FileFormat {
     static let previewRows = 500
     public static func process(_ data: Data, job: Job, progress: (Stage, Int, Int) -> Void) throws -> ScrubResult {
-        let text = try TextFile.decode(data)
+        try process(data, job: job, progress: progress, forceFullDetection: false)
+    }
+    static func process(_ data: Data, job: Job, progress: (Stage, Int, Int) -> Void, forceFullDetection: Bool) throws -> ScrubResult {
+        var text = try TextFile.decode(data)
         let (delimiter, quoteCharacter) = sniffFormat(text)
         let newline = text.contains("\r\n") ? "\r\n" : text.contains("\r") ? "\r" : "\n"
         var rows = try parse(text, delimiter: delimiter, quoteCharacter: quoteCharacter)
+        text = ""
         guard !rows.isEmpty else { throw ScrubError.unsupported("empty_file") }
         let width = rows.map(\.count).max() ?? 0
         let hasHeader = header(rows, job: job)
         var columns = hasHeader ? rows.removeFirst() : (0..<width).map { "column \($0 + 1)" }
         var leaves: [DocumentLeaf] = []
-        var cells: [(Int, Int)] = []
         for row in rows.indices {
             for column in rows[row].indices {
-                cells.append((row, column))
                 leaves.append(DocumentLeaf(rows[row][column], key: column < columns.count ? columns[column] : nil, records: [row]))
             }
         }
@@ -27,14 +29,19 @@ public enum CSVFile: FileFormat {
             }
         }
         progress(.finding, 0, leaves.count)
-        let values = try DocumentPipeline.run(leaves, job: job)
+        let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection)
+        leaves.removeAll(keepingCapacity: false)
         progress(.finding, leaves.count, leaves.count)
         var marks: [TableMark] = []
         let unresolved = values.flatMap(\.unresolved)
-        for (index, cell) in cells.enumerated() {
-            rows[cell.0][cell.1] = values[index].text
-            if cell.0 < previewRows {
-                marks += values[index].marks.map { TableMark(row: cell.0, column: cell.1, range: $0.range, entity: $0.entity) }
+        var valueIndex = 0
+        for row in rows.indices {
+            for column in rows[row].indices {
+                rows[row][column] = values[valueIndex].text
+                if row < previewRows {
+                    marks += values[valueIndex].marks.map { TableMark(row: row, column: column, range: $0.range, entity: $0.entity) }
+                }
+                valueIndex += 1
             }
         }
         for (column, index) in headerIDs.enumerated() { columns[column] = values[index].text }
@@ -60,10 +67,19 @@ public enum CSVFile: FileFormat {
                 }
             }
         }
-        let all = (hasHeader ? [columns] : []) + rows
-        let output = all.map { $0.map { quote($0, delimiter: delimiter, quoteCharacter: quoteCharacter) }.joined(separator: String(delimiter)) }.joined(separator: newline) + newline
+        var output = Data()
+        output.reserveCapacity(data.count + data.count / 4)
+        func append(_ row: [String]) {
+            for column in row.indices {
+                if column > 0 { output.append(contentsOf: String(delimiter).utf8) }
+                output.append(contentsOf: quote(row[column], delimiter: delimiter, quoteCharacter: quoteCharacter).utf8)
+            }
+            output.append(contentsOf: newline.utf8)
+        }
+        if hasHeader { append(columns) }
+        for row in rows { append(row) }
         progress(.checking, 1, 1)
-        return ScrubResult(format: "csv", output: Data(output.utf8), preview: .table(columns: previewColumns, rows: Array(rows.prefix(previewRows)), rowCount: rows.count, marks: marks), counts: job.counts, unresolved: unresolved, neutralized: neutralized)
+        return ScrubResult(format: "csv", output: output, preview: .table(columns: previewColumns, rows: Array(rows.prefix(previewRows)), rowCount: rows.count, marks: marks), counts: job.counts, unresolved: unresolved, neutralized: neutralized)
     }
     static func sniffDelimiter(_ text: String) -> Character { sniffFormat(text).0 }
     static func sniffQuote(_ text: String, delimiter: Character) -> Character { sniffFormat(text, delimiters: [delimiter]).1 }
@@ -124,14 +140,14 @@ public enum CSVFile: FileFormat {
         let nextNumeric = rows.dropFirst().prefix(5).flatMap { $0 }.filter { Double($0) != nil }.count
         return nextNumeric > firstNumeric
     }
+    private static let signedNumber = TextPattern(#"^[+\-＋－]?[\d\s().,\-]*$"#)
     static func neutralize(_ cell: String) -> String? {
         if cell.hasPrefix("\t") || cell.hasPrefix("\r") || cell.hasPrefix("\n") { return "'" + cell }
         let trimmed = cell.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let first = trimmed.first else { return nil }
         if "=@＝＠".contains(first) { return "'" + cell }
         if "+-＋－".contains(first) {
-            let numeric = #"^[+\-＋－]?[\d\s().,\-]*$"#
-            if TextRanges.matches(numeric, in: trimmed).isEmpty { return "'" + cell }
+            if TextRanges.matches(signedNumber, in: trimmed).isEmpty { return "'" + cell }
         }
         return nil
     }

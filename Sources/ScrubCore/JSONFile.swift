@@ -1,7 +1,11 @@
 import Foundation
 
 public enum JSONFile: FileFormat {
+    private static let longDigits = TextPattern(#"[0-9]{7,}"#)
     public static func process(_ data: Data, job: Job, progress: (Stage, Int, Int) -> Void) throws -> ScrubResult {
+        try process(data, job: job, progress: progress, forceFullDetection: false)
+    }
+    static func process(_ data: Data, job: Job, progress: (Stage, Int, Int) -> Void, forceFullDetection: Bool) throws -> ScrubResult {
         let text = try TextFile.decode(data)
         let root = try OrderedJSON.parse(text)
         var leaves: [DocumentLeaf] = []
@@ -36,7 +40,7 @@ public enum JSONFile: FileFormat {
         }
         collect(root, key: nil, path: "", records: [], keys: [])
         progress(.finding, 0, leaves.count)
-        let values = try DocumentPipeline.run(leaves, job: job)
+        let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection)
         progress(.finding, leaves.count, leaves.count)
         var valueMarks: [String: [Mark]] = [:]
         var keyMarks: [String: [Mark]] = [:]
@@ -80,7 +84,7 @@ public enum JSONFile: FileFormat {
     static func replaceDigits(_ text: String, job: Job) -> (String, [Mark]) {
         var output = text
         var marks: [Mark] = []
-        for match in TextRanges.matches(#"[0-9]{7,}"#, in: text).reversed() {
+        for match in TextRanges.matches(longDigits, in: text).reversed() {
             let range = match.range.location..<NSMaxRange(match.range)
             let fake = job.digits(TextRanges.substring(text, range))
             output = TextRanges.replace(output, range, with: fake)

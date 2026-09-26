@@ -2,17 +2,20 @@ import Foundation
 
 public enum Scrubber {
     public static func scrub(_ data: Data, name: String, progress: (Stage, Int, Int) -> Void = { _, _, _ in }) throws -> ScrubResult {
+        try scrub(data, name: name, forceFullDetection: false, seed: nil, progress: progress)
+    }
+    static func scrub(_ data: Data, name: String, forceFullDetection: Bool, seed: UInt64? = nil, progress: (Stage, Int, Int) -> Void = { _, _, _ in }) throws -> ScrubResult {
         try checkCancellation()
         progress(.starting, 0, 1)
         let format = try classify(data, name: name)
         progress(.starting, 1, 1)
         try checkCancellation()
-        let job = Job()
+        let job = seed.map { Job(seed: $0) } ?? Job()
         switch format {
-        case "json": return try JSONFile.process(data, job: job, progress: progress)
-        case "xml": return try XMLFile.process(data, job: job, progress: progress)
-        case "csv": return try CSVFile.process(data, job: job, progress: progress)
-        default: return try TextFile.process(data, job: job, progress: progress)
+        case "json": return try JSONFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
+        case "xml": return try XMLFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
+        case "csv": return try CSVFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
+        default: return try TextFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
         }
     }
     public static func classify(_ data: Data, name: String) throws -> String {

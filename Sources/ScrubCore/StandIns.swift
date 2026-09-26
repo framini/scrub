@@ -1,9 +1,14 @@
 import Foundation
 
 final class StandIns {
-    let people = People()
+    private static let secretPrefix = TextPattern(#"^(?:(?:sk|pk|rk)_(?:live|test)_|gh[pousr]_|github_pat_|AKIA|ASIA|xox[abposr]-|eyJ|-----BEGIN [A-Z ]*PRIVATE KEY-----)"#)
+    let people: People
     private var assigned: [String: String] = [:]
-    private var rng = SystemRandomNumberGenerator()
+    private var rng: any RandomNumberGenerator
+    init(rng: any RandomNumberGenerator = SystemRandomNumberGenerator()) {
+        self.people = People(rng: rng)
+        self.rng = rng
+    }
     private let alphabet = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
     private func pick<T>(_ array: [T]) -> T? { array.randomElement(using: &rng) }
     private func digit(_ first: Bool = false) -> String { String(Int.random(in: first ? 1...9 : 0...9, using: &rng)) }
@@ -11,7 +16,9 @@ final class StandIns {
     func replace(_ entity: String, _ original: String, persona: Persona? = nil) -> String {
         let actual = entity == "LOCATION" && people.knows(original) ? "PERSON" : entity
         let key = actual + "\u{0}" + original
-        if let found = assigned[key] { return found }
+        let stablePerson = ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(actual)
+        let stableEmail = actual == "EMAIL_ADDRESS" && (persona != nil || people.find(email: original) != nil)
+        if !stablePerson && !stableEmail, let found = assigned[key] { return found }
         var fake = "[\(actual)]"
         for _ in 0..<3 {
             let candidate = make(actual, original, persona)
@@ -19,7 +26,7 @@ final class StandIns {
                 fake = candidate; break
             }
         }
-        assigned[key] = fake
+        if !stablePerson && !stableEmail { assigned[key] = fake }
         return fake
     }
     func number(_ original: String) -> String {
@@ -63,7 +70,7 @@ final class StandIns {
         case "CRYPTO": return "bc1q" + (0..<38).map { _ in String(pick(Array("023456789acdefghjklmnpqrstuvwxyz")) ?? "a") }.joined()
         case "USERNAME": return (pick(Names.first)?.lowercased() ?? "alex") + digits(3)
         case "SECRET":
-            let prefix = TextRanges.matches(#"^(?:(?:sk|pk|rk)_(?:live|test)_|gh[pousr]_|github_pat_|AKIA|ASIA|xox[abposr]-|eyJ|-----BEGIN [A-Z ]*PRIVATE KEY-----)"#, in: original).first.map { TextRanges.substring(original, $0.range.location..<NSMaxRange($0.range)) } ?? ""
+            let prefix = TextRanges.matches(Self.secretPrefix, in: original).first.map { TextRanges.substring(original, $0.range.location..<NSMaxRange($0.range)) } ?? ""
             let kept = prefix.utf16.count < original.utf16.count ? prefix : ""
             return kept + (0..<24).map { _ in String(pick(alphabet) ?? "a") }.joined()
         case "ID_NUMBER":

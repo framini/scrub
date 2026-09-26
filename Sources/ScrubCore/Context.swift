@@ -3,15 +3,38 @@ import Foundation
 enum Context {
     static let birth: Set<String> = ["born", "bear", "dob", "birth", "birthday", "birthdate"]
     static let name: Set<String> = ["called", "named", "mr", "mrs", "ms", "dr", "contact", "owner", "customer", "patient", "employee", "its", "it's", "im", "i'm", "with", "w", "spoke", "ask", "tell", "cc"]
+    private static let word = TextPattern("[A-Za-z]+(?:['][A-Za-z]+)?")
     static func before(_ range: Range<Int>, in text: String, limit: Int) -> Set<String> {
-        let prefix = TextRanges.substring(text, 0..<range.lowerBound)
-        let words = TextRanges.matches("[A-Za-z]+(?:['][A-Za-z]+)?", in: prefix).suffix(limit)
-        return Set(words.map { TextRanges.substring(prefix, $0.range.location..<NSMaxRange($0.range)).lowercased() })
+        Set(words(before: range.lowerBound, in: text, limit: limit).map { $0.lowercased() })
     }
     static func after(_ range: Range<Int>, in text: String, limit: Int) -> Set<String> {
-        let suffix = TextRanges.substring(text, range.upperBound..<(text as NSString).length)
-        let words = TextRanges.matches("[A-Za-z]+(?:['][A-Za-z]+)?", in: suffix).prefix(limit)
-        return Set(words.map { TextRanges.substring(suffix, $0.range.location..<NSMaxRange($0.range)).lowercased() })
+        Set(words(after: range.upperBound, in: text, limit: limit).map { $0.lowercased() })
+    }
+    // Reads a window that doubles until it holds more words than needed, so a
+    // word cut by the window edge is never among those returned; scanning the
+    // whole prefix or suffix instead makes long texts quadratic.
+    static func words(before end: Int, in text: String, limit: Int, pattern: TextPattern = word) -> [String] {
+        var width = 64
+        while true {
+            let start = max(0, end - width)
+            let found = wordsIn(start..<end, of: text, pattern: pattern)
+            if start == 0 || found.count > limit { return Array(found.suffix(limit)) }
+            width *= 2
+        }
+    }
+    static func words(after start: Int, in text: String, limit: Int, pattern: TextPattern = word) -> [String] {
+        let length = (text as NSString).length
+        var width = 64
+        while true {
+            let end = min(length, start + width)
+            let found = wordsIn(start..<end, of: text, pattern: pattern)
+            if end == length || found.count > limit { return Array(found.prefix(limit)) }
+            width *= 2
+        }
+    }
+    private static func wordsIn(_ range: Range<Int>, of text: String, pattern: TextPattern) -> [String] {
+        let window = TextRanges.substring(text, range)
+        return TextRanges.matches(pattern, in: window).map { TextRanges.substring(window, $0.range.location..<NSMaxRange($0.range)) }
     }
     static func enhanced(_ base: Double, words: Set<String>, range: Range<Int>, text: String) -> Double {
         before(range, in: text, limit: 5).isDisjoint(with: words) ? base : min(1, max(0.4, base + 0.35))

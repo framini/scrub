@@ -26,11 +26,11 @@ enum Patterns {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return nil }
         return (entity, regex, base, context)
     }
-    static func find(_ text: String, contextWords: Set<String> = []) -> [Span] {
+    static func find(_ text: String, contextWords: Set<String> = [], isCancelled: () -> Bool = { Task.isCancelled }) -> [Span] {
         var spans: [Span] = []
         for (entity, regex, base, context) in compiled {
             for (index, match) in regex.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length)).enumerated() {
-                if index.isMultiple(of: 64) && Task.isCancelled { return spans }
+                if index.isMultiple(of: 64) && isCancelled() { return spans }
                 var range = match.range.location..<NSMaxRange(match.range)
                 if entity == "IBAN_CODE" {
                     guard let trimmed = longestIBAN(in: text, range: range) else { continue }

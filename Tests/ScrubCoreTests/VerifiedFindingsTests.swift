@@ -98,3 +98,11 @@ private extension JSONValue {
     #expect(full < .seconds(20))
     #expect(full < half * 3)
 }
+
+@Test func standInsNeverReuseRealNamesFromTheDocument() throws {
+    let text = "Dear Mr. Johnson,\nThanks for meeting Emily Chen and me last Thursday. Emily will send the draft to emily.chen@contoso.com.\nBest, Kevin"
+    for seed in UInt64(1)...1000 {
+        let output = String(decoding: try Scrubber.scrub(Data(text.utf8), name: "note.txt", forceFullDetection: false, seed: seed).output, as: UTF8.self)
+        for real in ["Johnson", "Emily", "Chen", "Kevin"] { #expect(!output.localizedCaseInsensitiveContains(real), "seed \(seed): \(output)") }
+    }
+}

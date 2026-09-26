@@ -15,27 +15,23 @@ enum Correction {
     static func run(_ initial: String, marks: [Mark], job: Job) throws -> (String, [Mark], [Mark]) {
         try run(initial, marks: marks, job: job, matcher: OriginalMatcher(job), gazetteer: GazetteerMatcher(job.gazetteer))
     }
-    static func run(_ initial: String, marks initialMarks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, passes: Int = 3) throws -> (String, [Mark], [Mark]) {
+    static func run(_ initial: String, marks initialMarks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, passes: Int = 3, base: [Span]? = nil) throws -> (String, [Mark], [Mark]) {
         var output = initial
         var marks = initialMarks
-        for _ in 0..<passes {
+        for pass in 0..<passes {
             try Scrubber.checkCancellation()
-            let spans = Detector.resolve(leftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer))
-            if spans.isEmpty { break }
-            for (index, span) in spans.reversed().enumerated() {
-                if index.isMultiple(of: 64) { try Scrubber.checkCancellation() }
-                let original = TextRanges.substring(output, span.range)
-                let fake = job.replacement(for: span.entity, original: original)
-                output = TextRanges.replace(output, span.range, with: fake)
-                let delta = (fake as NSString).length - span.range.count
-                marks = marks.compactMap { mark in
-                    if mark.range.overlaps(span.range) { return nil }
-                    if mark.range.lowerBound >= span.range.upperBound { return Mark(range: (mark.range.lowerBound + delta)..<(mark.range.upperBound + delta), entity: mark.entity) }
-                    return mark
-                }
-                marks.append(Mark(range: span.range.lowerBound..<(span.range.lowerBound + (fake as NSString).length), entity: span.entity))
+            let spans = Detector.resolve(leftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer, base: pass == 0 ? base : nil))
+            if spans.isEmpty { return (output, marks, []) }
+            var fakes = Array(repeating: "", count: spans.count)
+            for (count, index) in spans.indices.reversed().enumerated() {
+                if count.isMultiple(of: 64) { try Scrubber.checkCancellation() }
+                fakes[index] = job.replacement(for: spans[index].entity, original: TextRanges.substring(output, spans[index].range))
             }
+            let edits = zip(spans, fakes).map { (range: $0.range, value: $1) }
+            let (edited, placed) = TextRanges.apply(edits, to: output)
+            marks = TextRanges.shift(marks, by: edits) + zip(placed, spans).map { Mark(range: $0, entity: $1.entity) }
             marks.sort { $0.range.lowerBound < $1.range.lowerBound }
+            output = edited
         }
         var unresolved = leftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer).map { Mark(range: $0.range, entity: $0.entity) }
         var seen: Set<String> = []
@@ -43,7 +39,7 @@ enum Correction {
         return (output, marks, unresolved)
     }
 
-    private static func leftovers(in output: String, marks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher) -> [Span] {
+    private static func leftovers(in output: String, marks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, base: [Span]? = nil) -> [Span] {
         if marks.contains(where: { $0.range == 0..<(output as NSString).length }) { return [] }
         // The name model joins words next to a stand-in into one name ("Scott
         // Hunt Called"); that adds no personal data. A pattern match running
@@ -56,10 +52,10 @@ enum Correction {
             } || job.isEmitted(TextRanges.substring(output, range))
         }
         var found: [Span] = []
-        for match in matcher.matcher.matches(in: output) where !ours(match.range, "") {
-            found.append(Span(range: match.range, entity: matcher.entities[match.index], score: 1.1))
-        }
-        found.append(contentsOf: job.detector.find(output, matcher: gazetteer).filter { !ours($0.range, $0.entity) })
+        found.append(contentsOf: matcher.spans(in: output).filter { !ours($0.range, "") })
+        let detected = base.map { job.detector.combined($0, text: output, matcher: gazetteer) }
+            ?? job.detector.find(output, matcher: gazetteer)
+        found.append(contentsOf: detected.filter { !ours($0.range, $0.entity) })
         return found
     }
 }
@@ -67,20 +63,68 @@ enum Correction {
 struct OriginalMatcher {
     let matcher: Matcher
     let entities: [String]
+    private var supplements: [(Matcher, [String])] = []
 
     init(_ job: Job) {
-        var originals = Array(job.sensitiveOriginals.values)
-        originals += job.replacements.map { SensitiveOriginal(original: $0.original, entity: $0.entity) }
-        var literals: [String] = []
-        var labels: [String] = []
-        var seen: Set<[UInt16]> = []
-        for candidate in originals where !candidate.original.isEmpty {
-            if seen.insert(Matcher.fold(candidate.original)).inserted {
-                literals.append(candidate.original)
-                labels.append(candidate.entity)
-            }
-        }
+        let (literals, labels) = Self.entries(job)
         matcher = Matcher(literals)
         entities = labels
+    }
+    mutating func add(_ replacements: ArraySlice<Replacement>) {
+        let originals = replacements.filter { !$0.original.isEmpty }
+        guard !originals.isEmpty else { return }
+        let literals = originals.map(\.original)
+        let labels = originals.map(\.entity)
+        supplements.append((Matcher(literals), labels))
+    }
+    private static func entries(_ job: Job) -> ([String], [String]) {
+        var literals: [String] = []
+        var labels: [String] = []
+        var seen: [FoldHash: Int] = [:]
+        var collisions: [FoldHash: [Int]] = [:]
+        func add(_ candidate: SensitiveOriginal) {
+            guard !candidate.original.isEmpty else { return }
+            let folded = Matcher.fold(candidate.original)
+            let key = FoldHash(folded)
+            if let first = seen[key] {
+                if Matcher.fold(literals[first]) == folded || collisions[key]?.contains(where: { Matcher.fold(literals[$0]) == folded }) == true { return }
+                collisions[key, default: []].append(literals.count)
+            } else { seen[key] = literals.count }
+            literals.append(candidate.original)
+            labels.append(candidate.entity)
+        }
+        for candidate in job.sensitiveOriginals.reversed() { add(candidate) }
+        for replacement in job.replacements {
+            add(SensitiveOriginal(original: replacement.original, entity: replacement.entity))
+        }
+        return (literals, labels)
+    }
+    func spans(in text: String) -> [Span] {
+        var result = matcher.matcherSpans(in: text, entities: entities)
+        for (supplement, labels) in supplements {
+            result.append(contentsOf: supplement.matcherSpans(in: text, entities: labels))
+        }
+        return result
+    }
+}
+
+private extension Matcher {
+    func matcherSpans(in text: String, entities: [String]) -> [Span] {
+        matches(in: text).map { Span(range: $0.range, entity: entities[$0.index], score: 1.1) }
+    }
+}
+
+private struct FoldHash: Hashable {
+    let first: UInt64
+    let second: UInt64
+    init(_ units: [UInt16]) {
+        var a: UInt64 = 0xcbf29ce484222325
+        var b: UInt64 = 0x84222325cbf29ce4
+        for unit in units {
+            a = (a ^ UInt64(unit)) &* 0x100000001b3
+            b = (b ^ UInt64(unit)) &* 0x9e3779b185ebca87
+        }
+        first = a
+        second = b
     }
 }

@@ -10,6 +10,7 @@ enum JSONValue {
 }
 
 enum OrderedJSON {
+    private static let numberGrammar = TextPattern(#"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$"#)
     static func parse(_ text: String) throws -> JSONValue {
         var reader = Reader(Array(text.utf8))
         let value = try reader.value()
@@ -158,8 +159,7 @@ enum OrderedJSON {
             while index < bytes.count && (bytes[index] == 45 || bytes[index] == 43 || bytes[index] == 46 || (48...57).contains(bytes[index]) || bytes[index] == 69 || bytes[index] == 101) { index += 1 }
             guard index > start else { throw ScrubError.unsupported("invalid_json") }
             let raw = String(decoding: bytes[start..<index], as: UTF8.self)
-            let pattern = #"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$"#
-            guard !TextRanges.matches(pattern, in: raw).isEmpty else { throw ScrubError.unsupported("invalid_json") }
+            guard !TextRanges.matches(OrderedJSON.numberGrammar, in: raw).isEmpty else { throw ScrubError.unsupported("invalid_json") }
             return .number(raw)
         }
     }
