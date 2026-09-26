@@ -8,6 +8,11 @@
 
 Fully offline. Nothing you drop into Scrub leaves your Mac.
 
+<a href="https://github.com/framini/scrub/releases/latest/download/Scrub.dmg"><strong>Download for macOS</strong></a>
+· <a href="#install">Install</a>
+· <a href="#how-it-works">How it works</a>
+· <a href="#private-by-construction">Privacy</a>
+
 ![macOS 15+](https://img.shields.io/badge/macOS-15%2B-1f4d3a)
 ![Swift 6.2](https://img.shields.io/badge/Swift-6.2-1f4d3a)
 ![App Sandbox, no network](https://img.shields.io/badge/App%20Sandbox-no%20network-1f4d3a)
@@ -18,6 +23,21 @@ Fully offline. Nothing you drop into Scrub leaves your Mac.
 <img src="docs/images/drop.png" width="860" alt="Scrub's drop screen: drop a file or paste text">
 
 </div>
+
+## Install
+
+1. [Download the latest signed DMG](https://github.com/framini/scrub/releases/latest/download/Scrub.dmg) and open it.
+2. Drag `Scrub.app` into Applications, then launch it.
+
+That's it: no account, no setup, no permissions to grant. Scrub needs an Apple silicon Mac running macOS 15 or newer.
+
+The app is signed with a Developer ID and notarized by Apple, so it opens without Gatekeeper warnings. Every version is on the [releases page](https://github.com/framini/scrub/releases). To check a download against its release notes:
+
+```sh
+shasum -a 256 ~/Downloads/Scrub.dmg
+```
+
+Scrub never checks for updates, since it has no network access. Download a newer DMG and drag it over the old app to update.
 
 ## Why
 
@@ -116,7 +136,7 @@ Results say *Review before sharing*, never *clean*: detection is statistical, an
 | <kbd>⌘</kbd> <kbd>S</kbd> | Save the result |
 | <kbd>esc</kbd> | Cancel, or start over |
 
-## Build and run
+## Build from source
 
 Needs macOS 15 or later and Swift 6.2 or later (Xcode or the command line tools).
 
@@ -125,7 +145,11 @@ scripts/bundle.sh          # builds build/Scrub.app with the hardened runtime an
 open build/Scrub.app
 ```
 
-It signs ad hoc by default; set `SCRUB_SIGN_IDENTITY` to a Developer ID certificate name to sign for distribution.
+It signs ad hoc by default. To build a release DMG like the one above, signed, notarized and stapled:
+
+```sh
+SCRUB_SIGN_IDENTITY="Developer ID Application: …" scripts/release.sh   # uses the notarytool keychain profile scrub-notary, or SCRUB_NOTARY_PROFILE
+```
 
 ## Test
 
