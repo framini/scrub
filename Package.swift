@@ -11,6 +11,6 @@ let package = Package(
         // Test-only: signed with the app's exact entitlements to prove the OS
         // refuses every network path. Never shipped.
         .executableTarget(name: "NetworkProbe"),
-        .testTarget(name: "ScrubCoreTests", dependencies: ["ScrubCore"]),
+        .testTarget(name: "ScrubCoreTests", dependencies: ["ScrubCore"], resources: [.process("Fixtures")]),
     ]
 )

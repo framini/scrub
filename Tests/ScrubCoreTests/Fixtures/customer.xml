@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:crm="urn:example:crm">
+  <soap:Body>
+    <crm:GetCustomerResponse requestId="req_7f3a91c2">
+      <!-- Record owner: Francisco Ramini, updated by support -->
+      <crm:Customer id="cus_48213" status="active">
+        <crm:FirstName>Francisco</crm:FirstName>
+        <crm:LastName>Ramini</crm:LastName>
+        <crm:Email>francisco.ramini@humandecode.com</crm:Email>
+        <crm:Phone type="mobile">+1 415 867 5309</crm:Phone>
+        <crm:Address>1450 Mission Street, Apt 4B</crm:Address>
+        <crm:SSN>521-44-7310</crm:SSN>
+      </crm:Customer>
+      <crm:Billing currency="USD" card="4111 1111 1111 1111">
+        <crm:LastInvoiceTotal>1840.50</crm:LastInvoiceTotal>
+      </crm:Billing>
+      <crm:Note><![CDATA[Francisco Ramini asked to be reached at framini@gmail.com. Maria Gonzalez approves the invoice.]]></crm:Note>
+    </crm:GetCustomerResponse>
+  </soap:Body>
+</soap:Envelope>

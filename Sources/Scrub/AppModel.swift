@@ -153,9 +153,6 @@ final class AppModel {
 
     private static func code(for error: Error) -> String {
         switch error as? ScrubError {
-        case .notUTF8: "not_utf8"
-        case .tooLarge: "too_large"
-        case .empty: "empty_file"
         case .cancelled: "cancelled"
         case .unsupported(let code): code
         case nil: "unexpected"

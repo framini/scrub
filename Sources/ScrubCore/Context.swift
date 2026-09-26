@@ -2,7 +2,7 @@ import Foundation
 
 enum Context {
     static let birth: Set<String> = ["born", "bear", "dob", "birth", "birthday", "birthdate"]
-    static let name: Set<String> = ["called", "named", "mr", "mrs", "ms", "dr", "contact", "owner", "customer", "patient", "employee"]
+    static let name: Set<String> = ["called", "named", "mr", "mrs", "ms", "dr", "contact", "owner", "customer", "patient", "employee", "its", "it's", "im", "i'm", "with", "w", "spoke", "ask", "tell", "cc"]
     static func before(_ range: Range<Int>, in text: String, limit: Int) -> Set<String> {
         let prefix = TextRanges.substring(text, 0..<range.lowerBound)
         let words = TextRanges.matches("[A-Za-z]+", in: prefix).suffix(limit)

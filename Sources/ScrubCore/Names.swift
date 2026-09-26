@@ -13,4 +13,5 @@ public enum Names {
     """.split(separator: ",").map(String.init)
     public static let emailDomains = ["example.com", "example.net", "example.org"]
     public static let firstFolded = Set(first.map { $0.lowercased() })
+    public static let lastFolded = Set(last.map { $0.lowercased() })
 }

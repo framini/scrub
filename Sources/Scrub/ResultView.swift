@@ -71,6 +71,8 @@ struct ResultView: View {
                         .overlay(alignment: .top) { Divider().overlay(Color.line) }
                 }
             }
+        case .table(let columns, let rows, let rowCount, let marks):
+            TablePreview(columns: columns, rows: rows, rowCount: rowCount, marks: marks)
         }
     }
 
@@ -84,6 +86,10 @@ struct ResultView: View {
             }
             if !finished.result.unresolved.isEmpty {
                 Text("\(finished.result.unresolved.count) left to review").fontWeight(.semibold).foregroundStyle(Color.ember)
+            }
+            if finished.result.neutralized > 0 {
+                Text("\(finished.result.neutralized) \(finished.result.neutralized == 1 ? "formula" : "formulas") made inert")
+                    .foregroundStyle(Color.slate)
             }
             Spacer()
             Text("Press esc to clear").foregroundStyle(Color.slate)
@@ -103,5 +109,75 @@ struct ResultView: View {
             styled.addAttributes([.backgroundColor: NSColor(Color.lichen), .foregroundColor: NSColor(Color.evergreen)], range: range)
         }
         return (try? AttributedString(styled, including: \.appKit)) ?? AttributedString(text)
+    }
+}
+
+private struct TablePreview: View {
+    let columns: [String]
+    let rows: [[String]]
+    let rowCount: Int
+    private let widths: [CGFloat]
+    private let cellMarks: [Int: [Int: [Mark]]]
+
+    init(columns: [String], rows: [[String]], rowCount: Int, marks: [TableMark]) {
+        self.columns = columns
+        self.rows = rows
+        self.rowCount = rowCount
+        widths = columns.indices.map { column in
+            let longest = max(columns[column].count, rows.prefix(100).compactMap { column < $0.count ? $0[column].count : nil }.max() ?? 0)
+            return min(240, max(100, CGFloat(longest * 8 + 12)))
+        }
+        var grouped: [Int: [Int: [Mark]]] = [:]
+        for mark in marks { grouped[mark.row, default: [:]][mark.column, default: []].append(Mark(range: mark.range, entity: mark.entity)) }
+        cellMarks = grouped
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView(.horizontal) {
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        ForEach(columns.indices, id: \.self) { column in
+                            Text(columns[column])
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Color.slate)
+                                .frame(width: widths[column], alignment: .leading)
+                                .padding(.trailing, 24)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .frame(height: 36)
+                    .background(Color.snow)
+                    .overlay(alignment: .bottom) { Divider().overlay(Color.line) }
+                    ScrollView(.vertical) {
+                        LazyVStack(spacing: 0) {
+                            ForEach(rows.indices, id: \.self) { row in
+                                HStack(spacing: 0) {
+                                    ForEach(columns.indices, id: \.self) { column in
+                                        Text(ResultView.highlighted(column < rows[row].count ? rows[row][column] : "", cellMarks[row]?[column] ?? []))
+                                            .font(.system(size: 13))
+                                            .lineLimit(1)
+                                            .frame(width: widths[column], alignment: .leading)
+                                            .padding(.trailing, 24)
+                                    }
+                                }
+                                .padding(.horizontal, 20)
+                                .frame(height: 44)
+                                .overlay(alignment: .bottom) { Divider().overlay(Color.fog) }
+                            }
+                        }
+                    }
+                }
+            }
+            if rowCount > rows.count {
+                Text("Showing \(rows.count) of \(rowCount) rows. The saved or copied file has all of them.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.slate)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+                    .overlay(alignment: .top) { Divider().overlay(Color.line) }
+            }
+        }
     }
 }

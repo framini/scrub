@@ -42,6 +42,8 @@ enum Copy {
         case "too_large": Failure(title: "This file is too large", body: "Scrub handles files up to 50 MB. Split it into smaller files and clean each one.")
         case "not_utf8": Failure(title: "This file isn't UTF-8 text", body: "Open it in a text editor, save it with UTF-8 encoding, then try again.")
         case "binary_file": Failure(title: "This isn't a text file", body: "Scrub can clean \(formats) files.")
+        case "images_not_supported_yet": Failure(title: "Scrub can't clean images yet", body: "Choose a JSON, XML, CSV, or text file instead.")
+        case "internal": Failure(title: "Scrub couldn't finish checking this file", body: "Nothing was saved. Try again, and if it keeps happening, let us know which kind of file it was.")
         case "unsupported_type": Failure(title: "Scrub can't clean this type of file yet", body: "Supported files: \(formats).")
         case "empty_clipboard": Failure(title: "The clipboard is empty", body: "Copy some text, like a JSON response, then paste it here.")
         case "clipboard_not_text": Failure(title: "The clipboard doesn't hold text", body: "Copy the text itself rather than a file or image, then paste it here.")

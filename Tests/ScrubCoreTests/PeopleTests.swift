@@ -6,7 +6,8 @@ import Testing
     let result = try Scrubber.scrub(Data("Robert Mitchell asked for a refund. Please reply to robert.mitchell@acme-corp.com today.\n".utf8), name: "notes.txt")
     let text = String(decoding: result.output, as: UTF8.self)
     let name = String(text.components(separatedBy: " asked").first ?? "")
-    let parts = name.lowercased().split(separator: " ")
+    // Emails keep letters only ("O'Brien" becomes "obrien").
+    let parts = name.lowercased().split(separator: " ").map { $0.filter(\.isLetter) }
     #expect(parts.count == 2)
     if parts.count == 2 { #expect(text.contains("\(parts[0]).\(parts[1])@example.")) }
     #expect(!text.contains("Robert Mitchell"))

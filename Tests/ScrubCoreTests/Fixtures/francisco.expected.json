@@ -1,0 +1,31 @@
+{
+  "request_id": "req_7f3a91c2",
+  "status": "active",
+  "plan": "enterprise",
+  "seats": 12,
+  "created_at": "2026-03-14T09:22:05Z",
+  "customer": {
+    "id": "cus_48213",
+    "firstName": "Francisco",
+    "lastName": "Ramini",
+    "email": "francisco.ramini@humandecode.com",
+    "phone": "+1 415 867 5309",
+    "address": "1450 Mission Street, Apt 4B",
+    "dob": "1988-06-21",
+    "ssn": "521-44-7310"
+  },
+  "billing": {
+    "card": "4111 1111 1111 1111",
+    "currency": "USD",
+    "last_invoice_total": 1840.5
+  },
+  "session": {
+    "ip": "203.0.113.42",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6)"
+  },
+  "support_notes": "Francisco Ramini called about the renewal. Please email him at framini@gmail.com or call 212-555-0147 before Friday. He mentioned Maria Gonzalez from finance will approve the invoice.",
+  "tags": [
+    "priority",
+    "renewal-q4"
+  ]
+}

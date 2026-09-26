@@ -1,0 +1,25 @@
+[
+  {
+    "id": "cus_1",
+    "name": "Robert Mitchell",
+    "email": "robert.mitchell@acme-corp.com",
+    "phone": "+1 212 867 5309",
+    "plan": "enterprise",
+    "notes": "Call back Sarah Connor re: renewal, her SSN is 078-05-1120",
+    "ssn": "078-05-1120",
+    "age": 42
+  },
+  {
+    "id": "cus_2",
+    "firstName": "Ana",
+    "lastName": "Pereira",
+    "contact": {
+      "email": "ana@pereira.pt",
+      "address": "12 Rua Augusta, Lisboa"
+    },
+    "card": "4111 1111 1111 1111",
+    "tags": [
+      "vip"
+    ]
+  }
+]

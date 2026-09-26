@@ -12,7 +12,10 @@ public final class Job {
         standIns.people.associate(first: first, last: last, email: email)
     }
     public func observe(_ fields: [(text: String, key: String?)]) -> [[Span]] {
-        var found = fields.map { detector.find($0.text, key: $0.key) }
+        observe(fields, contextWords: [])
+    }
+    func observe(_ fields: [(text: String, key: String?)], contextWords: Set<String>) -> [[Span]] {
+        var found = fields.map { detector.find($0.text, key: $0.key, contextWords: contextWords) }
         let identified = zip(fields, found).flatMap { field, spans in
             spans.map { ($0.entity, TextRanges.substring(field.text, $0.range)) }
         }
@@ -27,12 +30,15 @@ public final class Job {
                 if span.entity == "PERSON" { _ = standIns.people.registerFull(value) }
             }
         }
-        found = fields.map { detector.find($0.text, key: $0.key, gazetteer: gazetteer) }
+        found = fields.map { detector.find($0.text, key: $0.key, gazetteer: gazetteer, contextWords: contextWords) }
         return found
     }
     public func replacement(for entity: String, original: String) -> String {
+        replacement(for: entity, original: original, persona: nil)
+    }
+    func replacement(for entity: String, original: String, persona: Persona?) -> String {
         let actual = entity == "LOCATION" && standIns.people.knows(original) ? "PERSON" : entity
-        let fake = standIns.replace(actual, original)
+        let fake = standIns.replace(actual, original, persona: persona)
         replacements.append(Replacement(original: original, fake: fake, entity: actual))
         emitted.insert(fake.lowercased())
         counts[actual, default: 0] += 1
@@ -45,18 +51,50 @@ public final class Job {
         counts["ID_NUMBER", default: 0] += 1
         return fake
     }
+    func number(_ original: String, entity: String) -> String {
+        let negative = original.hasPrefix("-")
+        let digits = negative ? String(original.dropFirst()) : original
+        let fake = (negative ? "-" : "") + standIns.number(digits)
+        counts[entity, default: 0] += 1
+        replacements.append(Replacement(original: original, fake: fake, entity: entity))
+        return fake
+    }
+    @discardableResult
+    func associateRecord(first: String?, last: String?, full: String?, email: String?) -> Persona? {
+        if first != nil || last != nil {
+            associate(first: first, last: last, email: email)
+            return standIns.people.register(first, last)
+        }
+        else if let full {
+            let parts = full.split(separator: " ")
+            if parts.count >= 2 {
+                let first = String(parts[0]), last = String(parts[parts.count - 1])
+                associate(first: first, last: last, email: email)
+                return standIns.people.register(first, last)
+            }
+        }
+        return nil
+    }
     func isEmitted(_ value: String) -> Bool { emitted.contains(value.lowercased()) }
     public func apply(_ text: String, spans: [Span]) throws -> (String, [Mark]) {
+        try apply(text, spans: spans, owner: nil)
+    }
+    func apply(_ text: String, spans: [Span], owner: Persona?) throws -> (String, [Mark]) {
         var output = text
         var marks: [Mark] = []
         for (index, span) in spans.reversed().enumerated() {
             if index.isMultiple(of: 64) { try Scrubber.checkCancellation() }
-            let fake = replacement(for: span.entity, original: TextRanges.substring(text, span.range))
+            let fake = replacement(for: span.entity, original: TextRanges.substring(text, span.range), persona: owner)
             output = TextRanges.replace(output, span.range, with: fake)
             let delta = (fake as NSString).length - span.range.count
             marks = marks.map { Mark(range: ($0.range.lowerBound + delta)..<($0.range.upperBound + delta), entity: $0.entity) }
             marks.append(Mark(range: span.range.lowerBound..<(span.range.lowerBound + (fake as NSString).length), entity: span.entity))
         }
         return (output, marks.sorted { $0.range.lowerBound < $1.range.lowerBound })
+    }
+    func scrubValue(_ text: String, key: String? = nil, owner: Persona? = nil, contextWords: Set<String> = []) throws -> (String, [Mark], [Mark]) {
+        let spans = observe([(text, key)], contextWords: contextWords)[0]
+        let (initial, marks) = try apply(text, spans: spans, owner: owner)
+        return try Correction.run(initial, marks: marks, job: self)
     }
 }

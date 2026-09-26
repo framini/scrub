@@ -16,11 +16,16 @@ enum NameTagger {
         return spans
     }
     private static func cued(_ range: Range<Int>, in text: String) -> Bool {
-        if !Context.before(range, in: text, limit: 3).isDisjoint(with: Context.name) { return true }
         let suffix = TextRanges.substring(text, range.upperBound..<(text as NSString).length)
-        guard let next = TextRanges.matches(#"[A-Za-z]+"#, in: suffix).first else { return false }
-        let word = TextRanges.substring(suffix, next.range.location..<NSMaxRange(next.range)).lowercased()
-        return ["called", "said", "asked", "wrote", "emailed", "phoned"].contains(word)
+        let next = TextRanges.matches(#"[A-Za-z]+"#, in: suffix).first.map { TextRanges.substring(suffix, $0.range.location..<NSMaxRange($0.range)).lowercased() }
+        let before = Context.before(range, in: text, limit: 3)
+        if next == "from" && TextRanges.substring(text, range) == TextRanges.substring(text, range).lowercased() { return true }
+        if !before.subtracting(["with", "w"]).isDisjoint(with: Context.name) { return true }
+        if before.contains("with") || before.contains("w") {
+            return next == nil || ["said", "asked", "wrote", "emailed", "phoned", "called"].contains(next)
+        }
+        guard let next else { return false }
+        return ["called", "said", "asked", "wrote", "emailed", "phoned"].contains(next)
     }
     private static func tag(_ input: String, mappedTo original: String, variant: Bool) -> [Span] {
         let tagger = NLTagger(tagSchemes: [.nameType])
@@ -32,6 +37,15 @@ enum NameTagger {
             let lower = input.utf16.distance(from: input.utf16.startIndex, to: range.lowerBound.samePosition(in: input.utf16) ?? input.utf16.startIndex)
             let upper = input.utf16.distance(from: input.utf16.startIndex, to: range.upperBound.samePosition(in: input.utf16) ?? input.utf16.endIndex)
             let mapped = lower..<upper
+            if tag == .personalName {
+                let value = TextRanges.substring(original, mapped)
+                let tokens = TextRanges.matches(#"[A-Za-z]+"#, in: value)
+                if tokens.count == 1 {
+                    let known = Names.firstFolded.contains(value.lowercased()) || Names.lastFolded.contains(value.lowercased())
+                    let cue = cued(mapped, in: original)
+                    if (!known && !cue) || (value == value.uppercased() && value.count >= 2 && !cue) { return true }
+                }
+            }
             if variant {
                 guard tag == .personalName else { return true }
                 let tokens = TextRanges.matches(#"[A-Za-z]+"#, in: TextRanges.substring(original, mapped)).map { TextRanges.substring(original, (mapped.lowerBound + $0.range.location)..<(mapped.lowerBound + NSMaxRange($0.range))).lowercased() }

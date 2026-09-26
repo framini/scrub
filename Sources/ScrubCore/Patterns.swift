@@ -22,7 +22,7 @@ enum Patterns {
         ("US_ITIN", #"\b9\d{2}(?:5\d|6[0-5]|7\d|8[0-8]|9(?:[0-2]|[4-9]))\d{4}\b"#, 0.3, ["individual", "taxpayer", "itin", "tax", "payer", "taxid", "tin"], []),
         ("US_ITIN", #"\b9\d{2}[- ](?:5\d|6[0-5]|7\d|8[0-8]|9(?:[0-2]|[4-9]))[- ]\d{4}\b"#, 0.5, ["individual", "taxpayer", "itin", "tax", "payer", "taxid", "tin"], [])
     ]
-    static func find(_ text: String) -> [Span] {
+    static func find(_ text: String, contextWords: Set<String> = []) -> [Span] {
         var spans: [Span] = []
         for (entity, regex, base, context, options) in definitions {
             for (index, match) in TextRanges.matches(regex, in: text, options: options).enumerated() {
@@ -38,7 +38,7 @@ enum Patterns {
                 }
                 let value = TextRanges.substring(text, range)
                 guard valid(value, entity: entity), !(entity == "US_SSN" && base <= 0.5 && invalidSSN(value)) else { continue }
-                let score = Context.enhanced(base, words: context, range: range, text: text)
+                let score = context.isDisjoint(with: contextWords) ? Context.enhanced(base, words: context, range: range, text: text) : min(1, max(0.4, base + 0.35))
                 if score >= 0.4 { spans.append(Span(range: range, entity: entity, score: score)) }
             }
         }

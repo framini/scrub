@@ -6,18 +6,31 @@ public struct Mark: Sendable, Equatable {
     public let entity: String
     public init(range: Range<Int>, entity: String) { self.range = range; self.entity = entity }
 }
-public enum Preview: Sendable { case text(String, marks: [Mark], truncated: Bool) }
+public struct TableMark: Sendable, Equatable {
+    public let row: Int
+    public let column: Int
+    public let range: Range<Int>
+    public let entity: String
+    public init(row: Int, column: Int, range: Range<Int>, entity: String) {
+        self.row = row; self.column = column; self.range = range; self.entity = entity
+    }
+}
+public enum Preview: Sendable {
+    case text(String, marks: [Mark], truncated: Bool)
+    case table(columns: [String], rows: [[String]], rowCount: Int, marks: [TableMark])
+}
 public struct ScrubResult: Sendable {
     public let format: String
     public let output: Data
     public let preview: Preview
     public let counts: [String: Int]
     public let unresolved: [Mark]
-    public init(format: String, output: Data, preview: Preview, counts: [String: Int], unresolved: [Mark]) {
-        self.format = format; self.output = output; self.preview = preview; self.counts = counts; self.unresolved = unresolved
+    public let neutralized: Int
+    public init(format: String, output: Data, preview: Preview, counts: [String: Int], unresolved: [Mark], neutralized: Int = 0) {
+        self.format = format; self.output = output; self.preview = preview; self.counts = counts; self.unresolved = unresolved; self.neutralized = neutralized
     }
 }
-public enum ScrubError: Error, Equatable { case notUTF8, tooLarge, empty, cancelled, unsupported(String) }
+public enum ScrubError: Error, Equatable { case cancelled, unsupported(String) }
 public protocol FileFormat { static func process(_ data: Data, job: Job, progress: (Stage, Int, Int) -> Void) throws -> ScrubResult }
 public struct Span: Sendable, Equatable {
     public let range: Range<Int>

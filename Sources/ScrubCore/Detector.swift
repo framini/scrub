@@ -2,9 +2,9 @@ import Foundation
 
 public final class Detector {
     public init() {}
-    public func find(_ text: String, key: String? = nil, gazetteer: [String: Set<String>] = [:]) -> [Span] {
+    public func find(_ text: String, key: String? = nil, gazetteer: [String: Set<String>] = [:], contextWords: Set<String> = []) -> [Span] {
         if let entity = KeyHints.hint(key), !text.isEmpty { return [Span(range: 0..<(text as NSString).length, entity: entity, score: 1)] }
-        var spans = Patterns.find(text)
+        var spans = Patterns.find(text, contextWords: Set(KeyHints.words(key)).union(contextWords))
         spans.append(contentsOf: system(text))
         spans.append(contentsOf: NameTagger.find(text))
         for (entity, entries) in gazetteer where ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"].contains(entity) {
