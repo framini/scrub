@@ -3,6 +3,7 @@ import Foundation
 final class Persona {
     var realFirst: String?
     var realLast: String?
+    var realMiddle: String?
     let first: String
     let last: String
     private var firstEmail: (original: String, fake: String)?
@@ -46,12 +47,13 @@ final class People {
             }
         }
     }
-    private struct Key: Hashable { let first: String?; let last: String? }
+    private struct Key: Hashable { let first: String?; let last: String?; var middle: String? = nil }
     private struct Bucket {
         private var sole: Persona?
         private var members: [ObjectIdentifier: Persona]?
         var count: Int { members?.count ?? (sole == nil ? 0 : 1) }
         var first: Persona? { sole ?? members?.values.first }
+        var people: [Persona] { members.map { Array($0.values) } ?? sole.map { [$0] } ?? [] }
         mutating func add(_ person: Persona) {
             if members != nil {
                 members?[ObjectIdentifier(person)] = person
@@ -77,6 +79,7 @@ final class People {
     private static let firstChoices = Names.first.map { ($0, fold($0)) }
     private static let lastChoices = Names.last.map { ($0, fold($0)) }
     private var exact: [Key: Persona] = [:]
+    private var fullBuckets: [Key: Bucket] = [:]
     private var firstBuckets: [String: Bucket] = [:]
     private var lastBuckets: [String: Bucket] = [:]
     private var firstOnly: [String: Persona] = [:]
@@ -96,7 +99,8 @@ final class People {
     private func fold(_ value: String) -> String { Self.fold(value) }
     private func add(_ person: Persona) {
         let f = person.realFirst, l = person.realLast
-        exact[Key(first: f, last: l)] = person
+        exact[Key(first: f, last: l, middle: person.realMiddle)] = person
+        if f != nil && l != nil { fullBuckets[Key(first: f, last: l), default: Bucket()].add(person) }
         if let f { firstBuckets[f, default: Bucket()].add(person) } else { missingFirst.add(person) }
         if let l { lastBuckets[l, default: Bucket()].add(person) } else { missingLast.add(person) }
         if let f, let l {
@@ -124,18 +128,21 @@ final class People {
     }
     private func remove(_ person: Persona) {
         let f = person.realFirst, l = person.realLast
-        exact.removeValue(forKey: Key(first: f, last: l))
+        exact.removeValue(forKey: Key(first: f, last: l, middle: person.realMiddle))
+        fullBuckets[Key(first: f, last: l)]?.remove(person)
         if let f { firstBuckets[f]?.remove(person) } else { missingFirst.remove(person) }
         if let l { lastBuckets[l]?.remove(person) } else { missingLast.remove(person) }
         if let f, l == nil { firstOnly.removeValue(forKey: f) }
         if let l, f == nil { lastOnly.removeValue(forKey: l) }
     }
-    private func compatible(_ f: String?, _ l: String?) -> (Int, Persona?) {
+    private func compatible(_ f: String?, _ l: String?, _ middle: String?) -> (Int, Persona?) {
         if let f, let l {
-            let full = exact[Key(first: f, last: l)]
+            let full = (fullBuckets[Key(first: f, last: l)]?.people ?? []).filter {
+                middle == nil || $0.realMiddle == nil || $0.realMiddle == middle
+            }
             let first = firstOnly[f], last = lastOnly[l]
             let both = exact[Key(first: nil, last: nil)]
-            return ([full, first, last, both].compactMap { $0 }.count, full ?? first ?? last ?? both)
+            return (full.count + [first, last, both].compactMap { $0 }.count, full.first ?? first ?? last ?? both)
         }
         if let f {
             let bucket = firstBuckets[f] ?? Bucket()
@@ -148,16 +155,32 @@ final class People {
         return (exact.count, exact.values.first)
     }
     private var reserved: Set<String> = []
+    private var blockedChoices: Set<String> = []
+    private var usedFullNames: Set<String> = []
     // A stand-in that matches a real name elsewhere in the document reads as a
     // leak, so every real name part is reserved before any stand-in is drawn.
     func reserve(_ names: [String]) {
         for name in names {
             for part in name.split(whereSeparator: { !$0.isLetter }) { reserved.insert(fold(String(part))) }
         }
+        guard !reserved.isEmpty else { return }
+        blockedChoices = Set((Self.firstChoices + Self.lastChoices).compactMap { choice in
+            // Initials and two-letter parts would block most of the pool, so
+            // they only block an identical stand-in.
+            if reserved.contains(choice.1) { return choice.1 }
+            let letters = Array(choice.1)
+            for start in letters.indices where letters.count - start >= 3 {
+                for end in (start + 3)...letters.count where reserved.contains(String(letters[start..<end])) { return choice.1 }
+            }
+            return nil
+        })
+    }
+    func unrelatedName(first: Bool) -> String {
+        pick(first ? Self.firstChoices : Self.lastChoices, originals: [], emailSafe: true)
     }
     private func pick(_ choices: [(String, String)], originals: [String], emailSafe: Bool) -> String {
         func allowed(_ choice: (String, String)) -> Bool {
-            !reserved.contains(choice.1) && !originals.contains(where: { choice.1.contains($0) })
+            !blockedChoices.contains(choice.1) && !originals.contains(where: { choice.1.contains($0) })
                 && (!emailSafe || choice.0.allSatisfy({ $0.isASCII && $0.isLetter }))
         }
         for _ in 0..<64 {
@@ -166,39 +189,56 @@ final class People {
         }
         return choices.first(where: allowed)?.0 ?? "Alex"
     }
-    func register(_ first: String?, _ last: String?, emailSafe: Bool = false) -> Persona {
-        let f = first.map(fold), l = last.map(fold)
-        if let found = exact[Key(first: f, last: l)] { return found }
-        let (count, candidate) = compatible(f, l)
+    func register(_ first: String?, _ last: String?, emailSafe: Bool = false, middle: String? = nil) -> Persona {
+        let f = first.map(fold), l = last.map(fold), m = middle.map(fold)
+        if let found = exact[Key(first: f, last: l, middle: m)] { return found }
+        let (count, candidate) = compatible(f, l, m)
         if count == 1, let found = candidate {
-            if (found.realFirst == nil && f != nil) || (found.realLast == nil && l != nil) {
+            if (found.realFirst == nil && f != nil) || (found.realLast == nil && l != nil) || (found.realMiddle == nil && m != nil) {
                 remove(found)
                 found.realFirst = found.realFirst ?? f
                 found.realLast = found.realLast ?? l
+                found.realMiddle = found.realMiddle ?? m
                 add(found)
             }
             return found
         }
         let originals = [f, l].compactMap { $0 }.filter { $0.count >= 3 }
-        let person = Persona(realFirst: f, realLast: l, first: pick(Self.firstChoices, originals: originals, emailSafe: false), last: pick(Self.lastChoices, originals: originals, emailSafe: emailSafe))
+        let (first, last) = freshName(originals: originals, emailSafe: emailSafe)
+        let person = Persona(realFirst: f, realLast: l, first: first, last: last)
+        person.realMiddle = m
         add(person)
         return person
     }
-    func registerFull(_ value: String) -> (Persona, Int) {
+    private func freshName(originals: [String], emailSafe: Bool) -> (String, String) {
+        var attempt = 0
+        while true {
+            let first = pick(Self.firstChoices, originals: originals, emailSafe: false)
+            var last = pick(Self.lastChoices, originals: originals, emailSafe: emailSafe)
+            // A suffix also handles documents that exhaust the finite name pool.
+            if attempt >= 64 { last += String(attempt) }
+            if usedFullNames.insert(fold(first + " " + last)).inserted { return (first, last) }
+            attempt += 1
+        }
+    }
+    func registerFull(_ value: String, emailSafe: Bool = false) -> (Persona, Int) {
         var tokens = value.split { $0.isWhitespace || $0 == "," }.map(String.init)
         while let first = tokens.first, ["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "madam"].contains(first.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) { tokens.removeFirst() }
-        if tokens.count >= 2 { return (register(tokens.first, tokens.last), 2) }
+        if tokens.count >= 2 { return (register(tokens.first, tokens.last, emailSafe: emailSafe, middle: tokens.count > 2 ? tokens.dropFirst().dropLast().joined(separator: " ") : nil), 2) }
         if let token = tokens.first {
             let last = lastBuckets[fold(token)] ?? Bucket()
             if last.count == 1, let found = last.first { return (found, -1) }
-            return (register(token, nil), 1)
+            return (register(token, nil, emailSafe: emailSafe), 1)
         }
-        return (register(nil, nil), 2)
+        return (register(nil, nil, emailSafe: emailSafe), 2)
     }
     func knows(_ value: String) -> Bool {
         let tokens = value.split(separator: " ")
         guard tokens.count >= 2, let first = tokens.first, let last = tokens.last else { return false }
-        return exact[Key(first: fold(String(first)), last: fold(String(last)))] != nil
+        let middle = tokens.count > 2 ? fold(tokens.dropFirst().dropLast().joined(separator: " ")) : nil
+        return (fullBuckets[Key(first: fold(String(first)), last: fold(String(last)))]?.people ?? []).contains {
+            middle == nil || $0.realMiddle == nil || $0.realMiddle == middle
+        }
     }
     func name(for value: String) -> String {
         let (person, parts) = registerFull(value)
@@ -217,16 +257,21 @@ final class People {
             collect(lastOnly[part])
             if parts.count == 1 { collect(firstOnly[part]) }
             if let bucket = firstBuckets[part], bucket.count > 0 {
-                for other in parts { collect(exact[Key(first: part, last: other)]) }
+                for other in parts {
+                    for person in fullBuckets[Key(first: part, last: other)]?.people ?? [] { collect(person) }
+                }
             }
         }
         let matches = candidates.values.filter { $0.matches(local: local) }
         return matches.count == 1 ? matches.first : nil
     }
+    func associate(_ person: Persona, email: String?) {
+        if let email { associatedEmails[fold(email)] = person }
+    }
     func associate(first: String?, last: String?, email: String?) {
         guard first != nil || last != nil else { return }
         let person = register(first, last, emailSafe: email != nil)
-        if let email { associatedEmails[fold(email)] = person }
+        associate(person, email: email)
     }
     func email(for person: Persona, original: String) -> String {
         let key = fold(original)

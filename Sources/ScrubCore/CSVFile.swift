@@ -88,17 +88,26 @@ public enum CSVFile: FileFormat {
         var best: (Character, Character) = (",", "\"")
         var bestScore = -1
         for delimiter in delimiters {
+            var doubleQuoteConsistent = false
             for quote: Character in ["\"", "'"] {
                 guard let rows = try? parse(sample, delimiter: delimiter, quoteCharacter: quote, incompleteFinalRecord: true) else { continue }
                 let widths = rows.prefix(50).map(\.count)
-                guard let common = Dictionary(grouping: widths, by: { $0 }).max(by: { $0.value.count < $1.value.count }), common.key > 1 else { continue }
-                let score = common.value.count * 100 + common.key
-                if score > bestScore { best = (delimiter, quote); bestScore = score }
+                guard let width = widths.first, width > 1 else { continue }
+                // A wrong quote character splits multiline cells into extra rows.
+                // Reward agreement with the header, not the number of split rows.
+                let matching = widths.filter { $0 == width }.count
+                let score = matching * 10_000 / widths.count + min(width, 99)
+                if quote == "\"" { doubleQuoteConsistent = matching == widths.count }
+                if quote == "'" && doubleQuoteConsistent { continue }
+                if score > bestScore {
+                    best = (delimiter, quote)
+                    bestScore = score
+                }
             }
         }
         return best
     }
-    static func parse(_ text: String, delimiter: Character, quoteCharacter: Character = "\"", incompleteFinalRecord: Bool = false) throws -> [[String]] {
+    static func parse(_ text: String, delimiter: Character, quoteCharacter: Character = "\"", incompleteFinalRecord: Bool = false, onQuotedField: (() -> Void)? = nil) throws -> [[String]] {
         var rows: [[String]] = []
         var row: [String] = []
         var field = ""
@@ -114,7 +123,7 @@ public enum CSVFile: FileFormat {
                     if index + 1 < chars.count && chars[index + 1] == quote { field.unicodeScalars.append(char); index += 1 }
                     else { quoted = false }
                 } else { field.unicodeScalars.append(char) }
-            } else if char == quote && field.isEmpty { quoted = true }
+            } else if char == quote && field.isEmpty { quoted = true; onQuotedField?() }
             else if char == separator { row.append(field); field = "" }
             else if char == "\n" || char == "\r" {
                 row.append(field); field = ""

@@ -35,7 +35,7 @@ public final class Job {
     }
     func observeSpans<S: Sequence>(_ fields: S) where S.Element == (String, [Span]) {
         for (text, spans) in fields {
-            for span in spans where ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"].contains(span.entity) {
+            for span in spans where GazetteerMatcher.supportedEntities.contains(span.entity) {
                 let value = TextRanges.substring(text, span.range)
                 gazetteer[span.entity, default: []].insert(value)
                 if span.entity == "PERSON" { _ = standIns.people.registerFull(value) }
@@ -76,13 +76,11 @@ public final class Job {
         if recordsReplacements { replacements.append(Replacement(original: original, fake: fake, entity: entity)) }
         return fake
     }
+    func reserveNumeric(_ original: String, entity: String) {
+        _ = standIns.numericLexeme(original, entity: entity)
+    }
     func numericLexeme(_ original: String, entity: String) -> String {
-        let digits = original.filter { $0.isASCII && $0.isNumber }
-        let substitute = standIns.number(digits)
-        var iterator = substitute.makeIterator()
-        let fake = String(original.map { character in
-            character.isASCII && character.isNumber ? iterator.next() ?? character : character
-        })
+        let fake = standIns.numericLexeme(original, entity: entity)
         if recordsReplacements { replacements.append(Replacement(original: original, fake: fake, entity: entity)) }
         emitted.insert(fake.lowercased())
         counts[entity, default: 0] += 1
@@ -90,17 +88,14 @@ public final class Job {
     }
     @discardableResult
     func associateRecord(first: String?, last: String?, full: String?, email: String?) -> Persona? {
+        if let full {
+            let person = standIns.people.registerFull(full, emailSafe: email != nil).0
+            standIns.people.associate(person, email: email)
+            return person
+        }
         if first != nil || last != nil {
             associate(first: first, last: last, email: email)
             return standIns.people.register(first, last)
-        }
-        else if let full {
-            let parts = full.split(separator: " ")
-            if parts.count >= 2 {
-                let first = String(parts[0]), last = String(parts[parts.count - 1])
-                associate(first: first, last: last, email: email)
-                return standIns.people.register(first, last)
-            }
         }
         return nil
     }

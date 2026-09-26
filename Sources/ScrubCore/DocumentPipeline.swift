@@ -6,7 +6,7 @@ struct DocumentLeaf: Sendable {
     let key: String?
     private let records: RecordPath
     var lastRecord: Int? { records.last }
-    func owner(in owners: [Persona?]) -> Persona? { records.owner(in: owners) }
+    func owner<Value>(in owners: [Value?]) -> Value? { records.owner(in: owners) }
     let contextWords: Set<String>
     let numericEntity: String?
 
@@ -38,7 +38,7 @@ private enum RecordPath: Sendable {
         case .many(let records): records.last
         }
     }
-    func owner(in owners: [Persona?]) -> Persona? {
+    func owner<Value>(in owners: [Value?]) -> Value? {
         switch self {
         case .none: return nil
         case .one(let record): return owners.indices.contains(record) ? owners[record] : nil
@@ -140,6 +140,9 @@ enum DocumentPipeline {
         job.reserveNames(zip(leaves, bases).flatMap { leaf, stored in
             base(leaf, stored: stored).filter { nameEntities.contains($0.entity) }.map { TextRanges.substring(leaf.text, $0.range) }
         })
+        for leaf in leaves {
+            if let entity = leaf.numericEntity { job.reserveNumeric(leaf.text, entity: entity) }
+        }
         let owners = associateOwners(leaves, job: job)
         observeInitial(leaves, bases: bases, job: job)
         let gazetteer = GazetteerMatcher(job.gazetteer)
@@ -171,6 +174,15 @@ enum DocumentPipeline {
             guard let record = leaf.lastRecord, let hint = KeyHints.hint(leaf.key), identityHints.contains(hint), !leaf.text.isEmpty else { continue }
             if recordFields[record] == nil { recordFields[record] = IdentityFields() }
             recordFields[record]?.set(leaf.text, for: hint)
+        }
+        let identities: [Int?] = recordFields.enumerated().map { index, fields in
+            guard let fields, fields.first != nil || fields.last != nil || fields.full != nil else { return nil }
+            return index
+        }
+        for leaf in leaves where KeyHints.hint(leaf.key) == "EMAIL_ADDRESS" && !leaf.text.isEmpty {
+            if let record = leaf.owner(in: identities), recordFields[record]?.email == nil {
+                recordFields[record]?.email = leaf.text
+            }
         }
         var owners = Array<Persona?>(repeating: nil, count: maxRecord + 1)
         for record in recordFields.indices {

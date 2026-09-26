@@ -35,8 +35,12 @@ public enum Scrubber {
     private static func sniff(_ data: Data) throws -> String {
         let text = try TextFile.decode(data)
         let head = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if (head.hasPrefix("{") || head.hasPrefix("[")), (try? OrderedJSON.parse(text)) != nil { return "json" }
-        if head.hasPrefix("<") && XMLFile.parses(Data(head.utf8)) { return "xml" }
+        if head.hasPrefix("{") || head.hasPrefix("[") {
+            do { _ = try OrderedJSON.parse(text); return "json" }
+            catch ScrubError.unsupported("too_deep") { throw ScrubError.unsupported("too_deep") }
+            catch {}
+        }
+        if head.hasPrefix("<"), try XMLFile.parses(Data(head.utf8)) { return "xml" }
         let lines = text.split(whereSeparator: \.isNewline).prefix(20).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         if lines.count >= 3 {
             let delimiter = CSVFile.sniffDelimiter(lines.joined(separator: "\n"))

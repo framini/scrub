@@ -92,7 +92,7 @@ private func output(_ result: ScrubResult) -> String { String(decoding: result.o
     let input = Data("<r><name>Robert Mitchell</name><RobertMitchell/></r>".utf8)
     for _ in 0..<200 {
         let result = try Scrubber.scrub(input, name: "r.xml")
-        #expect(XMLFile.parses(result.output))
+        #expect(try XMLFile.parses(result.output))
         #expect(!output(result).contains("RobertMitchell"))
     }
 }

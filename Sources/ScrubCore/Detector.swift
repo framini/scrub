@@ -104,6 +104,7 @@ public final class Detector {
 }
 
 struct GazetteerMatcher {
+    static let supportedEntities = ["FIRST_NAME", "LAST_NAME", "PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"]
     let matcher: Matcher
     let entities: [String]
 
@@ -117,7 +118,7 @@ struct GazetteerMatcher {
         var literals: [String] = []
         var labels: [String] = []
         var seen: Set<[UInt16]> = []
-        for entity in ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"] {
+        for entity in supportedEntities {
             for entry in (gazetteer[entity] ?? []).sorted() where !entry.isEmpty {
                 if seen.insert(Matcher.fold(entry)).inserted {
                     literals.append(entry)

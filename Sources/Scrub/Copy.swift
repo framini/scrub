@@ -39,6 +39,7 @@ enum Copy {
         case "xml_doctype": Failure(title: "This XML defines its own entities", body: "Scrub can't safely check values hidden in a DOCTYPE. Remove the <!DOCTYPE …> section and try again.")
         case "invalid_csv": Failure(title: "This CSV couldn't be read", body: "Check that every row has matching quotes, then try again.")
         case "empty_file": Failure(title: "This file is empty", body: "There's nothing in it to clean.")
+        case "too_deep": Failure(title: "This file is nested too deeply", body: "Reduce the nesting to 64 levels or fewer, then try again.")
         case "too_large": Failure(title: "This file is too large", body: "Scrub handles files up to 50 MB. Split it into smaller files and clean each one.")
         case "not_utf8": Failure(title: "This file isn't UTF-8 text", body: "Open it in a text editor, save it with UTF-8 encoding, then try again.")
         case "binary_file": Failure(title: "This isn't a text file", body: "Scrub can clean \(formats) files.")

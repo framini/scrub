@@ -8,8 +8,9 @@ public enum XMLFile: FileFormat {
         let source = try decodeXML(data)
         let text = normalizedDeclaration(source)
         guard !unsafeDeclaration(in: text) else { throw ScrubError.unsupported("xml_doctype") }
+        try XMLDepth.check(Data(text.utf8))
         let document: XMLDocument
-        do { document = try XMLDocument(data: Data(text.utf8), options: [.nodePreserveAll, .nodeLoadExternalEntitiesNever]) }
+        do { document = try XMLDocument(data: Data(text.utf8), options: XMLSerialization.parseOptions) }
         catch { throw ScrubError.unsupported("invalid_xml") }
         guard document.dtd == nil else { throw ScrubError.unsupported("xml_doctype") }
         guard document.rootElement() != nil else { throw ScrubError.unsupported("invalid_xml") }
@@ -67,7 +68,7 @@ public enum XMLFile: FileFormat {
         var markedValues: [(String, String)] = []
         for (index, node) in nodes.enumerated() {
             let value = values[valueIDs[index]]
-            node.stringValue = value.text
+            if node.stringValue != value.text { node.stringValue = value.text }
             for mark in value.marks { markedValues.append((TextRanges.substring(value.text, mark.range), mark.entity)) }
         }
         let unresolved = values.flatMap(\.unresolved)
@@ -132,10 +133,10 @@ public enum XMLFile: FileFormat {
             renamedNames[name] = candidate
             if candidate != name { node.name = candidate; markedValues.append((candidate, "PERSON")) }
         }
-        var output = document.xmlString(options: [.nodePreserveAll])
+        var output = job.counts.isEmpty ? text : XMLSerialization.render(document)
         output = output.replacingOccurrences(of: #"^<\?xml(?=\s)[\s\S]*?\?>\s*"#, with: "", options: .regularExpression)
         if declarationEnd(in: source) != nil, let end = text.range(of: "?>") { output = String(text[..<end.upperBound]) + "\n" + output }
-        guard parses(Data(output.utf8)) else { throw ScrubError.unsupported("internal") }
+        guard try parses(Data(output.utf8)) else { throw ScrubError.unsupported("internal") }
         var marks: [Mark] = []
         for (value, entity) in markedValues where !value.isEmpty {
             for range in TextRanges.ranges(of: value, in: output, options: []) where !marks.contains(where: { $0.range.overlaps(range) }) { marks.append(Mark(range: range, entity: entity)) }
@@ -146,10 +147,12 @@ public enum XMLFile: FileFormat {
         let limit = min(length, 200_000)
         return ScrubResult(format: "xml", output: Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: job.counts, unresolved: unresolved)
     }
-    static func parses(_ data: Data) -> Bool {
+    static func parses(_ data: Data) throws -> Bool {
         guard let source = try? decodeXML(data) else { return false }
         let text = normalizedDeclaration(source)
-        guard !unsafeDeclaration(in: text), let document = try? XMLDocument(data: Data(text.utf8), options: [.nodePreserveAll, .nodeLoadExternalEntitiesNever]) else { return false }
+        guard !unsafeDeclaration(in: text) else { return false }
+        try XMLDepth.check(Data(text.utf8))
+        guard let document = try? XMLDocument(data: Data(text.utf8), options: XMLSerialization.parseOptions) else { return false }
         return document.dtd == nil && document.rootElement() != nil
     }
     private static func declarationEnd(in text: String) -> String.Index? {

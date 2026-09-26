@@ -51,7 +51,7 @@ private extension JSONValue {
     let source = original.replacingOccurrences(of: "</r>", with: "<RobertMitchell:x/></r>")
     let result = try output(Data(source.utf8), "input.xml")
     #expect(!result.contains("RobertMitchell"))
-    #expect(XMLFile.parses(Data(result.utf8)))
+    #expect(try XMLFile.parses(Data(result.utf8)))
     let prefix = try #require(result.range(of: #"xmlns:([A-Za-z_][A-Za-z0-9_.-]*)="#, options: .regularExpression))
     let declaration = String(result[prefix]).dropFirst(6).dropLast()
     #expect(result.contains("<\(declaration):x"))
@@ -72,7 +72,7 @@ private extension JSONValue {
     let source = Data(#"<r><password>qzxv</password><qzxv/></r>"#.utf8)
     for _ in 0..<200 {
         let result = try Scrubber.scrub(source, name: "input.xml")
-        #expect(XMLFile.parses(result.output))
+        #expect(try XMLFile.parses(result.output))
     }
 }
 
@@ -105,4 +105,19 @@ private extension JSONValue {
         let output = String(decoding: try Scrubber.scrub(Data(text.utf8), name: "note.txt", forceFullDetection: false, seed: seed).output, as: UTF8.self)
         for real in ["Johnson", "Emily", "Chen", "Kevin"] { #expect(!output.localizedCaseInsensitiveContains(real), "seed \(seed): \(output)") }
     }
+}
+
+@Test func initialsDoNotExhaustStandInNames() {
+    let people = People(rng: SeededGenerator(seed: 7))
+    people.reserve(["J. Smith", "E. Li", "Al Jones"])
+    let firsts = Set((0..<300).map { people.register("real\($0)", "person\($0)").first })
+    #expect(firsts.count >= 150)
+}
+
+@Test func mentionWithoutMiddleNameIsAKnownPerson() {
+    let people = People(rng: SeededGenerator(seed: 3))
+    _ = people.registerFull("Robert James Mitchell")
+    #expect(people.knows("Robert Mitchell"))
+    #expect(people.knows("Robert James Mitchell"))
+    #expect(!people.knows("Robert David Mitchell"))
 }

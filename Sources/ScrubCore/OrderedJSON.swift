@@ -95,9 +95,12 @@ enum OrderedJSON {
         init(_ bytes: [UInt8]) { self.bytes = bytes }
         mutating func space() { while index < bytes.count && [9, 10, 13, 32].contains(bytes[index]) { index += 1 } }
         mutating func take(_ byte: UInt8) -> Bool { space(); guard index < bytes.count, bytes[index] == byte else { return false }; index += 1; return true }
-        mutating func value() throws -> JSONValue {
+        mutating func value(depth: Int = 0) throws -> JSONValue {
             space()
             guard index < bytes.count else { throw ScrubError.unsupported("invalid_json") }
+            if bytes[index] == 123 || bytes[index] == 91 {
+                guard depth < 64 else { throw ScrubError.unsupported("too_deep") }
+            }
             switch bytes[index] {
             case 123:
                 index += 1
@@ -107,7 +110,7 @@ enum OrderedJSON {
                     guard index < bytes.count, bytes[index] == 34 else { throw ScrubError.unsupported("invalid_json") }
                     let key = try string()
                     guard take(58) else { throw ScrubError.unsupported("invalid_json") }
-                    let child = try value()
+                    let child = try value(depth: depth + 1)
                     if let at = pairs.firstIndex(where: { $0.0 == key }) { pairs[at].1 = child }
                     else { pairs.append((key, child)) }
                     if take(125) { break }
@@ -120,7 +123,7 @@ enum OrderedJSON {
                 var values: [JSONValue] = []
                 if take(93) { return .array(values) }
                 while true {
-                    values.append(try value())
+                    values.append(try value(depth: depth + 1))
                     if take(93) { break }
                     guard take(44) else { throw ScrubError.unsupported("invalid_json") }
                 }

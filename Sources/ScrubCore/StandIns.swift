@@ -37,6 +37,17 @@ final class StandIns {
         assigned[key] = fake
         return fake
     }
+    func numericLexeme(_ original: String, entity: String) -> String {
+        let key = entity + "\u{0}" + original
+        if let existing = assigned[key] { return existing }
+        let digits = original.filter { $0.isASCII && $0.isNumber }
+        var iterator = number(digits).makeIterator()
+        let fake = String(original.map { character in
+            character.isASCII && character.isNumber ? iterator.next() ?? character : character
+        })
+        assigned[key] = fake
+        return fake
+    }
     private func make(_ entity: String, _ original: String, _ persona: Persona?) -> String {
         switch entity {
         case "PERSON": return persona?.full ?? people.name(for: original)
@@ -44,7 +55,7 @@ final class StandIns {
         case "LAST_NAME": return (persona ?? people.register(nil, original)).last
         case "EMAIL_ADDRESS":
             if let owner = persona ?? people.find(email: original), original.contains("@") { return people.email(for: owner, original: original) }
-            return "\(pick(Names.first)?.lowercased() ?? "alex").\(pick(Names.last)?.lowercased() ?? "smith")@\(pick(Names.emailDomains) ?? "example.com")"
+            return "\(people.unrelatedName(first: true).lowercased()).\(people.unrelatedName(first: false).lowercased())@\(pick(Names.emailDomains) ?? "example.com")"
         case "PHONE_NUMBER": return "+1 \(digits(3))-555-\(digits(4))"
         case "LOCATION": return pick(Names.cities) ?? "Austin"
         case "ADDRESS": return "\(digits(3)) \(pick(Names.streets) ?? "Main") Street"
@@ -68,7 +79,7 @@ final class StandIns {
         case "US_ITIN": return "9\(digits(2))-\(digits(2))-\(digits(4))"
         case "MEDICAL_LICENSE": return "AB" + digits(6)
         case "CRYPTO": return "bc1q" + (0..<38).map { _ in String(pick(Array("023456789acdefghjklmnpqrstuvwxyz")) ?? "a") }.joined()
-        case "USERNAME": return (pick(Names.first)?.lowercased() ?? "alex") + digits(3)
+        case "USERNAME": return people.unrelatedName(first: true).lowercased() + digits(3)
         case "SECRET":
             let prefix = TextRanges.matches(Self.secretPrefix, in: original).first.map { TextRanges.substring(original, $0.range.location..<NSMaxRange($0.range)) } ?? ""
             let kept = prefix.utf16.count < original.utf16.count ? prefix : ""
