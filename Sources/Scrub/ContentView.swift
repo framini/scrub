@@ -72,13 +72,7 @@ struct DropView: View {
                     Text(dragging ? "Drop to clean it" : "Drop a file or paste text")
                         .font(.system(size: 30, weight: .semibold))
                         .tracking(-0.6)
-                    (Text("Replaces personal details with realistic stand-ins. Runs offline; nothing you drop here leaves your Mac. ")
-                        + Text(Image(systemName: "info.circle")).foregroundStyle(Color.evergreen))
-                        .font(.system(size: 15))
-                        .foregroundStyle(Color.slate)
-                        .multilineTextAlignment(.center)
-                        .frame(width: 440)
-                        .help(Copy.howItWorks)
+                    OfflineNote()
                 }
                 VStack(spacing: 14) {
                     HStack(spacing: 8) {
@@ -178,5 +172,60 @@ struct FailedView: View {
                     .keyboardShortcut(.cancelAction)
             }
         }
+    }
+}
+
+// A button, not plain text: the window drags from its background, and plain
+// text counts as background, so it never receives hover.
+struct OfflineNote: View {
+    @State private var shown = false
+    @State private var pinned = false
+    @State private var hover: Task<Void, Never>?
+
+    var body: some View {
+        Button {
+            pinned.toggle()
+            shown = pinned
+        } label: {
+            (Text("Replaces personal details with realistic stand-ins. Runs offline; nothing you drop here leaves your Mac. ")
+                + Text(Image(systemName: "info.circle")).foregroundStyle(Color.evergreen))
+                .font(.system(size: 15))
+                .foregroundStyle(Color.slate)
+                .multilineTextAlignment(.center)
+                .frame(width: 440)
+        }
+        .buttonStyle(.plain)
+        .onHover { inside in
+            hover?.cancel()
+            guard !pinned else { return }
+            hover = Task {
+                try? await Task.sleep(for: .milliseconds(inside ? 350 : 200))
+                if !Task.isCancelled { shown = inside }
+            }
+        }
+        .popover(isPresented: $shown, arrowEdge: .bottom) { HowItWorks() }
+        .onChange(of: shown) { _, now in if !now { pinned = false } }
+    }
+}
+
+struct HowItWorks: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("How Scrub works").font(.system(size: 13, weight: .semibold))
+            ForEach(Array(Copy.howItWorksSteps.enumerated()), id: \.offset) { index, step in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("\(index + 1)").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.evergreen).frame(width: 12)
+                    Text(step).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Divider()
+            Label(Copy.howItWorksFooter, systemImage: "lock.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.evergreen)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(Color.ink)
+        .padding(16)
+        .frame(width: 360)
     }
 }
