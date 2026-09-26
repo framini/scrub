@@ -21,10 +21,10 @@ struct ScrubApp: App {
             }
             CommandGroup(replacing: .pasteboard) {
                 Button("Paste") { model.paste() }.keyboardShortcut("v")
-                Button("Copy Result") { model.copy() }.keyboardShortcut("c", modifiers: [.command, .shift])
+                Button("Copy Result") { model.viaShortcut(.copy) }.keyboardShortcut("c", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .saveItem) {
-                Button("Save…") { model.save() }.keyboardShortcut("s")
+                Button("Save…") { model.viaShortcut(.save) }.keyboardShortcut("s")
             }
         }
     }

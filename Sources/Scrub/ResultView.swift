@@ -42,10 +42,12 @@ struct ResultView: View {
                 HStack(spacing: 6) { Text(finished.copied ? "Copied" : "Copy"); KeyHint(key: "⇧⌘C") }
             }
             .buttonStyle(SecondaryButton())
+            .modifier(ShortcutPress(shortcut: .copy, pulse: model.pulse))
             Button { model.save() } label: {
                 HStack(spacing: 6) { Text(finished.savedAs == nil ? "Save…" : "Save again…"); KeyHint(key: "⌘S", onDark: true) }
             }
             .buttonStyle(PrimaryButton())
+            .modifier(ShortcutPress(shortcut: .save, pulse: model.pulse))
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)

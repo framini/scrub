@@ -13,6 +13,13 @@ struct Finished {
     var copied = false
 }
 
+enum Shortcut { case copy, save }
+
+struct ShortcutPulse: Equatable {
+    let shortcut: Shortcut
+    let count: Int
+}
+
 enum ViewState {
     case idle
     case processing(name: String, source: Source, stage: Stage, done: Int, total: Int)
@@ -27,6 +34,7 @@ final class AppModel {
     static let pastedName = "Pasted text"
 
     private(set) var state: ViewState = .idle
+    private(set) var pulse: ShortcutPulse?
     var failedSave = false
 
     // Clear, and any newer input, bumps the generation; work finishing after
@@ -79,6 +87,18 @@ final class AppModel {
             return fail(Self.pastedName, .paste, holdsSomething ? "clipboard_not_text" : "empty_clipboard")
         }
         start(Self.pastedName, .paste, Data(text.utf8))
+    }
+
+    // A key press never shows a button's pressed state, so shortcuts signal
+    // the button to play it.
+    func viaShortcut(_ shortcut: Shortcut) {
+        guard case .finished = state else { return }
+        pulse = ShortcutPulse(shortcut: shortcut, count: (pulse?.count ?? 0) + 1)
+        switch shortcut {
+        case .copy: copy()
+        // The save panel runs modally; let the press show before it opens.
+        case .save: Task { try? await Task.sleep(for: .milliseconds(150)); save() }
+        }
     }
 
     func copy() {

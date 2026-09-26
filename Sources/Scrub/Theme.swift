@@ -73,3 +73,24 @@ struct Card<Content: View>: View {
             )
     }
 }
+
+struct ShortcutPress: ViewModifier {
+    let shortcut: Shortcut
+    let pulse: ShortcutPulse?
+    @State private var pressed = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(pressed && !reduceMotion ? 0.96 : 1)
+            .opacity(pressed ? 0.8 : 1)
+            .onChange(of: pulse) { _, new in
+                guard new?.shortcut == shortcut else { return }
+                withAnimation(.easeOut(duration: 0.1)) { pressed = true }
+                Task {
+                    try? await Task.sleep(for: .milliseconds(120))
+                    withAnimation(.easeOut(duration: 0.15)) { pressed = false }
+                }
+            }
+    }
+}
