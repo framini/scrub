@@ -34,6 +34,11 @@ struct PrimaryButton: ButtonStyle {
     }
 }
 
+struct KeyHint: View {
+    let key: String
+    var body: some View { Text(key).font(.system(size: 11, design: .monospaced)).foregroundStyle(Color.slate) }
+}
+
 struct SecondaryButton: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

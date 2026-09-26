@@ -33,6 +33,11 @@ struct ResultView: View {
             }
             Spacer()
             status
+            Button { model.clear() } label: {
+                HStack(spacing: 6) { Text("Start over"); KeyHint(key: "esc") }
+            }
+            .buttonStyle(SecondaryButton())
+            .keyboardShortcut(.cancelAction)
             Button(finished.copied ? "Copied" : "Copy") { model.copy() }.buttonStyle(SecondaryButton())
             Button(finished.savedAs == nil ? "Save…" : "Save again…") { model.save() }.buttonStyle(PrimaryButton())
         }
@@ -92,7 +97,6 @@ struct ResultView: View {
                     .foregroundStyle(Color.slate)
             }
             Spacer()
-            Text("Press esc to clear").foregroundStyle(Color.slate)
         }
         .font(.system(size: 12))
         .padding(.horizontal, 20)

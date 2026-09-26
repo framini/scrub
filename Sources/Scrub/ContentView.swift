@@ -7,15 +7,17 @@ struct ContentView: View {
     @State private var dragging = false
 
     var body: some View {
-        VStack(spacing: 12) {
-            header
-            screen
+        // The title bar is hidden; its height is the top safe area, and the
+        // header fills exactly that row so it centres on the traffic lights.
+        GeometryReader { geometry in
+            VStack(spacing: 12) {
+                header.frame(height: max(geometry.safeAreaInsets.top, 28))
+                screen
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+            .ignoresSafeArea(.container, edges: .top)
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 16)
-        // The title bar is hidden, so the header shares the traffic lights' row.
-        .padding(.top, 4)
-        .ignoresSafeArea(.container, edges: .top)
         .background(Color.fog)
         .foregroundStyle(Color.ink)
         .onDrop(of: [.fileURL], isTargeted: $dragging) { providers in
@@ -27,7 +29,6 @@ struct ContentView: View {
             }
             return true
         }
-        .onExitCommand { model.clear() }
     }
 
     private var header: some View {
@@ -49,7 +50,7 @@ struct ContentView: View {
             switch model.state {
             case .idle: DropView(dragging: false, model: model)
             case .processing(let name, let source, let stage, let done, let total):
-                ProcessingView(name: name, source: source, stage: stage, done: done, total: total)
+                ProcessingView(name: name, source: source, stage: stage, done: done, total: total, model: model)
             case .finished(let finished): ResultView(finished: finished, model: model)
             case .failed(let name, let source, let code): FailedView(name: name, source: source, code: code, model: model)
             }
@@ -71,7 +72,7 @@ struct DropView: View {
                     Text(dragging ? "Drop to clean it" : "Drop a file or paste text")
                         .font(.system(size: 30, weight: .semibold))
                         .tracking(-0.6)
-                    Text("Personal details are replaced with realistic stand-ins, right here on your Mac.")
+                    Text("Personal details are replaced with realistic stand-ins. Works fully offline, with Apple's on-device name recognition.")
                         .font(.system(size: 15))
                         .foregroundStyle(Color.slate)
                         .multilineTextAlignment(.center)
@@ -83,7 +84,7 @@ struct DropView: View {
                         Button { model.paste() } label: {
                             HStack(spacing: 6) {
                                 Text("Paste")
-                                Text("⌘V").font(.system(size: 11, design: .monospaced)).foregroundStyle(Color.slate)
+                                KeyHint(key: "⌘V")
                             }
                         }
                         .buttonStyle(SecondaryButton())
@@ -103,6 +104,7 @@ struct ProcessingView: View {
     let stage: Stage
     let done: Int
     let total: Int
+    let model: AppModel
 
     private var percent: Int {
         switch stage {
@@ -129,6 +131,11 @@ struct ProcessingView: View {
                     Text(source == .paste ? "Cleaning pasted text" : "Cleaning \(name)").font(.system(size: 20, weight: .semibold))
                     Text("Everything stays on this Mac").font(.system(size: 14)).foregroundStyle(Color.slate)
                 }
+                Button { model.clear() } label: {
+                    HStack(spacing: 6) { Text("Cancel"); KeyHint(key: "esc") }
+                }
+                .buttonStyle(SecondaryButton())
+                .keyboardShortcut(.cancelAction)
             }
         }
     }
@@ -162,6 +169,11 @@ struct FailedView: View {
                 } else {
                     Button("Choose another file…") { model.choose() }.buttonStyle(PrimaryButton())
                 }
+                Button("Start over") { model.clear() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.slate)
+                    .keyboardShortcut(.cancelAction)
             }
         }
     }
