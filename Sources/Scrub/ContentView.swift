@@ -11,7 +11,11 @@ struct ContentView: View {
             header
             screen
         }
-        .padding(16)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
+        // The title bar is hidden, so the header shares the traffic lights' row.
+        .padding(.top, 4)
+        .ignoresSafeArea(.container, edges: .top)
         .background(Color.fog)
         .foregroundStyle(Color.ink)
         .onDrop(of: [.fileURL], isTargeted: $dragging) { providers in

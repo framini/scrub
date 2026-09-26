@@ -12,6 +12,8 @@ struct ScrubApp: App {
                 .frame(minWidth: 760, minHeight: 540)
                 .onAppear { delegate.model = model }
         }
+        .windowStyle(.hiddenTitleBar)
+        .windowBackgroundDragBehavior(.enabled)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {
