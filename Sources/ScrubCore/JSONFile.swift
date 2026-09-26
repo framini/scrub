@@ -4,43 +4,60 @@ public enum JSONFile: FileFormat {
     public static func process(_ data: Data, job: Job, progress: (Stage, Int, Int) -> Void) throws -> ScrubResult {
         let text = try TextFile.decode(data)
         let root = try OrderedJSON.parse(text)
-        var valueMarks: [String: [Mark]] = [:]
-        var keyMarks: [String: [Mark]] = [:]
-        var unresolved: [Mark] = []
-        var visited = 0
-        func process(_ value: JSONValue, key: String?, path: String, owner: Persona?, keys: [String]) throws -> JSONValue {
-            visited += 1
-            if visited.isMultiple(of: 64) { try Scrubber.checkCancellation() }
+        var leaves: [DocumentLeaf] = []
+        var valueIDs: [String: Int] = [:]
+        var keyIDs: [String: Int] = [:]
+        var nextRecord = 0
+        func collect(_ value: JSONValue, key: String?, path: String, records: [Int], keys: [String]) {
             switch value {
             case .object(let pairs):
-                let first = pairs.first { KeyHints.hint($0.0) == "FIRST_NAME" }?.1.stringValue
-                let last = pairs.first { KeyHints.hint($0.0) == "LAST_NAME" }?.1.stringValue
-                let full = pairs.first { KeyHints.hint($0.0) == "PERSON" }?.1.stringValue
-                let email = pairs.first { KeyHints.hint($0.0) == "EMAIL_ADDRESS" }?.1.stringValue
-                let currentOwner = job.associateRecord(first: first, last: last, full: full, email: email) ?? owner
+                nextRecord += 1
+                let ancestry = records + [nextRecord]
+                for (index, pair) in pairs.enumerated() {
+                    let childPath = path + "/" + String(index)
+                    keyIDs[childPath] = leaves.count
+                    leaves.append(DocumentLeaf(pair.0))
+                    collect(pair.1, key: pair.0, path: childPath, records: ancestry, keys: keys + [pair.0])
+                }
+            case .array(let values):
+                for (index, child) in values.enumerated() {
+                    collect(child, key: key, path: path + "/" + String(index), records: records, keys: keys)
+                }
+            case .string(let string):
+                guard !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                valueIDs[path] = leaves.count
+                leaves.append(DocumentLeaf(string, key: key, records: records, contextWords: Set(keys.flatMap { KeyHints.words($0) })))
+            default: break
+            }
+        }
+        collect(root, key: nil, path: "", records: [], keys: [])
+        progress(.finding, 0, leaves.count)
+        let values = try DocumentPipeline.run(leaves, job: job)
+        progress(.finding, leaves.count, leaves.count)
+        var valueMarks: [String: [Mark]] = [:]
+        var keyMarks: [String: [Mark]] = [:]
+        let unresolved = values.flatMap(\.unresolved)
+        func process(_ value: JSONValue, key: String?, path: String) throws -> JSONValue {
+            switch value {
+            case .object(let pairs):
                 var output: [(String, JSONValue)] = []
                 for (index, pair) in pairs.enumerated() {
                     let childPath = path + "/" + String(index)
-                    let child = try process(pair.1, key: pair.0, path: childPath, owner: currentOwner, keys: keys + [pair.0])
-                    let (scrubbedKey, marks, rest) = try job.scrubValue(pair.0)
-                    let (numbered, digitMarks) = replaceDigits(scrubbedKey, job: job)
-                    keyMarks[childPath] = marks + digitMarks
-                    unresolved += rest
+                    let child = try process(pair.1, key: pair.0, path: childPath)
+                    let scrubbed = keyIDs[childPath].map { values[$0] }
+                    let (numbered, digitMarks) = replaceDigits(scrubbed?.text ?? pair.0, job: job)
+                    keyMarks[childPath] = (scrubbed?.marks ?? []) + digitMarks
                     var unique = numbered
                     while output.contains(where: { $0.0 == unique }) { unique += "_" }
                     output.append((unique, child))
                 }
                 return .object(output)
-            case .array(let values):
-                var output: [JSONValue] = []
-                for (index, child) in values.enumerated() { output.append(try process(child, key: key, path: path + "/" + String(index), owner: owner, keys: keys)) }
-                return .array(output)
-            case .string(let string):
-                guard !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return value }
-                let (out, marks, rest) = try job.scrubValue(string, key: key, owner: owner, contextWords: Set(keys.flatMap { KeyHints.words($0) }))
-                valueMarks[path] = marks
-                unresolved += rest
-                return .string(out)
+            case .array(let children):
+                return .array(try children.enumerated().map { try process($0.element, key: key, path: path + "/" + String($0.offset)) })
+            case .string:
+                guard let id = valueIDs[path] else { return value }
+                valueMarks[path] = values[id].marks
+                return .string(values[id].text)
             case .number(let number):
                 guard let entity = numericEntity(key: key, number: number), let value = Double(number), value.isFinite else { return value }
                 let original = String(format: "%.0f", value)
@@ -55,9 +72,7 @@ public enum JSONFile: FileFormat {
             default: return value
             }
         }
-        progress(.finding, 0, 1)
-        let scrubbed = try process(root, key: nil, path: "", owner: nil, keys: [])
-        progress(.finding, 1, 1)
+        let scrubbed = try process(root, key: nil, path: "")
         progress(.checking, 0, 1)
         let (output, marks) = OrderedJSON.render(scrubbed, valueMarks: valueMarks, keyMarks: keyMarks)
         progress(.checking, 1, 1)

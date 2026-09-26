@@ -157,10 +157,6 @@ enum OrderedJSON {
             let raw = String(decoding: bytes[start..<index], as: UTF8.self)
             let pattern = #"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$"#
             guard !TextRanges.matches(pattern, in: raw).isEmpty else { throw ScrubError.unsupported("invalid_json") }
-            if raw.contains(".") || raw.contains("e") || raw.contains("E") {
-                guard let value = Double(raw), value.isFinite else { throw ScrubError.unsupported("invalid_json") }
-                return .number(String(value))
-            }
             return .number(raw)
         }
     }

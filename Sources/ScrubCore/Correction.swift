@@ -1,5 +1,10 @@
 import Foundation
 
+struct SensitiveOriginal {
+    let original: String
+    let entity: String
+}
+
 struct Replacement {
     let original: String
     let fake: String
@@ -47,10 +52,11 @@ enum Correction {
             } || job.isEmitted(TextRanges.substring(output, range))
         }
         var found: [Span] = []
-        for (index, replacement) in job.replacements.enumerated() {
+        let originals = Array(job.sensitiveOriginals.values) + job.replacements.map { SensitiveOriginal(original: $0.original, entity: $0.entity) }
+        for (index, candidate) in originals.enumerated() {
             if index.isMultiple(of: 64) && Task.isCancelled { return found }
-            for range in TextRanges.ranges(of: replacement.original, in: output) where !ours(range, "") {
-                found.append(Span(range: range, entity: replacement.entity, score: 1.1))
+            for range in TextRanges.ranges(of: candidate.original, in: output) where !ours(range, "") {
+                found.append(Span(range: range, entity: candidate.entity, score: 1.1))
             }
         }
         found.append(contentsOf: job.detector.find(output, gazetteer: job.gazetteer).filter { !ours($0.range, $0.entity) })

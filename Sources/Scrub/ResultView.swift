@@ -154,7 +154,7 @@ private struct TablePreview: View {
                             ForEach(rows.indices, id: \.self) { row in
                                 HStack(spacing: 0) {
                                     ForEach(columns.indices, id: \.self) { column in
-                                        Text(ResultView.highlighted(column < rows[row].count ? rows[row][column] : "", cellMarks[row]?[column] ?? []))
+                                        cell(row: row, column: column)
                                             .font(.system(size: 13))
                                             .lineLimit(1)
                                             .frame(width: widths[column], alignment: .leading)
@@ -180,4 +180,13 @@ private struct TablePreview: View {
             }
         }
     }
+    @ViewBuilder private func cell(row: Int, column: Int) -> some View {
+        let value = column < rows[row].count ? rows[row][column] : ""
+        if value.contains("\n") || value.contains("\r") {
+            Text((value.components(separatedBy: .newlines).first ?? "") + " …").help(value)
+        } else {
+            Text(ResultView.highlighted(value, cellMarks[row]?[column] ?? [])).help(value)
+        }
+    }
+
 }

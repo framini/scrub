@@ -5,6 +5,7 @@ public final class Job {
     private let standIns = StandIns()
     private(set) var gazetteer: [String: Set<String>] = [:]
     private(set) var replacements: [Replacement] = []
+    private(set) var sensitiveOriginals: [String: SensitiveOriginal] = [:]
     private var emitted: Set<String> = []
     public private(set) var counts: [String: Int] = [:]
     public init() {}
@@ -23,15 +24,26 @@ public final class Job {
         let last = identified.first { $0.0 == "LAST_NAME" }?.1
         let email = identified.first { $0.0 == "EMAIL_ADDRESS" }?.1
         if first != nil && last != nil { associate(first: first, last: last, email: email) }
-        for (field, spans) in zip(fields, found) {
+        observeSpans(zip(fields, found).map { ($0.text, $1) })
+        found = fields.map { detector.find($0.text, key: $0.key, gazetteer: gazetteer, contextWords: contextWords) }
+        return found
+    }
+    func observeSpans(_ fields: [(String, [Span])]) {
+        for (text, spans) in fields {
             for span in spans where ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"].contains(span.entity) {
-                let value = TextRanges.substring(field.text, span.range)
+                let value = TextRanges.substring(text, span.range)
                 gazetteer[span.entity, default: []].insert(value)
                 if span.entity == "PERSON" { _ = standIns.people.registerFull(value) }
             }
         }
-        found = fields.map { detector.find($0.text, key: $0.key, gazetteer: gazetteer, contextWords: contextWords) }
-        return found
+    }
+    func recordOriginals(_ fields: [(String, [Span])]) {
+        for (text, spans) in fields {
+            for span in spans {
+                let original = TextRanges.substring(text, span.range)
+                sensitiveOriginals[original.lowercased()] = SensitiveOriginal(original: original, entity: span.entity)
+            }
+        }
     }
     public func replacement(for entity: String, original: String) -> String {
         replacement(for: entity, original: original, persona: nil)

@@ -12,35 +12,35 @@ public enum CSVFile: FileFormat {
         let width = rows.map(\.count).max() ?? 0
         let hasHeader = header(rows, job: job)
         var columns = hasHeader ? rows.removeFirst() : (0..<width).map { "column \($0 + 1)" }
-        let hints = (0..<width).map { $0 < columns.count ? KeyHints.hint(columns[$0]) : nil }
-        var marks: [TableMark] = []
-        var unresolved: [Mark] = []
-        let total = rows.reduce(0) { $0 + $1.count }
-        var done = 0
-        progress(.finding, 0, total)
+        var leaves: [DocumentLeaf] = []
+        var cells: [(Int, Int)] = []
         for row in rows.indices {
-            if row.isMultiple(of: 64) { try Scrubber.checkCancellation() }
-            func field(_ entity: String) -> String? {
-                guard let column = hints.firstIndex(of: entity), column < rows[row].count else { return nil }
-                return rows[row][column]
-            }
-            let owner = job.associateRecord(first: field("FIRST_NAME"), last: field("LAST_NAME"), full: field("PERSON"), email: field("EMAIL_ADDRESS"))
             for column in rows[row].indices {
-                let (output, found, rest) = try job.scrubValue(rows[row][column], key: column < columns.count ? columns[column] : nil, owner: owner)
-                rows[row][column] = output
-                if row < previewRows { marks += found.map { TableMark(row: row, column: column, range: $0.range, entity: $0.entity) } }
-                unresolved += rest
-                done += 1
+                cells.append((row, column))
+                leaves.append(DocumentLeaf(rows[row][column], key: column < columns.count ? columns[column] : nil, records: [row]))
             }
-            progress(.finding, done, total)
         }
+        var headerIDs: [Int] = []
         if hasHeader {
-            for index in columns.indices {
-                let (output, _, rest) = try job.scrubValue(columns[index])
-                columns[index] = output
-                unresolved += rest
+            for column in columns.indices {
+                headerIDs.append(leaves.count)
+                leaves.append(DocumentLeaf(columns[column]))
             }
         }
+        progress(.finding, 0, leaves.count)
+        let values = try DocumentPipeline.run(leaves, job: job)
+        progress(.finding, leaves.count, leaves.count)
+        var marks: [TableMark] = []
+        let unresolved = values.flatMap(\.unresolved)
+        for (index, cell) in cells.enumerated() {
+            rows[cell.0][cell.1] = values[index].text
+            if cell.0 < previewRows {
+                marks += values[index].marks.map { TableMark(row: cell.0, column: cell.1, range: $0.range, entity: $0.entity) }
+            }
+        }
+        for (column, index) in headerIDs.enumerated() { columns[column] = values[index].text }
+        let previewWidth = max(columns.count, rows.prefix(previewRows).map(\.count).max() ?? 0)
+        let previewColumns = columns + Array(repeating: "", count: previewWidth - columns.count)
         progress(.checking, 0, 1)
         var neutralized = 0
         if hasHeader {
@@ -64,16 +64,20 @@ public enum CSVFile: FileFormat {
         let all = (hasHeader ? [columns] : []) + rows
         let output = all.map { $0.map { quote($0, delimiter: delimiter, quoteCharacter: quoteCharacter) }.joined(separator: String(delimiter)) }.joined(separator: newline) + newline
         progress(.checking, 1, 1)
-        return ScrubResult(format: "csv", output: Data(output.utf8), preview: .table(columns: columns, rows: Array(rows.prefix(previewRows)), rowCount: rows.count, marks: marks), counts: job.counts, unresolved: unresolved, neutralized: neutralized)
+        return ScrubResult(format: "csv", output: Data(output.utf8), preview: .table(columns: previewColumns, rows: Array(rows.prefix(previewRows)), rowCount: rows.count, marks: marks), counts: job.counts, unresolved: unresolved, neutralized: neutralized)
     }
     static func sniffDelimiter(_ text: String) -> Character {
         let sample = String(text.prefix(65_536))
-        let lines = sample.split(whereSeparator: \Character.isNewline).prefix(20)
-        return [",", ";", "\t", "|"].max { a, b in
-            let ac = lines.reduce(0) { $0 + $1.filter { $0 == a }.count }
-            let bc = lines.reduce(0) { $0 + $1.filter { $0 == b }.count }
-            return ac < bc
-        } ?? ","
+        var best: Character = ","
+        var bestScore = -1
+        for candidate: Character in [",", ";", "\t", "|"] {
+            guard let rows = try? parse(sample, delimiter: candidate) else { continue }
+            let widths = rows.prefix(50).map(\.count)
+            guard let common = Dictionary(grouping: widths, by: { $0 }).max(by: { $0.value.count < $1.value.count }), common.key > 1 else { continue }
+            let score = common.value.count * 100 + common.key
+            if score > bestScore { best = candidate; bestScore = score }
+        }
+        return best
     }
     static func sniffQuote(_ text: String, delimiter: Character) -> Character {
         let escaped = NSRegularExpression.escapedPattern(for: String(delimiter))
@@ -85,23 +89,25 @@ public enum CSVFile: FileFormat {
         var row: [String] = []
         var field = ""
         var quoted = false
-        let chars = Array(text)
+        let chars = Array(text.unicodeScalars)
+        let separator = delimiter.unicodeScalars.first
+        let quote = quoteCharacter.unicodeScalars.first
         var index = 0
         while index < chars.count {
             let char = chars[index]
             if quoted {
-                if char == quoteCharacter {
-                    if index + 1 < chars.count && chars[index + 1] == quoteCharacter { field.append(quoteCharacter); index += 1 }
+                if char == quote {
+                    if index + 1 < chars.count && chars[index + 1] == quote { field.unicodeScalars.append(char); index += 1 }
                     else { quoted = false }
-                } else { field.append(char) }
-            } else if char == quoteCharacter && field.isEmpty { quoted = true }
-            else if char == delimiter { row.append(field); field = "" }
+                } else { field.unicodeScalars.append(char) }
+            } else if char == quote && field.isEmpty { quoted = true }
+            else if char == separator { row.append(field); field = "" }
             else if char == "\n" || char == "\r" {
                 row.append(field); field = ""
-                if !row.isEmpty { rows.append(row) }
+                rows.append(row)
                 row = []
                 if char == "\r" && index + 1 < chars.count && chars[index + 1] == "\n" { index += 1 }
-            } else { field.append(char) }
+            } else { field.unicodeScalars.append(char) }
             index += 1
         }
         if quoted { throw ScrubError.unsupported("invalid_csv") }

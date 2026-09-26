@@ -5,12 +5,12 @@ enum Context {
     static let name: Set<String> = ["called", "named", "mr", "mrs", "ms", "dr", "contact", "owner", "customer", "patient", "employee", "its", "it's", "im", "i'm", "with", "w", "spoke", "ask", "tell", "cc"]
     static func before(_ range: Range<Int>, in text: String, limit: Int) -> Set<String> {
         let prefix = TextRanges.substring(text, 0..<range.lowerBound)
-        let words = TextRanges.matches("[A-Za-z]+", in: prefix).suffix(limit)
+        let words = TextRanges.matches("[A-Za-z]+(?:['][A-Za-z]+)?", in: prefix).suffix(limit)
         return Set(words.map { TextRanges.substring(prefix, $0.range.location..<NSMaxRange($0.range)).lowercased() })
     }
     static func after(_ range: Range<Int>, in text: String, limit: Int) -> Set<String> {
         let suffix = TextRanges.substring(text, range.upperBound..<(text as NSString).length)
-        let words = TextRanges.matches("[A-Za-z]+", in: suffix).prefix(limit)
+        let words = TextRanges.matches("[A-Za-z]+(?:['][A-Za-z]+)?", in: suffix).prefix(limit)
         return Set(words.map { TextRanges.substring(suffix, $0.range.location..<NSMaxRange($0.range)).lowercased() })
     }
     static func enhanced(_ base: Double, words: Set<String>, range: Range<Int>, text: String) -> Double {

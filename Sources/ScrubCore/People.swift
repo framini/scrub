@@ -27,7 +27,7 @@ final class People {
     private var rng = SystemRandomNumberGenerator()
     private func fold(_ value: String) -> String { value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX")).trimmingCharacters(in: .whitespacesAndNewlines) }
     private func pick(_ values: [String]) -> String { values.randomElement(using: &rng) ?? "Alex" }
-    func register(_ first: String?, _ last: String?) -> Persona {
+    func register(_ first: String?, _ last: String?, emailSafe: Bool = false) -> Persona {
         let f = first.map(fold), l = last.map(fold)
         if let found = personas.first(where: { $0.realFirst == f && $0.realLast == l }) { return found }
         let candidates = personas.filter { (f == nil || $0.realFirst == nil || $0.realFirst == f) && (l == nil || $0.realLast == nil || $0.realLast == l) }
@@ -35,8 +35,10 @@ final class People {
             found.realFirst = found.realFirst ?? f; found.realLast = found.realLast ?? l
             return found
         }
-        let firstChoices = Names.first.filter { fold($0) != f }
-        let lastChoices = Names.last.filter { fold($0) != l }
+        let originals = [f, l].compactMap { $0 }.filter { $0.count >= 3 }
+        func safe(_ candidate: String) -> Bool { !originals.contains { fold(candidate).contains($0) } }
+        let firstChoices = Names.first.filter(safe)
+        let lastChoices = Names.last.filter { safe($0) && (!emailSafe || $0.allSatisfy { $0.isASCII && $0.isLetter }) }
         let person = Persona(realFirst: f, realLast: l, first: pick(firstChoices), last: pick(lastChoices))
         personas.append(person)
         return person
@@ -69,7 +71,7 @@ final class People {
     }
     func associate(first: String?, last: String?, email: String?) {
         guard first != nil || last != nil else { return }
-        let person = register(first, last)
+        let person = register(first, last, emailSafe: email != nil)
         if let email { associatedEmails[fold(email)] = person }
     }
     func email(for person: Persona, original: String) -> String {

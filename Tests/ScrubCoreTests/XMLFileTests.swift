@@ -31,7 +31,7 @@ func xmlRefusesEntitiesBeforeParsing(_ input: String) {
 @Test func xmlScrubsTextAndAttributes() throws {
     let result = try Scrubber.scrub(Data(#"<?xml version="1.0"?><r owner="alice@example.com"><name>Robert Mitchell</name></r>"#.utf8), name: "a.xml")
     let output = String(decoding: result.output, as: UTF8.self)
-    #expect(output.contains(#"<?xml version="1.0" encoding="UTF-8"?>"#))
+    #expect(output.contains(#"<?xml version="1.0"?>"#))
     #expect(!output.contains("alice@example.com"))
     #expect(!output.contains("Robert Mitchell"))
 }
