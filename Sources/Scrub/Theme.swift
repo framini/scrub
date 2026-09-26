@@ -36,13 +36,14 @@ struct PrimaryButton: ButtonStyle {
 
 struct KeyHint: View {
     let key: String
+    var onDark = false
     var body: some View {
         Text(key)
             .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(Color.slate)
+            .foregroundStyle(onDark ? Color.snow.opacity(0.85) : Color.slate)
             .padding(.horizontal, 5)
             .frame(minHeight: 18)
-            .background(Color.ink.opacity(0.07), in: .rect(cornerRadius: 4))
+            .background(onDark ? Color.snow.opacity(0.16) : Color.ink.opacity(0.07), in: .rect(cornerRadius: 4))
     }
 }
 

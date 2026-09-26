@@ -38,8 +38,14 @@ struct ResultView: View {
             }
             .buttonStyle(SecondaryButton())
             .keyboardShortcut(.cancelAction)
-            Button(finished.copied ? "Copied" : "Copy") { model.copy() }.buttonStyle(SecondaryButton())
-            Button(finished.savedAs == nil ? "Save…" : "Save again…") { model.save() }.buttonStyle(PrimaryButton())
+            Button { model.copy() } label: {
+                HStack(spacing: 6) { Text(finished.copied ? "Copied" : "Copy"); KeyHint(key: "⇧⌘C") }
+            }
+            .buttonStyle(SecondaryButton())
+            Button { model.save() } label: {
+                HStack(spacing: 6) { Text(finished.savedAs == nil ? "Save…" : "Save again…"); KeyHint(key: "⌘S", onDark: true) }
+            }
+            .buttonStyle(PrimaryButton())
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
