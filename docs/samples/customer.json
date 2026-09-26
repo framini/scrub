@@ -1,0 +1,15 @@
+{
+  "customer": {
+    "id": "C-10482",
+    "name": "Maria Gonzalez",
+    "email": "maria.gonzalez@northwind.io",
+    "phone": "+1 (415) 555-0132",
+    "address": "1847 Valencia Street, San Francisco, CA 94110",
+    "date_of_birth": "1986-04-12"
+  },
+  "payment": { "card": "4111 1111 1111 1111", "expires": "09/28" },
+  "api_key": "sk_live_4eC39HqLyjWDarjtT1zdp7dc",
+  "notes": "Maria asked to move her renewal to March. Call back after 3pm.",
+  "plan": "Team",
+  "seats": 12
+}
