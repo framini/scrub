@@ -203,7 +203,9 @@ struct OfflineNote: View {
                 if !Task.isCancelled { shown = inside }
             }
         }
-        .popover(isPresented: $shown, arrowEdge: .bottom) { HowItWorks() }
+        .popover(isPresented: $shown, arrowEdge: .bottom) {
+            HowItWorks().presentationBackground(Color.snow)
+        }
         .onChange(of: shown) { _, now in if !now { pinned = false } }
     }
 }

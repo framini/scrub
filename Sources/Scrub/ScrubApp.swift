@@ -10,6 +10,9 @@ struct ScrubApp: App {
         Window("Scrub", id: "main") {
             ContentView(model: model)
                 .frame(minWidth: 760, minHeight: 540)
+                // The palette is light only; system chrome (popovers, menus,
+                // panels) must match it rather than the system appearance.
+                .preferredColorScheme(.light)
                 .onAppear { delegate.model = model }
         }
         .windowStyle(.hiddenTitleBar)
