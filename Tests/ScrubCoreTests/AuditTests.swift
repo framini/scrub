@@ -223,3 +223,26 @@ func knownFirstNameAloneOnASignOffIsReplaced(_ input: String) throws {
     let result = try Scrubber.scrub(data, name: "a.json", forceFullDetection: false, seed: 42)
     #expect(result.output == data)
 }
+
+@Test func quotedAndReversedDisplayNamesBeforeAnEmailArePeople() throws {
+    let (output, _) = try run("From: \"Priya Raghunathan\" <priya.r@northwind.io>\nTo: Adeyemi, Oluwaseun <o.adeyemi@northwind.io>\nCc: Ann Smith, \"Raghunathan, Priya\" <priya.r@northwind.io>\n", name: "")
+    #expect(!output.contains("Priya") && !output.contains("Raghunathan") && !output.contains("Adeyemi") && !output.contains("Oluwaseun"))
+    #expect(output.contains("To: ") && output.range(of: #"To: \p{Lu}[\p{L}'’-]*, \p{Lu}"#, options: .regularExpression) != nil)
+}
+
+@Test func roleColumnsCountWithoutARecognisedHeader() throws {
+    let (csv, _) = try run("Ticket,Assigned To,Account Manager,Reporter,Owner,Status\nT-1,Priya Raghunathan,Daniel Okafor,Oluwaseun Adeyemi,Platform Team,Open\n", name: "a.csv")
+    #expect(!csv.contains("Raghunathan") && !csv.contains("Okafor") && !csv.contains("Adeyemi"))
+    #expect(csv.contains("Platform Team") && csv.contains("T-1") && csv.contains("Open"))
+}
+
+@Test func teamNamesUnderRoleKeysStayTeams() throws {
+    let (json, _) = try run(#"{"owner":"Platform Team","owner_team":"Data Platform","rep":"Q3 Sales Report","support":"Support Team <support@northwind.io>"}"#, name: "a.json")
+    #expect(json.contains("Platform Team") && json.contains("Data Platform") && json.contains("Q3 Sales Report") && json.contains("Support Team"))
+}
+
+@Test func roleValuesInOtherNameShapes() throws {
+    let (json, _) = try run(#"{"assigned_to":"Raghunathan, Priya","manager":"Oluwaseun Adeyemi (Support)","owner":"Maria","reporter":"u_1234"}"#, name: "a.json")
+    #expect(!json.contains("Priya") && !json.contains("Raghunathan") && !json.contains("Adeyemi") && !json.contains("Maria"))
+    #expect(json.contains("(Support)") && json.contains("u_1234"))
+}

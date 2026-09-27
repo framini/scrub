@@ -221,8 +221,16 @@ final class People {
             attempt += 1
         }
     }
+    /// "Raghunathan, Priya" written first name first, or nil when the value isn't in that form.
+    static func naturalOrder(_ value: String) -> String? {
+        let halves = value.split(separator: ",", omittingEmptySubsequences: false)
+        guard halves.count == 2 else { return nil }
+        let last = halves[0].trimmingCharacters(in: .whitespaces), rest = halves[1].trimmingCharacters(in: .whitespaces)
+        guard !last.isEmpty, !rest.isEmpty, !last.contains(where: \.isWhitespace) else { return nil }
+        return rest + " " + last
+    }
     func registerFull(_ value: String, emailSafe: Bool = false) -> (Persona, Int) {
-        var tokens = value.split { $0.isWhitespace || $0 == "," }.map(String.init)
+        var tokens = (Self.naturalOrder(value) ?? value).split { $0.isWhitespace || $0 == "," }.map(String.init)
         while let first = tokens.first, ["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "madam"].contains(first.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) { tokens.removeFirst() }
         if tokens.count >= 2 { return (register(tokens.first, tokens.last, emailSafe: emailSafe, middle: tokens.count > 2 ? tokens.dropFirst().dropLast().joined(separator: " ") : nil), 2) }
         if let token = tokens.first {
@@ -242,6 +250,7 @@ final class People {
     }
     func name(for value: String) -> String {
         let (person, parts) = registerFull(value)
+        if parts == 2, Self.naturalOrder(value) != nil { return person.last + ", " + person.first }
         return parts == 1 ? person.first : parts == -1 ? person.last : person.full
     }
     func find(email: String) -> Persona? {

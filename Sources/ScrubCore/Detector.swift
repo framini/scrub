@@ -44,12 +44,18 @@ public final class Detector {
             return Self.resolve(spans)
         }
     }
-    private static let nameShape = TextPattern(#"^\s*(\p{Lu}[\p{L}'’.-]*(?:\s+\p{Lu}[\p{L}'’.-]*){1,3})\s*$"#)
-    /// The range of a value written as a full name: two to four capitalised words.
+    private static let nameShape = TextPattern(#"^\s*(\p{Lu}[\p{L}'’.-]*(?:\s+\p{Lu}[\p{L}'’.-]*){1,3}|\p{Lu}[\p{L}'’.-]*,\s*\p{Lu}[\p{L}'’.-]*(?:\s+\p{Lu}[\p{L}'’.-]*)?)\s*(?:\([^()]*\))?\s*$"#)
+    private static let loneFirst = TextPattern(#"^\s*(\p{Lu}\p{Ll}+)\s*$"#)
+    /// The range of a value written as a name: two to four capitalised words, "Last, First",
+    /// either with a trailing note like "(Support)", or a known first name alone.
     static func writtenName(_ text: String) -> Range<Int>? {
-        guard let match = TextRanges.matches(nameShape, in: text).first else { return nil }
-        let range = match.range(at: 1)
-        return range.location..<NSMaxRange(range)
+        let match = TextRanges.matches(nameShape, in: text).first
+            ?? TextRanges.matches(loneFirst, in: text).first.flatMap { match in
+                Names.unambiguousFirst.contains(TextRanges.substring(text, match.range(at: 1).location..<NSMaxRange(match.range(at: 1))).lowercased()) ? match : nil
+            }
+        guard let match else { return nil }
+        let range = match.range(at: 1).location..<NSMaxRange(match.range(at: 1))
+        return NameTagger.namesOrganisation(TextRanges.substring(text, range)) ? nil : range
     }
     private func system(_ text: String) -> [Span] {
         guard let detector = systemDetector else { return [] }

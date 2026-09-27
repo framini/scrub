@@ -152,7 +152,7 @@ public enum CSVFile: FileFormat {
     }
     private static func header(_ rows: [[String]], job: Job) -> Bool {
         guard let first = rows.first else { return false }
-        if first.contains(where: { KeyHints.hint($0) != nil }) { return true }
+        if first.contains(where: { KeyHints.hint($0) != nil || KeyHints.isRole($0) }) { return true }
         if first.contains(where: { cell in job.detector.find(cell).contains { ["EMAIL_ADDRESS", "PHONE_NUMBER", "CREDIT_CARD", "US_SSN", "IP_ADDRESS", "IBAN_CODE"].contains($0.entity) } }) { return false }
         guard rows.count > 1 else { return true }
         let firstNumeric = first.filter { Double($0) != nil }.count

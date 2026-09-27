@@ -7,7 +7,10 @@ enum NameTagger {
     private static let asciiWord = TextPattern(#"[A-Za-z]+"#)
     private static let letterWord = TextPattern(#"\p{L}[\p{L}'’-]*"#)
     private static let loneLine = TextPattern(#"(?m)^[ \t]*(\p{Lu}\p{Ll}+)[ \t]*\r?$"#)
-    private static let organisationWords: Set<String> = ["foundation", "inc", "llc", "ltd", "corp", "company", "group", "university", "bank", "institute", "hospital"]
+    static let organisationWords: Set<String> = ["foundation", "inc", "llc", "ltd", "corp", "company", "group", "university", "bank", "institute", "hospital", "team", "teams", "ops", "bot", "desk", "helpdesk", "office", "region", "network", "report", "folder", "notes", "billing", "support", "platform", "data", "sales", "admin", "service", "services", "department", "dept", "engineering", "finance", "marketing", "security", "alerts", "notifications", "infra", "squad", "committee", "board", "council", "staff", "center", "centre", "labs", "systems", "solutions", "partners"]
+    static func namesOrganisation(_ text: String) -> Bool {
+        text.split(whereSeparator: { !$0.isLetter }).contains { organisationWords.contains($0.lowercased()) }
+    }
     static func find(_ text: String, using tagger: NLTagger, isCancelled: () -> Bool) -> [Span] {
         if !text.contains(where: { $0.isUppercase || $0.isWhitespace }) && !Names.firstFolded.contains(text.lowercased()) && !Names.lastFolded.contains(text.lowercased()) { return [] }
         var spans = tag(text, mappedTo: text, variant: false, tagger: tagger, isCancelled: isCancelled)
@@ -66,7 +69,7 @@ enum NameTagger {
             let nextWord = TextRanges.matches(leadingWord, in: following).first.map {
                 TextRanges.substring(following, $0.range.location..<NSMaxRange($0.range)).trimmingCharacters(in: .whitespaces).lowercased()
             }
-            if written.split(whereSeparator: { !$0.isLetter }).contains(where: { organisationWords.contains($0.lowercased()) }) || nextWord.map({ organisationWords.contains($0) }) == true { return true }
+            if namesOrganisation(written) || nextWord.map({ organisationWords.contains($0) }) == true { return true }
             if tag == .personalName { mapped = trimmedToWrittenCapitals(mapped, in: original) }
             if tag == .personalName {
                 let value = TextRanges.substring(original, mapped)

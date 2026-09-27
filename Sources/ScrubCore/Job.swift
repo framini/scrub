@@ -52,7 +52,7 @@ public final class Job {
     // first name is no English word, so "thanks daniel" counts too, and so do
     // handles like "daniel.okafor".
     private func rememberParts(of name: String) {
-        let tokens = name.split { $0.isWhitespace || $0 == "," }.map(String.init)
+        let tokens = (People.naturalOrder(name) ?? name).split { $0.isWhitespace || $0 == "," }.map(String.init)
         guard tokens.count >= 2, let first = tokens.first, let last = tokens.last else { return }
         let parts = [first, last].filter { part in
             part.count >= 2 && part.first?.isUppercase == true
