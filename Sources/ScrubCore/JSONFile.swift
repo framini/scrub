@@ -21,7 +21,9 @@ public enum JSONFile: FileFormat {
                     let childPath = path + "/" + String(index)
                     keyIDs[childPath] = leaves.count
                     leaves.append(DocumentLeaf(pair.0))
-                    let inherited = KeyHints.hint(pair.0) == nil && KeyHints.hint(key) == "SECRET" ? key : pair.0
+                    var inherited = KeyHints.inherits(pair.0, from: key) ? key : pair.0
+                    if KeyHints.isBareName(pair.0), case .string(let name) = pair.1,
+                       !KeyHints.bareNameIsPerson(name, siblings: pairs.map(\.0), parent: key) { inherited = nil }
                     collect(pair.1, key: inherited, path: childPath, records: ancestry, keys: keys + [pair.0])
                 }
             case .array(let values):
@@ -96,8 +98,9 @@ public enum JSONFile: FileFormat {
         return (output, marks)
     }
     static func numericEntity(key: String?, number: String) -> String? {
-        if let hint = KeyHints.hint(key) { return hint }
-        guard let value = Double(number), value.isFinite else { return nil }
+        guard let value = Double(number), value.isFinite else { return KeyHints.hint(key) }
+        // A score like 0.99 under "dob" or "city" rates the field; it holds no value of it.
+        if let hint = KeyHints.hint(key) { return value.rounded() == value ? hint : nil }
         let floating = number.contains(".") || number.contains("e") || number.contains("E")
         let integer = floating ? String(format: "%.0f", abs(value)) : (number.hasPrefix("-") ? String(number.dropFirst()) : number)
         let digits = integer.compactMap(\.wholeNumberValue)

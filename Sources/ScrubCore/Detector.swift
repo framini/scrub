@@ -18,12 +18,15 @@ public final class Detector {
         autoreleasepool {
             if let entity = KeyHints.hint(key), !text.isEmpty { return [Span(range: 0..<(text as NSString).length, entity: entity, score: 1)] }
             if KeyHints.isRole(key), let name = Self.writtenName(text) { return [Span(range: name, entity: "PERSON", score: 1)] }
+            // A time zone ("America/New_York") names a region, not where someone lives.
+            if text.contains("/"), text.count < 64, !TextRanges.matches(Self.timeZone, in: text).isEmpty { return [] }
             let plainWord = text.allSatisfy { $0.isASCII && $0.isLowercase }
                 && !Names.firstFolded.contains(text) && !Names.lastFolded.contains(text)
             guard !plainWord else { return [] }
             var spans = Patterns.find(text, contextWords: Set(KeyHints.words(key)).union(contextWords), isCancelled: isCancelled)
             spans.append(contentsOf: system(text))
             spans.append(contentsOf: NameTagger.find(text, using: tagger, isCancelled: isCancelled))
+            spans.append(contentsOf: KeyedValues.find(text, isCancelled: isCancelled))
             return spans
         }
     }
@@ -44,6 +47,8 @@ public final class Detector {
             return Self.resolve(spans)
         }
     }
+    private static let timeZone = TextPattern(#"^\s*(?i:africa|america|antarctica|arctic|asia|atlantic|australia|europe|indian|pacific|etc)/[A-Za-z_+-]+(?:/[A-Za-z_+-]+)?\s*$"#)
+    private static let decimal = TextPattern(#"^[-+]?\d+\.\d+$"#)
     private static let nameShape = TextPattern(#"^\s*(\p{Lu}[\p{L}'’.-]*(?:\s+\p{Lu}[\p{L}'’.-]*){1,3}|\p{Lu}[\p{L}'’.-]*,\s*\p{Lu}[\p{L}'’.-]*(?:\s+\p{Lu}[\p{L}'’.-]*)?)\s*(?:\([^()]*\))?\s*$"#)
     private static let loneFirst = TextPattern(#"^\s*(\p{Lu}\p{Ll}+)\s*$"#)
     /// The range of a value written as a name: two to four capitalised words, "Last, First",
@@ -64,7 +69,13 @@ public final class Detector {
             let entity: String
             let score: Double
             switch match.resultType {
-            case .phoneNumber: entity = "PHONE_NUMBER"; score = 0.75
+            case .phoneNumber:
+                let value = TextRanges.substring(text, match.range.location..<NSMaxRange(match.range))
+                // A coordinate like "-122.4443" is no phone number.
+                guard TextRanges.matches(Self.decimal, in: value).isEmpty else { return nil }
+                // A bare run of digits may as well be an account, SSN or ID, so its
+                // stand-in keeps the digits instead of becoming "+1 555-…".
+                entity = value.allSatisfy(\.isNumber) ? "ID_NUMBER" : "PHONE_NUMBER"; score = 0.75
             case .address: entity = "ADDRESS"; score = 0.6
             default: return nil
             }

@@ -187,3 +187,79 @@ func orderedJSONFixtureOutput(_ name: String) throws {
     #expect(out["card_number"] != 4111111111111112)
     #expect(out["total"] == 4111111111111112)
 }
+
+// An identity request where the ID sits under a plain "value" key.
+@Test func jsonIDNumberUnderValueKeyStaysAnIDNumber() throws {
+    let input = #"{"user":{"id_number":{"value":"123456789","type":"us_ssn"},"secret":{"type":"api"}}}"#
+    let result = try Scrubber.scrub(Data(input.utf8), name: "a.json")
+    let out = try #require(JSONSerialization.jsonObject(with: result.output) as? [String: Any])
+    let id = try #require((out["user"] as? [String: Any])?["id_number"] as? [String: Any])
+    let value = try #require(id["value"] as? String)
+    #expect(value != "123456789")
+    #expect(value.range(of: #"^\d{9}$"#, options: .regularExpression) != nil)
+    #expect(id["type"] as? String == "us_ssn")
+}
+
+// Owners hold lists of one field each, and the account itself has a "name".
+@Test func jsonFieldListsAreHintedAndAccountNamesStay() throws {
+    let input = #"""
+    {"accounts":[{"name":"Everyday Checking","subtype":"checking","owners":[{
+      "names":["Alberta Bobbeth Charleson"],
+      "emails":[{"data":"accountholder0@example.com","type":"primary"}],
+      "phone_numbers":[{"data":"2025550123","type":"home"}],
+      "addresses":[{"data":{"street":"2992 Cameron Road","region":"NY"}}]
+    }]}],"user":{"legal_name":"Jane Smith"},"cells":["A1"]}
+    """#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    for original in ["Alberta", "Charleson", "accountholder0", "2025550123", "Cameron", "Jane Smith"] { #expect(!output.contains(original)) }
+    for kept in [#""name": "Everyday Checking""#, #""subtype": "checking""#, #""region": "NY""#, #""type": "home""#, #""A1""#] { #expect(output.contains(kept)) }
+}
+
+@Test(arguments: [
+    (#"{"id":7,"name":"Robert Mitchell"}"#, true),
+    (#"{"name":"Priya Raghunathan","email":"p@example.org"}"#, true),
+    (#"{"customers":[{"name":"Priya Raghunathan"}]}"#, true),
+    (#"{"manager":{"name":"Priya Raghunathan"}}"#, true),
+    (#"{"plan":{"name":"Premium Checking","seats":12}}"#, false)
+])
+func bareNameKeyNeedsAPersonRecord(_ input: String, _ replaced: Bool) throws {
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    let original = input.contains("Robert") ? "Robert Mitchell" : input.contains("Priya") ? "Priya Raghunathan" : "Premium Checking"
+    #expect(output.contains(original) != replaced)
+}
+
+// Verification results reuse personal keys for statuses.
+@Test func statusValuesUnderPersonalKeysStay() throws {
+    let input = #"""
+    {"user":{"name":{"given_name":"Leslie","family_name":"Knope"},"date_of_birth":"1990-05-29"},
+     "analysis":{"name":"match","first_name":"match","last_name":"no_match","date_of_birth":"match","postal_code":"no_data","street":"partial_match","city":"match","id_number":"match"},
+     "authenticity":"match","gender":"match"}
+    """#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("Leslie") && !output.contains("Knope") && !output.contains("1990-05-29"))
+    #expect(output.components(separatedBy: "\"match\"").count - 1 == 7)
+    for kept in ["no_match", "no_data", "partial_match"] { #expect(output.contains("\"\(kept)\"")) }
+}
+
+// Response shapes that used to be replaced, or replaced with the wrong kind of value.
+@Test func verificationResponseKeepsDataAndReplacesPeople() throws {
+    let input = #"""
+    {"eval_id":"11111111-2222-3333-4444-555555555555","id":"Case_FPF-1761754896062",
+     "account":{"accountNumber":"92301962141","routingNumber":"122199983"},"request":{"ein":"912355201","entity":"111223333"},
+     "business":{"name":"NORTHWIND","website":"https://northwind.io/","phone":"+12125554540"},
+     "response":{"callerName":"Jane Doe","phoneNumber":"+14155551212"},
+     "address":{"line_1":"463 Mertz Motorway","locality":"San Francisco","postal_code":"94105"},
+     "sourceAttribution":{"firstName":["Government"],"address":["USPS","Utility Records"]},
+     "fieldValidations":{"dob":0.99,"firstName":0.99},
+     "timezones":["america/new_york"],"attributes":{"timeZone":"America/Los_Angeles"},
+     "userAgent":"Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"}
+    """#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    for kept in ["11111111-2222-3333-4444-555555555555", "Case_FPF-1761754896062", #""NORTHWIND""#, "https://northwind.io/", #""Government""#, #""USPS""#, #""Utility Records""#,
+                 #""dob": 0.99"#, #""america/new_york""#, #""America/Los_Angeles""#, "Chrome/131.0.0.0"] { #expect(output.contains(kept)) }
+    for replaced in ["92301962141", "122199983", "912355201", "111223333", "Jane Doe", "Mertz", "San Francisco", "94105"] { #expect(!output.contains(replaced)) }
+    for key in ["accountNumber", "routingNumber", "ein", "entity"] {
+        #expect(output.range(of: #""\#(key)": "\d{9,11}""#, options: .regularExpression) != nil)
+    }
+    #expect(output.range(of: #""locality": "[^"]+""#, options: .regularExpression).map { !output[$0].contains("San Francisco") && !output[$0].contains(" Hill") } == true)
+}
