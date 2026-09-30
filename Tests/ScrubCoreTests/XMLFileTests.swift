@@ -124,3 +124,19 @@ func xmlRefusesEntitiesBeforeParsing(_ input: String) {
 func xmlDoctypeHiddenBehindCommentLookalikesIsRefused(_ xml: String) {
     #expect(throws: ScrubError.unsupported("xml_doctype")) { try Scrubber.scrub(Data(xml.utf8), name: "a.xml") }
 }
+
+@Test func xmlValueUnderHintedElementTakesItsHint() throws {
+    let input = #"<user><id_number><value>123456789</value><type>us_ssn</type></id_number><passport value="X1234567"/></user>"#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.xml").output, as: UTF8.self)
+    #expect(!output.contains("123456789"))
+    #expect(output.range(of: #"<value>\d{9}</value>"#, options: .regularExpression) != nil)
+    #expect(output.contains("<type>us_ssn</type>"))
+    #expect(!output.contains("X1234567"))
+}
+
+@Test func xmlBareNameNeedsAPersonRecord() throws {
+    let input = #"<r><account><name>Everyday Checking</name><mask>0000</mask></account><owner email="p@example.org"><name>Priya Raghunathan</name></owner></r>"#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.xml").output, as: UTF8.self)
+    #expect(output.contains("<name>Everyday Checking</name>"))
+    #expect(!output.contains("Priya"))
+}

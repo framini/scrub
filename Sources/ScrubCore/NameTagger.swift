@@ -7,7 +7,7 @@ enum NameTagger {
     private static let asciiWord = TextPattern(#"[A-Za-z]+"#)
     private static let letterWord = TextPattern(#"\p{L}[\p{L}'’-]*"#)
     private static let loneLine = TextPattern(#"(?m)^[ \t]*(\p{Lu}\p{Ll}+)[ \t]*\r?$"#)
-    static let organisationWords: Set<String> = ["foundation", "inc", "llc", "ltd", "corp", "company", "group", "university", "bank", "institute", "hospital", "team", "teams", "ops", "bot", "desk", "helpdesk", "office", "region", "network", "report", "folder", "notes", "billing", "support", "platform", "data", "sales", "admin", "service", "services", "department", "dept", "engineering", "finance", "marketing", "security", "alerts", "notifications", "infra", "squad", "committee", "board", "council", "staff", "center", "centre", "labs", "systems", "solutions", "partners"]
+    static let organisationWords: Set<String> = ["foundation", "inc", "llc", "ltd", "corp", "company", "group", "university", "bank", "institute", "hospital", "team", "teams", "ops", "bot", "desk", "helpdesk", "office", "region", "network", "report", "folder", "notes", "billing", "support", "platform", "data", "sales", "admin", "service", "services", "department", "dept", "engineering", "finance", "marketing", "security", "alerts", "notifications", "infra", "squad", "committee", "board", "council", "staff", "center", "centre", "labs", "systems", "solutions", "partners", "government", "administration", "agency", "bureau", "records", "utility", "telco", "carrier", "credit", "education", "probate", "usps"]
     static func namesOrganisation(_ text: String) -> Bool {
         text.split(whereSeparator: { !$0.isLetter }).contains { organisationWords.contains($0.lowercased()) }
     }
@@ -86,7 +86,12 @@ enum NameTagger {
                 let knownFullName = tokens.count >= 2 && tokens.first.map { Names.firstFolded.contains($0) } == true
                 guard knownFullName || cued(mapped, in: original) else { return true }
             }
-            result.append(Span(range: mapped, entity: tag == .personalName ? "PERSON" : "LOCATION", score: tag == .personalName ? 0.85 : 0.6))
+            let found = TextRanges.substring(original, mapped)
+            // Acronyms and names in capitals ("PEM", "NORTHWIND") get tagged as places.
+            if tag == .placeName, found == found.uppercased(), !found.contains(" "), !Names.citiesFolded.contains(found.lowercased()) { return true }
+            // "San Francisco" reads as a first name and a surname; the city list knows better.
+            let isCity = tag == .personalName && Names.citiesFolded.contains(found.lowercased())
+            result.append(Span(range: mapped, entity: tag == .personalName && !isCity ? "PERSON" : "LOCATION", score: tag == .personalName && !isCity ? 0.85 : 0.6))
             return true
         }
         return result

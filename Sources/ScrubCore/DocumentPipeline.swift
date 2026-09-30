@@ -12,7 +12,7 @@ struct DocumentLeaf: Sendable {
 
     init(_ text: String, key: String? = nil, records: [Int] = [], contextWords: Set<String> = [], numericEntity: String? = nil) {
         self.text = text
-        self.key = key
+        self.key = numericEntity != nil || KeyHints.fits(key, text) ? key : nil
         self.records = RecordPath(records)
         self.contextWords = contextWords
         self.numericEntity = numericEntity

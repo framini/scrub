@@ -41,7 +41,14 @@ public enum XMLFile: FileFormat {
                 let currentKeys = keys + [local(element.name) ?? ""]
                 let words = Set(currentKeys.flatMap { KeyHints.words($0) })
                 let secret = keys.last { KeyHints.hint($0) == "SECRET" }
-                func key(_ name: String?) -> String? { KeyHints.hint(name) == nil ? secret ?? name : name }
+                func key(_ name: String?, parent: String?, value: String?, siblings: @autoclosure () -> [String]) -> String? {
+                    let key = KeyHints.hint(name) == nil ? secret ?? (KeyHints.inherits(name, from: parent) ? parent : name) : name
+                    if KeyHints.isBareName(key), let value, !KeyHints.bareNameIsPerson(value, siblings: siblings(), parent: parent) { return nil }
+                    return key
+                }
+                func names(_ element: XMLElement?) -> [String] {
+                    ((element?.attributes ?? []) + (element?.children ?? []).filter { $0 is XMLElement }).compactMap { local($0.name) }
+                }
                 addName(element, records: ancestry)
                 for namespace in element.namespaces ?? [] {
                     addName(namespace, records: ancestry)
@@ -49,13 +56,13 @@ public enum XMLFile: FileFormat {
                 }
                 for attribute in element.attributes ?? [] {
                     addName(attribute, records: ancestry)
-                    add(attribute, key: key(local(attribute.name)), records: ancestry, words: words)
+                    add(attribute, key: key(local(attribute.name), parent: local(element.name), value: attribute.stringValue, siblings: names(element)), records: ancestry, words: words)
                 }
                 for child in element.children ?? [] {
                     if child is XMLElement { try walk(child, records: ancestry, keys: currentKeys) }
                     else {
                         if child.kind == .processingInstruction { addName(child, records: ancestry) }
-                        add(child, key: child.kind == .text ? key(local(element.name)) : nil, records: records.isEmpty ? ancestry : records, words: words)
+                        add(child, key: child.kind == .text ? key(local(element.name), parent: keys.last, value: child.stringValue, siblings: names(element.parent as? XMLElement)) : nil, records: records.isEmpty ? ancestry : records, words: words)
                     }
                 }
             } else {
