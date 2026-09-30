@@ -17,6 +17,7 @@ public enum CSVFile: FileFormat {
         var columns = hasHeader ? rows.removeFirst() : (0..<width).map { "column \($0 + 1)" }
         var leaves: [DocumentLeaf] = []
         for row in rows.indices {
+            if row.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
             for column in rows[row].indices {
                 leaves.append(DocumentLeaf(rows[row][column], key: column < columns.count ? columns[column] : nil, records: [row]))
             }

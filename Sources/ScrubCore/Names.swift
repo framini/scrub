@@ -18,4 +18,5 @@ public enum Names {
     public static let unambiguousFirst = Set(first.map { $0.lowercased() }).subtracting(ambiguousFirst)
     public static let firstFolded = Set(first.map { $0.lowercased() })
     public static let lastFolded = Set(last.map { $0.lowercased() })
+    static let citiesFolded = Set(cities.map { $0.lowercased() })
 }
