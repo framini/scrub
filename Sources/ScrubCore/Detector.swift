@@ -26,10 +26,34 @@ public final class Detector {
             var spans = Patterns.find(text, contextWords: Set(KeyHints.words(key)).union(contextWords), isCancelled: isCancelled)
             spans.append(contentsOf: system(text))
             spans.append(contentsOf: NameTagger.find(text, using: tagger, isCancelled: isCancelled))
-            spans.append(contentsOf: KeyedValues.find(text, isCancelled: isCancelled))
+            spans = Self.addressed(spans, in: text)
+            // A title alone ("Mr.", "Ms") names no one.
+            spans.removeAll { span in
+                span.entity == "PERSON" && Self.titles.contains(TextRanges.substring(text, span.range).lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ". ")))
+            }
+            // A timestamp, ID or setting is read as written: its date is no birth
+            // date, its digits no phone number, its region no place.
+            if KeyHints.isStructural(key) { return spans.filter(Self.certain) }
+            let keyed = KeyedValues.scan(text, isCancelled: isCancelled)
+            var quiet = keyed.structural
+            if text.contains("/") { quiet += TextRanges.matches(Self.zoneAnywhere, in: text).map { $0.range.location..<NSMaxRange($0.range) } }
+            // No word inside a UUID is a name ("4ae18f24-cabe-…").
+            if text.contains("-") { quiet += TextRanges.matches(Self.uuid, in: text).map { $0.range.location..<NSMaxRange($0.range) } }
+            if !quiet.isEmpty {
+                spans = spans.filter { span in Self.certain(span) || !quiet.contains { $0.overlaps(span.range) } }
+            }
+            spans.append(contentsOf: keyed.spans)
             return spans
         }
     }
+    /// Found by what the value is, whatever it sits under: an email, a card that
+    /// passes its check digit, an IBAN, an IP address, a key with a known prefix.
+    private static func certain(_ span: Span) -> Bool {
+        ["EMAIL_ADDRESS", "CREDIT_CARD", "IBAN_CODE", "IP_ADDRESS", "SECRET"].contains(span.entity) || span.entity == "US_SSN" && span.score >= 0.85
+    }
+    private static let titles: Set<String> = ["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "madam"]
+    private static let uuid = TextPattern(#"(?i)(?<![0-9a-f-])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f-])"#)
+    private static let zoneAnywhere = TextPattern(#"(?<![A-Za-z])(?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Europe|Indian|Pacific|Etc)/[A-Za-z_+-]+(?:/[A-Za-z_+-]+)?"#)
     func combined(_ base: [Span], text: String, matcher: GazetteerMatcher) -> [Span] {
         autoreleasepool {
             if let first = base.first, first.score == 1, first.range == 0..<(text as NSString).length,
@@ -46,6 +70,51 @@ public final class Detector {
             }
             return Self.resolve(spans)
         }
+    }
+    private static let placeTail = TextPattern(#"^,[ \t]*([A-Z]{2}\b|[A-Z][a-z]+(?: [A-Z][a-z]+){0,3})(?:[ \t,]+(\d{5}(?:-\d{4})?|[A-Za-z]\d[A-Za-z] ?\d[A-Za-z]\d)\b)?"#)
+    private static let cityLine = TextPattern(#"(?<![\p{L}-])(\p{Lu}[\p{Ll}'’.-]+(?: \p{Lu}[\p{Ll}'’.-]+){0,2}), ([A-Z]{2,3}) (\d{5}(?:-\d{4})?|[A-Z]\d[A-Z] ?\d[A-Z]\d|\d{4})(?![\w-])"#)
+    private static let addressee = TextPattern(#"(\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*){1,4})[ \t]*(?:,|\r?\n)[ \t]*$"#)
+    private static let labelWords: Set<String> = ["ship", "to", "bill", "attn", "attention", "deliver", "send", "mail", "address", "customer", "name", "dear", "from", "care", "of", "c/o", "recipient", "sold", "remit"]
+    /// Written addresses carry more than the parts found on their own. A place
+    /// takes the region and postcode after it ("Boise, ID 83702"), and the
+    /// capitalised words before a street address ("Oluwaseun Brightwater,
+    /// 4821 Juniper Hollow Rd") are the person it is for.
+    static func addressed(_ spans: [Span], in text: String) -> [Span] {
+        var result = spans
+        let ns = text as NSString
+        for (index, span) in spans.enumerated() where span.entity == "LOCATION" {
+            let rest = ns.substring(with: NSRange(location: span.range.upperBound, length: min(48, ns.length - span.range.upperBound)))
+            guard let match = TextRanges.matches(placeTail, in: rest).first else { continue }
+            let region = (rest as NSString).substring(with: match.range(at: 1))
+            guard Places.region(region) != nil else { continue }
+            result[index] = Span(range: span.range.lowerBound..<(span.range.upperBound + NSMaxRange(match.range)), entity: "LOCATION", score: max(span.score, 0.8))
+        }
+        // "Boise, ID 83702" and "Laval, QC H7N 5H9" are a place however the sentence around them reads.
+        if text.contains(",") {
+            for match in TextRanges.matches(cityLine, in: text) {
+                let region = ns.substring(with: match.range(at: 2)), postal = ns.substring(with: match.range(at: 3))
+                guard let known = Places.region(region), Places.country(postal: postal) == known.country else { continue }
+                result.append(Span(range: match.range.location..<NSMaxRange(match.range), entity: "LOCATION", score: 0.85))
+            }
+        }
+        for span in spans where span.entity == "ADDRESS" && span.range.lowerBound > 0 {
+            let start = max(0, span.range.lowerBound - 96)
+            let before = ns.substring(with: NSRange(location: start, length: span.range.lowerBound - start))
+            guard let match = TextRanges.matches(addressee, in: before).first else { continue }
+            let window = before as NSString
+            var words = window.substring(with: match.range(at: 1)).split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+            var from = match.range(at: 1).location
+            while let first = words.first, labelWords.contains(first.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ":."))) {
+                from = NSMaxRange(window.range(of: words.removeFirst(), range: NSRange(location: from, length: window.length - from)))
+            }
+            let name = words.joined(separator: " ")
+            guard words.count >= 2, !NameTagger.namesOrganisation(name), !Names.citiesFolded.contains(name.lowercased()) else { continue }
+            let found = window.range(of: words[0], range: NSRange(location: from, length: window.length - from)).location
+            guard found != NSNotFound else { continue }
+            let end = start + NSMaxRange(match.range(at: 1))
+            result.append(Span(range: (start + found)..<end, entity: "PERSON", score: 0.9))
+        }
+        return result
     }
     private static let timeZone = TextPattern(#"^\s*(?i:africa|america|antarctica|arctic|asia|atlantic|australia|europe|indian|pacific|etc)/[A-Za-z_+-]+(?:/[A-Za-z_+-]+)?\s*$"#)
     private static let decimal = TextPattern(#"^[-+]?\d+\.\d+$"#)
@@ -73,6 +142,9 @@ public final class Detector {
                 let value = TextRanges.substring(text, match.range.location..<NSMaxRange(match.range))
                 // A coordinate like "-122.4443" is no phone number.
                 guard TextRanges.matches(Self.decimal, in: value).isEmpty else { return nil }
+                // Ten digits from 1 are a Unix time (2001 to 2033), never a North
+                // American number, whose area code starts from 2.
+                if value.count == 10 || value.count == 13, value.first == "1", value.allSatisfy({ $0.isASCII && $0.isNumber }) { return nil }
                 // A bare run of digits may as well be an account, SSN or ID, so its
                 // stand-in keeps the digits instead of becoming "+1 555-…".
                 entity = value.allSatisfy(\.isNumber) ? "ID_NUMBER" : "PHONE_NUMBER"; score = 0.75

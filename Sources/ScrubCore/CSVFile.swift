@@ -16,17 +16,38 @@ public enum CSVFile: FileFormat {
         let hasHeader = header(rows, job: job)
         var columns = hasHeader ? rows.removeFirst() : (0..<width).map { "column \($0 + 1)" }
         var leaves: [DocumentLeaf] = []
+        // Exports flatten nested records into headers ("billing.address.city").
+        let keys = columns.map { KeyHints.header($0) ?? $0 }
+        // A flattened form field ("fields.0.value") is named by its sibling column ("fields.0.name").
+        let named: [Int: [Int]] = Dictionary(uniqueKeysWithValues: columns.indices.compactMap { column in
+            let parts = KeyHints.words(columns[column])
+            guard let last = parts.last, KeyHints.fieldValueKeys.contains(last), KeyHints.hint(keys[column]) == nil else { return nil }
+            let siblings = columns.indices.filter { other in
+                let words = KeyHints.words(columns[other])
+                return other != column && words.dropLast() == parts.dropLast() && words.last.map(KeyHints.fieldNameKeys.contains) == true
+            }
+            return siblings.isEmpty ? nil : (column, siblings)
+        })
+        let naming = Set(named.values.flatMap { $0 })
         for row in rows.indices {
             if row.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
             for column in rows[row].indices {
-                leaves.append(DocumentLeaf(rows[row][column], key: column < columns.count ? columns[column] : nil, records: [row]))
+                var key = column < keys.count ? keys[column] : nil
+                // A column naming fields holds field names ("zip", "email"), and a bare
+                // "name" is a person's only as it is in JSON.
+                if naming.contains(column) || KeyHints.isBareName(key) && !KeyHints.bareNameIsPerson(rows[row][column], siblings: keys, parent: nil) { key = nil }
+                if let siblings = named[column] {
+                    let texts = siblings.compactMap { $0 < rows[row].count ? (KeyHints.words(columns[$0]).last!, rows[row][$0]) : nil }
+                    key = KeyHints.namedField("value", siblings: texts) ?? key
+                }
+                leaves.append(DocumentLeaf(rows[row][column], key: key, records: [row]))
             }
         }
         var headerIDs: [Int] = []
         if hasHeader {
             for column in columns.indices {
                 headerIDs.append(leaves.count)
-                leaves.append(DocumentLeaf(columns[column]))
+                leaves.append(DocumentLeaf(columns[column], fieldName: true))
             }
         }
         progress(.finding, 0, leaves.count)
@@ -154,6 +175,11 @@ public enum CSVFile: FileFormat {
     private static func header(_ rows: [[String]], job: Job) -> Bool {
         guard let first = rows.first else { return false }
         if first.contains(where: { KeyHints.hint($0) != nil || KeyHints.isRole($0) }) { return true }
+        // A key/value export: a column naming the field beside the column holding it ("Field,Value").
+        let plain = first.map { KeyHints.words($0).joined() }
+        if plain.contains(where: KeyHints.fieldValueKeys.contains), plain.contains(where: KeyHints.fieldNameKeys.contains) { return true }
+        // A flattened field name ("Applicant Address Postcode"), unlike a value, has no number or @ of its own.
+        if first.contains(where: { cell in KeyHints.header(cell) != nil && !cell.contains("@") && !KeyHints.words(cell).contains { $0.allSatisfy(\.isNumber) && $0.count > 1 } }) { return true }
         if first.contains(where: { cell in job.detector.find(cell).contains { ["EMAIL_ADDRESS", "PHONE_NUMBER", "CREDIT_CARD", "US_SSN", "IP_ADDRESS", "IBAN_CODE"].contains($0.entity) } }) { return false }
         guard rows.count > 1 else { return true }
         let firstNumeric = first.filter { Double($0) != nil }.count

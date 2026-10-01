@@ -16,19 +16,22 @@ public enum JSONFile: FileFormat {
             switch value {
             case .object(let pairs):
                 nextRecord += 1
-                let ancestry = records + [nextRecord]
+                let ancestry = KeyHints.isWrapper(pairs.map(\.0)) && !records.isEmpty ? records : records + [nextRecord]
+                let named = pairs.compactMap { pair in pair.1.stringValue.map { (pair.0, $0) } }
                 for (index, pair) in pairs.enumerated() {
                     let childPath = path + "/" + String(index)
                     keyIDs[childPath] = leaves.count
                     leaves.append(DocumentLeaf(pair.0))
-                    var inherited = KeyHints.inherits(pair.0, from: key) ? key : pair.0
+                    var inherited = KeyHints.namedField(pair.0, siblings: named) ?? KeyHints.resolve(pair.0, parent: key)
                     if KeyHints.isBareName(pair.0), case .string(let name) = pair.1,
                        !KeyHints.bareNameIsPerson(name, siblings: pairs.map(\.0), parent: key) { inherited = nil }
                     collect(pair.1, key: inherited, path: childPath, records: ancestry, keys: keys + [pair.0])
                 }
             case .array(let values):
+                let pair = coordinateKeys(key, values)
                 for (index, child) in values.enumerated() {
-                    collect(child, key: key, path: path + "/" + String(index), records: KeyHints.hint(key).map({ ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "USERNAME"].contains($0) }) == true ? [] : records, keys: keys)
+                    // Several names or emails in one list may be several people's; one is the record's own.
+                    collect(child, key: pair?[index] ?? key, path: path + "/" + String(index), records: values.count > 1 && KeyHints.hint(key).map({ ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "USERNAME"].contains($0) }) == true ? [] : records, keys: keys)
                 }
             case .string(let string):
                 guard !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -97,10 +100,25 @@ public enum JSONFile: FileFormat {
         }
         return (output, marks)
     }
+    // Only these can be written as a bare number; a number under "last_name" is a count or a code.
+    private static let numericEntities: Set<String> = ["PHONE_NUMBER", "US_SSN", "ID_NUMBER", "POSTAL_CODE", "DATE_OF_BIRTH", "SECRET", "USERNAME", "AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE"]
+    /// A point written as two numbers: GeoJSON puts the longitude first, a
+    /// "latlng" the latitude, and a number past ±90 can only be a longitude.
+    static func coordinateKeys(_ key: String?, _ values: [JSONValue]) -> [String]? {
+        guard KeyHints.hint(key) == "COORDINATES", values.count == 2 else { return nil }
+        let numbers = values.compactMap { value -> Double? in if case .number(let n) = value { return Double(n) }; return nil }
+        guard numbers.count == 2 else { return nil }
+        let words = KeyHints.words(key).joined()
+        let latitudeFirst = abs(numbers[0]) > 90 ? false : abs(numbers[1]) > 90 ? true : words.hasPrefix("lat")
+        return latitudeFirst ? ["latitude", "longitude"] : ["longitude", "latitude"]
+    }
     static func numericEntity(key: String?, number: String) -> String? {
+        if let hint = KeyHints.hint(key), ["AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE"].contains(hint) { return KeyHints.fits(key, number) ? hint : nil }
+        if let hint = KeyHints.hint(key), !numericEntities.contains(hint) { return nil }
         guard let value = Double(number), value.isFinite else { return KeyHints.hint(key) }
         // A score like 0.99 under "dob" or "city" rates the field; it holds no value of it.
-        if let hint = KeyHints.hint(key) { return value.rounded() == value ? hint : nil }
+        // So is a small one written with a decimal point ("1.00"); 2128675309.0 is still a phone number.
+        if let hint = KeyHints.hint(key) { return value.rounded() == value && (abs(value) >= 1000 || !number.contains(".") && !number.lowercased().contains("e")) ? hint : nil }
         let floating = number.contains(".") || number.contains("e") || number.contains("E")
         let integer = floating ? String(format: "%.0f", abs(value)) : (number.hasPrefix("-") ? String(number.dropFirst()) : number)
         let digits = integer.compactMap(\.wholeNumberValue)

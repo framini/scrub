@@ -189,7 +189,16 @@ final class People {
         }
         return choices.first(where: allowed)?.0 ?? "Alex"
     }
-    func register(_ first: String?, _ last: String?, emailSafe: Bool = false, middle: String? = nil) -> Persona {
+    /// "female" or "male" when a record says so ("gender", "sex", "title", "Ms."),
+    /// so the stand-in first name fits it.
+    static func gender(_ value: String) -> String? {
+        switch value.lowercased().trimmingCharacters(in: CharacterSet.letters.inverted) {
+        case "f", "female", "woman", "w", "girl", "ms", "mrs", "miss", "madam", "she", "she/her", "mother", "wife", "sister", "daughter": "female"
+        case "m", "male", "man", "boy", "mr", "sir", "he", "he/him", "father", "husband", "brother", "son": "male"
+        default: nil
+        }
+    }
+    func register(_ first: String?, _ last: String?, emailSafe: Bool = false, middle: String? = nil, gender: String? = nil) -> Persona {
         let f = first.map(fold), l = last.map(fold), m = middle.map(fold)
         if let found = exact[Key(first: f, last: l, middle: m)] { return found }
         let (count, candidate) = compatible(f, l, m)
@@ -204,16 +213,19 @@ final class People {
             return found
         }
         let originals = [f, l].compactMap { $0 }.filter { $0.count >= 3 }
-        let (first, last) = freshName(originals: originals, emailSafe: emailSafe)
+        let (first, last) = freshName(originals: originals, emailSafe: emailSafe, gender: gender)
         let person = Persona(realFirst: f, realLast: l, first: first, last: last)
         person.realMiddle = m
         add(person)
         return person
     }
-    private func freshName(originals: [String], emailSafe: Bool) -> (String, String) {
+    private static let femaleChoices = firstChoices.filter { Names.female.contains($0.1) }
+    private static let maleChoices = firstChoices.filter { Names.male.contains($0.1) }
+    private func freshName(originals: [String], emailSafe: Bool, gender: String? = nil) -> (String, String) {
         var attempt = 0
+        let firsts = gender == "female" ? Self.femaleChoices : gender == "male" ? Self.maleChoices : Self.firstChoices
         while true {
-            let first = pick(Self.firstChoices, originals: originals, emailSafe: false)
+            let first = pick(firsts, originals: originals, emailSafe: false)
             var last = pick(Self.lastChoices, originals: originals, emailSafe: emailSafe)
             // A suffix also handles documents that exhaust the finite name pool.
             if attempt >= 64 { last += String(attempt) }
@@ -229,14 +241,23 @@ final class People {
         guard !last.isEmpty, !rest.isEmpty, !last.contains(where: \.isWhitespace) else { return nil }
         return rest + " " + last
     }
-    func registerFull(_ value: String, emailSafe: Bool = false) -> (Persona, Int) {
+    private static let titles: Set<String> = ["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "madam"]
+    func registerFull(_ value: String, emailSafe: Bool = false, gender: String? = nil) -> (Persona, Int) {
         var tokens = (Self.naturalOrder(value) ?? value).split { $0.isWhitespace || $0 == "," }.map(String.init)
-        while let first = tokens.first, ["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "madam"].contains(first.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) { tokens.removeFirst() }
-        if tokens.count >= 2 { return (register(tokens.first, tokens.last, emailSafe: emailSafe, middle: tokens.count > 2 ? tokens.dropFirst().dropLast().joined(separator: " ") : nil), 2) }
+        var gender = gender
+        var titled = false
+        while let first = tokens.first, Self.titles.contains(first.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) {
+            gender = gender ?? Self.gender(first)
+            tokens.removeFirst()
+            titled = true
+        }
+        // "Ms. Okafor": a title comes before a surname.
+        if titled, tokens.count == 1 { return (register(nil, tokens[0], emailSafe: emailSafe, gender: gender), -1) }
+        if tokens.count >= 2 { return (register(tokens.first, tokens.last, emailSafe: emailSafe, middle: tokens.count > 2 ? tokens.dropFirst().dropLast().joined(separator: " ") : nil, gender: gender), 2) }
         if let token = tokens.first {
             let last = lastBuckets[fold(token)] ?? Bucket()
             if last.count == 1, let found = last.first { return (found, -1) }
-            return (register(token, nil, emailSafe: emailSafe), 1)
+            return (register(token, nil, emailSafe: emailSafe, gender: gender), 1)
         }
         return (register(nil, nil, emailSafe: emailSafe), 2)
     }
@@ -250,8 +271,10 @@ final class People {
     }
     func name(for value: String) -> String {
         let (person, parts) = registerFull(value)
+        // "Ms. Siobhan Okafor" keeps its title, which the stand-in name fits.
+        let title = value.split(separator: " ").first.map(String.init).flatMap { Self.titles.contains($0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) ? $0 + " " : nil } ?? ""
         if parts == 2, Self.naturalOrder(value) != nil { return person.last + ", " + person.first }
-        return parts == 1 ? person.first : parts == -1 ? person.last : person.full
+        return title + (parts == 1 ? person.first : parts == -1 ? person.last : person.full)
     }
     func find(email: String) -> Persona? {
         if let associated = associatedEmails[fold(email)] { return associated }
@@ -281,6 +304,29 @@ final class People {
         guard first != nil || last != nil else { return }
         let person = register(first, last, emailSafe: email != nil)
         associate(person, email: email)
+    }
+    /// A username built from the stand-in name the way the original is built
+    /// from the real one ("obrightwater74" → "jguerrero31"), or nil when it
+    /// isn't built from the name.
+    func handle(for person: Persona, original: String, digits: (Int) -> String) -> String? {
+        guard let f = person.realFirst?.filter(\.isLetter), let l = person.realLast?.filter(\.isLetter) else { return nil }
+        let letters = original.lowercased().filter(\.isLetter)
+        let separator = original.first { "._-".contains($0) }.map(String.init) ?? ""
+        let first = fold(person.first).filter(\.isLetter), last = fold(person.last).filter(\.isLetter)
+        let initial = String(first.prefix(1))
+        let body: String
+        switch letters {
+        case f + l: body = first + separator + last
+        case String(f.prefix(1)) + l: body = initial + separator + last
+        case l + f: body = last + separator + first
+        case l + String(f.prefix(1)): body = last + separator + initial
+        case f: body = first
+        case l: body = last
+        default: return nil
+        }
+        let count = original.reversed().prefix(while: \.isNumber).count
+        let handle = body + (count > 0 ? digits(count) : "")
+        return original.first?.isUppercase == true ? handle.prefix(1).uppercased() + handle.dropFirst() : handle
     }
     func email(for person: Persona, original: String) -> String {
         let key = fold(original)
