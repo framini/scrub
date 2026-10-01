@@ -6,12 +6,12 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [.library(name: "ScrubCore", targets: ["ScrubCore"])],
     targets: [
-        .target(name: "ScrubCore"),
+        .target(name: "ScrubCore", resources: [.copy("Resources/NameModel.bin"), .copy("Resources/ContextModel.1.bin"), .copy("Resources/ContextModel.2.bin")]),
         .executableTarget(name: "Scrub", dependencies: ["ScrubCore"]),
         // Test-only: signed with the app's exact entitlements to prove the OS
         // refuses every network path. Never shipped.
         .executableTarget(name: "NetworkProbe"),
-        .testTarget(name: "ScrubCoreTests", dependencies: ["ScrubCore"], resources: [.process("Fixtures")]),
+        .testTarget(name: "ScrubCoreTests", dependencies: ["ScrubCore"], exclude: ["NameGaps/baseline.json", "PIIGaps/baseline.json"], resources: [.process("Fixtures")]),
         .testTarget(name: "ScrubTests", dependencies: ["Scrub"]),
     ]
 )

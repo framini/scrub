@@ -70,7 +70,7 @@ enum Correction {
         var found: [Span] = []
         found.append(contentsOf: matcher.spans(in: output).filter { !ours($0.range, "") })
         let detected = base.map { job.detector.combined($0, text: output, matcher: gazetteer) }
-            ?? job.detector.find(output, matcher: gazetteer)
+            ?? job.detector.find(output, matcher: gazetteer, modelled: false)
         // Places the first pass found are originals, and the matcher above finds
         // them. A place detected only now was read from the stand-ins' context
         // ("Later, Larry Alvarado" makes "Later" a city) and names nothing real.
@@ -84,9 +84,11 @@ struct OriginalMatcher {
     let entities: [String]
     private var supplements: [(Matcher, [String])] = []
 
+    /// Stops building once the task is cancelled; every caller checks for
+    /// cancellation before its first match, so a part-built matcher is never used.
     init(_ job: Job) {
         let (literals, labels) = Self.entries(job)
-        matcher = Matcher(literals)
+        matcher = Matcher(literals, isCancelled: { Task.isCancelled })
         entities = labels
     }
     /// Whether an original is long enough to hunt through the rest of the text.
@@ -104,7 +106,7 @@ struct OriginalMatcher {
         guard !originals.isEmpty else { return }
         let literals = originals.map(\.original)
         let labels = originals.map(\.entity)
-        supplements.append((Matcher(literals), labels))
+        supplements.append((Matcher(literals, isCancelled: { Task.isCancelled }), labels))
     }
     private static func entries(_ job: Job) -> ([String], [String]) {
         var literals: [String] = []

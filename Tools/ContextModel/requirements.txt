@@ -1,0 +1,36 @@
+# Development only: rebuilds the context model's weights. Nothing here ships in Scrub.
+# Python 3.12.11. Exact versions, so a rebuild reads and writes what the shipped file did.
+torch==2.14.1
+transformers==5.18.0
+tokenizers==0.23.2
+safetensors==0.8.0
+numpy==2.5.3
+huggingface_hub==1.33.0
+hf-xet==1.6.0
+filelock==4.0.7
+fsspec==2026.9.0
+httpx==0.28.1
+httpcore==1.0.9
+h11==0.16.0
+anyio==4.15.1
+certifi==2026.7.22
+idna==3.20
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+mpmath==1.3.0
+networkx==3.7
+sympy==1.14.0
+packaging==26.3
+PyYAML==6.0.3
+regex==2026.9.29
+tqdm==4.70.1
+typing_extensions==4.16.0
+typer==0.27.2
+click==8.5.0
+shellingham==1.5.4
+rich==15.0.0
+markdown-it-py==4.2.0
+mdurl==0.1.2
+Pygments==2.21.0
+annotated-doc==0.0.5
+setuptools==84.0.0

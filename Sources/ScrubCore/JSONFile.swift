@@ -46,7 +46,7 @@ public enum JSONFile: FileFormat {
         }
         collect(root, key: nil, path: "", records: [], keys: [])
         progress(.finding, 0, leaves.count)
-        let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection)
+        let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
         progress(.finding, leaves.count, leaves.count)
         var valueMarks: [String: [Mark]] = [:]
         var keyMarks: [String: [Mark]] = [:]

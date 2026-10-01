@@ -99,7 +99,7 @@ public enum XMLFile: FileFormat {
         }
         for child in document.children ?? [] { try walk(child, records: [], keys: [], parentKey: nil) }
         progress(.finding, 0, leaves.count)
-        let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection)
+        let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
         progress(.finding, leaves.count, leaves.count)
         var markedValues: [(String, String)] = []
         for (index, node) in nodes.enumerated() {

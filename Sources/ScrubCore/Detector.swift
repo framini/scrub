@@ -11,10 +11,14 @@ public final class Detector {
     public func find(_ text: String, key: String? = nil, gazetteer: [String: Set<String>] = [:], contextWords: Set<String> = []) -> [Span] {
         find(text, key: key, matcher: GazetteerMatcher(gazetteer), contextWords: contextWords)
     }
-    func find(_ text: String, key: String? = nil, matcher: GazetteerMatcher, contextWords: Set<String> = []) -> [Span] {
-        autoreleasepool { combined(base(text, key: key, contextWords: contextWords), text: text, matcher: matcher) }
+    func find(_ text: String, key: String? = nil, matcher: GazetteerMatcher, contextWords: Set<String> = [], modelled: Bool = true) -> [Span] {
+        autoreleasepool { combined(base(text, key: key, contextWords: contextWords, modelled: modelled), text: text, matcher: matcher) }
     }
-    func base(_ text: String, key: String? = nil, contextWords: Set<String> = []) -> [Span] {
+    /// `modelled: false` leaves out the name model, for a sweep over text that
+    /// already holds stand-ins: the model reads the words around each one, so
+    /// it would judge the stand-ins' context rather than the original's.
+    /// `context` holds the context model's findings for the text, which fill only what nothing else found.
+    func base(_ text: String, key: String? = nil, contextWords: Set<String> = [], modelled: Bool = true, context: [Span] = []) -> [Span] {
         autoreleasepool {
             if let entity = KeyHints.hint(key), !text.isEmpty { return [Span(range: 0..<(text as NSString).length, entity: entity, score: 1)] }
             if KeyHints.isRole(key), let name = Self.writtenName(text) { return [Span(range: name, entity: "PERSON", score: 1)] }
@@ -25,12 +29,11 @@ public final class Detector {
             guard !plainWord else { return [] }
             var spans = Patterns.find(text, contextWords: Set(KeyHints.words(key)).union(contextWords), isCancelled: isCancelled)
             spans.append(contentsOf: system(text))
-            spans.append(contentsOf: NameTagger.find(text, using: tagger, isCancelled: isCancelled))
+            var organisations: [Range<Int>] = []
+            spans.append(contentsOf: NameTagger.find(text, using: tagger, organisations: &organisations, isCancelled: isCancelled))
+            let named = modelled ? NameModel.shared?.find(text, isCancelled: isCancelled) ?? [] : []
             spans = Self.addressed(spans, in: text)
-            // A title alone ("Mr.", "Ms") names no one.
-            spans.removeAll { span in
-                span.entity == "PERSON" && Self.titles.contains(TextRanges.substring(text, span.range).lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ". ")))
-            }
+            spans.removeAll { Self.namesNoOne($0, in: text) }
             // A timestamp, ID or setting is read as written: its date is no birth
             // date, its digits no phone number, its region no place.
             if KeyHints.isStructural(key) { return spans.filter(Self.certain) }
@@ -43,6 +46,43 @@ public final class Detector {
                 spans = spans.filter { span in Self.certain(span) || !quiet.contains { $0.overlaps(span.range) } }
             }
             spans.append(contentsOf: keyed.spans)
+            // The words that name a value ("born", "d.o.b.", "passport number") are no one's name.
+            let labelled = ProseLabels.scan(text, isCancelled: isCancelled)
+            spans = spans.filter { span in Self.certain(span) || !labelled.labels.contains { $0.overlaps(span.range) } }
+            spans.append(contentsOf: labelled.spans)
+            // Names a mail header, an office path or a title holds; the path and a header's date hold none.
+            let written = WrittenNames.scan(text, isCancelled: isCancelled)
+            if !written.quiet.isEmpty {
+                spans = spans.filter { span in Self.certain(span) || !written.quiet.contains { $0.overlaps(span.range) } }
+            }
+            spans.append(contentsOf: written.spans)
+            // The name model only fills gaps: where anything else found something, that finding stands.
+            var covered = IndexSet()
+            for range in spans.map(\.range) + quiet + written.quiet + organisations + labelled.labels where !range.isEmpty { covered.insert(integersIn: range) }
+            spans.append(contentsOf: named.filter { !covered.intersects(integersIn: $0.range) && !Self.namesNoOne($0, in: text) })
+            guard !context.isEmpty else { return spans }
+            // The context model fills what is left after the name model. An
+            // employer is the organisation the tagger saw; anything else in one is no one's.
+            var taken = IndexSet(), organised = IndexSet()
+            for range in spans.map(\.range) + quiet + written.quiet + labelled.labels where !range.isEmpty { taken.insert(integersIn: range) }
+            for range in organisations where !range.isEmpty { organised.insert(integersIn: range) }
+            for span in context where !Self.namesNoOne(span, in: text) {
+                // A guess inside the finding gives way to it: part of a non-Latin
+                // name the name model read, or a company's first word the tagger
+                // read as a person ("Orrinvale" of "Orrinvale Freight").
+                let yields = { (other: Span) in
+                    span.range.lowerBound <= other.range.lowerBound && other.range.upperBound <= span.range.upperBound
+                        && (span.entity == "EMPLOYER" ? ["PERSON", "FIRST_NAME", "LAST_NAME", "LOCATION"].contains(other.entity) && other.score <= 0.85
+                                                      : span.entity == "PERSON" && other.score <= NameModel.score)
+                }
+                var blocked = taken
+                for other in spans where yields(other) { blocked.remove(integersIn: other.range) }
+                guard !blocked.intersects(integersIn: span.range) else { continue }
+                guard span.entity == "EMPLOYER" || !organised.intersects(integersIn: span.range) else { continue }
+                spans.removeAll(where: yields)
+                spans.append(span)
+                taken.insert(integersIn: span.range)
+            }
             return spans
         }
     }
@@ -52,6 +92,13 @@ public final class Detector {
         ["EMAIL_ADDRESS", "CREDIT_CARD", "IBAN_CODE", "IP_ADDRESS", "SECRET"].contains(span.entity) || span.entity == "US_SSN" && span.score >= 0.85
     }
     private static let titles: Set<String> = ["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "madam"]
+    /// A title alone ("Mr.", "Ms") or before a role ("Madam Chair", "Mr Justice") names no one.
+    private static func namesNoOne(_ span: Span, in text: String) -> Bool {
+        span.entity == "PERSON" && TextRanges.substring(text, span.range).lowercased().split(separator: " ").allSatisfy { word in
+            let bare = word.trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+            return titles.contains(bare) || WrittenNames.isRole(bare)
+        }
+    }
     private static let uuid = TextPattern(#"(?i)(?<![0-9a-f-])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f-])"#)
     private static let zoneAnywhere = TextPattern(#"(?<![A-Za-z])(?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Europe|Indian|Pacific|Etc)/[A-Za-z_+-]+(?:/[A-Za-z_+-]+)?"#)
     func combined(_ base: [Span], text: String, matcher: GazetteerMatcher) -> [Span] {
@@ -73,6 +120,7 @@ public final class Detector {
     }
     private static let placeTail = TextPattern(#"^,[ \t]*([A-Z]{2}\b|[A-Z][a-z]+(?: [A-Z][a-z]+){0,3})(?:[ \t,]+(\d{5}(?:-\d{4})?|[A-Za-z]\d[A-Za-z] ?\d[A-Za-z]\d)\b)?"#)
     private static let cityLine = TextPattern(#"(?<![\p{L}-])(\p{Lu}[\p{Ll}'’.-]+(?: \p{Lu}[\p{Ll}'’.-]+){0,2}), ([A-Z]{2,3}) (\d{5}(?:-\d{4})?|[A-Z]\d[A-Z] ?\d[A-Z]\d|\d{4})(?![\w-])"#)
+    private static let stacked = TextPattern(#"(?m)^[ \t]*(\d{1,6}[A-Za-z]?[ \t]+\p{Lu}[^\r\n]{1,60}?)[ \t]*\r?\n(?:[ \t]*([^\r\n,]{1,30}?)[ \t]*\r?\n)?[ \t]*(\p{Lu}[\p{L}.'’-]+(?:[ \t]+\p{Lu}[\p{L}.'’-]+){0,2}),[ \t]*(\p{Lu}\p{L}+(?:[ \t]+\p{Lu}\p{L}+){0,2}|[A-Z]{2,3})\.?[ \t]+(\d{5}(?:-\d{4})?|[A-Za-z]\d[A-Za-z][ \t]?\d[A-Za-z]\d)[ \t]*$"#)
     private static let addressee = TextPattern(#"(\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*){1,4})[ \t]*(?:,|\r?\n)[ \t]*$"#)
     private static let labelWords: Set<String> = ["ship", "to", "bill", "attn", "attention", "deliver", "send", "mail", "address", "customer", "name", "dear", "from", "care", "of", "c/o", "recipient", "sold", "remit"]
     /// Written addresses carry more than the parts found on their own. A place
@@ -95,6 +143,16 @@ public final class Detector {
                 let region = ns.substring(with: match.range(at: 2)), postal = ns.substring(with: match.range(at: 3))
                 guard let known = Places.region(region), Places.country(postal: postal) == known.country else { continue }
                 result.append(Span(range: match.range.location..<NSMaxRange(match.range), entity: "LOCATION", score: 0.85))
+            }
+        }
+        // A signature stacks its address: a street, maybe a unit, then "City, ST ZIP".
+        if text.contains("\n") {
+            for match in TextRanges.matches(stacked, in: text) {
+                let unit = match.range(at: 2), region = ns.substring(with: match.range(at: 4)), postal = ns.substring(with: match.range(at: 5))
+                guard let known = Places.region(region), Places.country(postal: postal) == known.country,
+                      unit.location == NSNotFound || ns.substring(with: unit).contains(where: \.isNumber) && ns.substring(with: unit).split(separator: " ").count <= 3 else { continue }
+                let from = match.range(at: 1).location
+                result.append(Span(range: from..<NSMaxRange(match.range(at: 5)), entity: "ADDRESS", score: 0.9))
             }
         }
         for span in spans where span.entity == "ADDRESS" && span.range.lowerBound > 0 {
@@ -133,7 +191,12 @@ public final class Detector {
     }
     private func system(_ text: String) -> [Span] {
         guard let detector = systemDetector else { return [] }
-        let matches = detector.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length))
+        var matches: [NSTextCheckingResult] = []
+        // Reports progress between matches as well, so a long text stops partway once cancelled.
+        detector.enumerateMatches(in: text, options: .reportProgress, range: NSRange(location: 0, length: (text as NSString).length)) { match, _, stop in
+            if isCancelled() { stop.pointee = true; return }
+            if let match { matches.append(match) }
+        }
         return matches.compactMap { match in
             let entity: String
             let score: Double
