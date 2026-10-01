@@ -33,18 +33,40 @@ public enum XMLFile: FileFormat {
             nameIDs.append(leaves.count)
             leaves.append(DocumentLeaf(name, records: records))
         }
-        func walk(_ node: XMLNode, records: [Int], keys: [String]) throws {
+        func walk(_ node: XMLNode, records: [Int], keys: [String], parentKey: String?) throws {
             try Scrubber.checkCancellation()
             if let element = node as? XMLElement {
                 nextRecord += 1
-                let ancestry = records + [nextRecord]
+                let childNames = (element.children ?? []).compactMap { ($0 as? XMLElement).flatMap { local($0.name) } }
+                let ancestry = KeyHints.isWrapper(childNames) && !records.isEmpty ? records : records + [nextRecord]
                 let currentKeys = keys + [local(element.name) ?? ""]
                 let words = Set(currentKeys.flatMap { KeyHints.words($0) })
-                let secret = keys.last { KeyHints.hint($0) == "SECRET" }
-                func key(_ name: String?, parent: String?, value: String?, siblings: @autoclosure () -> [String]) -> String? {
-                    let key = KeyHints.hint(name) == nil ? secret ?? (KeyHints.inherits(name, from: parent) ? parent : name) : name
-                    if KeyHints.isBareName(key), let value, !KeyHints.bareNameIsPerson(value, siblings: siblings(), parent: parent) { return nil }
-                    return key
+                // What the element's text is read as: its name, read under its
+                // parent's key, or what a naming sibling says (<name>ssn</name><value>…).
+                var elementKey = KeyHints.resolve(local(element.name), parent: parentKey)
+                // A list's items take the list's key: <given><given>Anna</given></given>, <phones><item>…</item></phones>.
+                if KeyHints.hint(elementKey) == nil, KeyHints.hint(parentKey) != nil, let name = local(element.name)?.lowercased(),
+                   let container = keys.last?.lowercased(), name == container || container.hasPrefix(name) && container.count <= name.count + 2 || ["item", "entry", "element", "value", "li"].contains(name) {
+                    elementKey = parentKey
+                }
+                // A point listed as two numbers: <coordinates><c>-122.44</c><c>47.25</c></coordinates>.
+                if KeyHints.hint(elementKey) == "COORDINATES", let parent = element.parent as? XMLElement {
+                    let items = (parent.children ?? []).compactMap { $0 as? XMLElement }
+                    if let position = items.firstIndex(where: { $0 === element }),
+                       let pair = JSONFile.coordinateKeys(parentKey, items.map { JSONValue.number(($0.stringValue ?? "").trimmingCharacters(in: .whitespaces)) }) {
+                        elementKey = pair[position]
+                    }
+                }
+                if let name = local(element.name), KeyHints.fieldValueKeys.contains(KeyHints.words(name).joined()) {
+                    let siblingTexts: [(String, String)] = ((element.parent as? XMLElement)?.children ?? []).prefix(64).compactMap { node in
+                        guard let sibling = node as? XMLElement, sibling !== element, sibling.childCount <= 1, let name = local(sibling.name) else { return nil }
+                        return (name, sibling.stringValue ?? "")
+                    }
+                    elementKey = KeyHints.namedField(name, siblings: siblingTexts) ?? elementKey
+                }
+                func key(_ name: String?, resolved: String?, parent: String?, value: String?, siblings: @autoclosure () -> [String]) -> String? {
+                    if KeyHints.isBareName(name), KeyHints.isBareName(resolved), let value, !KeyHints.bareNameIsPerson(value, siblings: siblings(), parent: parent) { return nil }
+                    return resolved
                 }
                 func names(_ element: XMLElement?) -> [String] {
                     ((element?.attributes ?? []) + (element?.children ?? []).filter { $0 is XMLElement }).compactMap { local($0.name) }
@@ -56,13 +78,18 @@ public enum XMLFile: FileFormat {
                 }
                 for attribute in element.attributes ?? [] {
                     addName(attribute, records: ancestry)
-                    add(attribute, key: key(local(attribute.name), parent: local(element.name), value: attribute.stringValue, siblings: names(element)), records: ancestry, words: words)
+                    let attributeTexts = (element.attributes ?? []).compactMap { a in local(a.name).map { ($0, a.stringValue ?? "") } }
+                    let resolved = local(attribute.name).flatMap { KeyHints.namedField($0, siblings: attributeTexts) } ?? KeyHints.resolve(local(attribute.name), parent: elementKey)
+                    add(attribute, key: key(local(attribute.name), resolved: resolved, parent: local(element.name), value: attribute.stringValue, siblings: names(element)), records: ancestry, words: words)
                 }
                 for child in element.children ?? [] {
-                    if child is XMLElement { try walk(child, records: ancestry, keys: currentKeys) }
+                    if child is XMLElement { try walk(child, records: ancestry, keys: currentKeys, parentKey: elementKey) }
                     else {
                         if child.kind == .processingInstruction { addName(child, records: ancestry) }
-                        add(child, key: child.kind == .text ? key(local(element.name), parent: keys.last, value: child.stringValue, siblings: names(element.parent as? XMLElement)) : nil, records: records.isEmpty ? ancestry : records, words: words)
+                        // <attribute name="email">…</attribute> names its own text.
+                        let attributeTexts = (element.attributes ?? []).compactMap { a in local(a.name).map { ($0, a.stringValue ?? "") } }
+                        let named = attributeTexts.first { KeyHints.fieldNameKeys.contains(KeyHints.words($0.0).joined()) }.flatMap { KeyHints.header($0.1) }
+                        add(child, key: child.kind == .text ? key(local(element.name), resolved: KeyHints.hint(elementKey) == nil ? named ?? elementKey : elementKey, parent: keys.last, value: child.stringValue, siblings: names(element.parent as? XMLElement)) : nil, records: records.isEmpty ? ancestry : records, words: words)
                     }
                 }
             } else {
@@ -70,7 +97,7 @@ public enum XMLFile: FileFormat {
                 add(node, key: nil, records: [], words: [])
             }
         }
-        for child in document.children ?? [] { try walk(child, records: [], keys: []) }
+        for child in document.children ?? [] { try walk(child, records: [], keys: [], parentKey: nil) }
         progress(.finding, 0, leaves.count)
         let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection)
         progress(.finding, leaves.count, leaves.count)

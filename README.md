@@ -43,7 +43,7 @@ Scrub never checks for updates, since it has no network access. Download a newer
 
 You want to paste a support ticket, a customer export or a log into an AI tool, but it's full of names, emails, phone numbers, cards and keys. Deleting them breaks the file; redacting them to `[REDACTED]` loses the shape the tool needs to be useful.
 
-Scrub swaps each one for a believable stand-in instead. The same person gets the same stand-in everywhere in the file, emails still match their owner's name, and the file keeps its structure.
+Scrub swaps each one for a believable stand-in instead. The same person gets the same stand-in everywhere in the file, emails and usernames still match their owner's name, an address's city, state and ZIP code still belong together, and the file keeps its structure.
 
 ## See it work
 
@@ -133,11 +133,16 @@ Results say *Review before sharing*, never *clean*: detection is statistical, an
 - JSON and XML nested up to 64 levels. XML with a DOCTYPE or entity declarations is refused.
 - The preview shows the first 200,000 characters or 500 table rows. Copy and Save always give the whole result.
 - Detection finds what it recognises. A value counts as a secret when it looks like one, or sits under a key that names one, like `password`, `db_password`, `api_token` or `webhook_secret`. Blank values and `true`/`false` under those keys are left as they are.
-- Field names help in pasted text too: in a JSON body inside a curl command or a log line, or an object literal in code, pairs like `"family_name": "Charleston"` or `family_name: 'Charleston'` are read as that field. A plain `value` or `data` key takes its parent's meaning, so `"id_number": {"value": "123456789"}` stays a nine-digit ID, and lists like `names`, `emails` or `phone_numbers` count as their field.
+- Field names help in pasted text too: in a JSON body inside a curl command or a log line, an object literal in code, or YAML, pairs like `"family_name": "Charleston"`, `family_name: 'Charleston'` or `family_name: Charleston` are read as that field. Types in code, like `email: string`, are left alone.
+- Fields are read by their parts and qualifiers: a plain `value` or `data` key takes its parent's meaning, so `"id_number": {"value": "123456789"}` stays a nine-digit ID; `"name": {"first": …}`, `"phones": [{"number": …}]` and `"dob": {"year": …}` are read as the part; lists like `names` or `emails` and keys like `billing_email` or `applicant_dob` count as their field, but counts like `num_family_names` don't. Form fields (`{"name": "ssn", "value": …}`), FHIR resources and flattened CSV headers like `billing.address.city` are read the same way.
 - A bare `name` key is read as a person only when its record also holds personal details like an email, phone or birth date, when it sits under a key like `customers` or `manager`, or when it uses a common first or last name. Otherwise, as for an account called `Everyday Checking`, the value goes through the usual detection.
-- A value that can't be what its field names is left to the usual detection: a status like `"first_name": "match"` or `"date_of_birth": "no_match"` stays as it is.
+- A value that can't be what its field names is left to the usual detection: a status like `"first_name": "match"` or `"date_of_birth": "NO_MATCH"`, or a score like `"surname": 0.86`, stays as it is.
+- Values under keys like `created_at`, `timezone`, `country` or `request_id` are read as written: a Unix time isn't a phone number, and `America/Chicago` isn't a place. A time zone beside an address moves with it.
+- Stand-ins keep the original's type: a date keeps its format (`April 21, 2003`, `16 JUL 1982`), a number stays a number of the same length so pasted JSON still parses, `Apt 2B` stays an apartment line, `4821 Juniper Hollow Rd` stays a road, a coordinate keeps its precision, a masked `***-**-7784` stays masked, and an IPv6 address stays IPv6. A phone number keeps its layout, with a real area code and a line from the fictional 555-0100 to 0199 range; one from outside North America keeps its country code.
+- Stand-ins that belong together agree. An address's city, state or province, postcode, coordinates and time zone, and the area code of the phone beside it, come from one real place in the same country (the US, Canada, the UK or Australia), in a different state. A one-line address like `4821 Juniper Hollow Rd, Tacoma, WA 98402` becomes one line from that place, matching the separate fields. `billing_city` and `shipping_city` in one record are two addresses.
+- A birth year moves by one to eight years, and `birth_year` and `age` fields move with it, so age brackets and estimates beside them still read true. Last four digits (`ssn_last4`, a card's `last4`) end the stand-in of the number they come from. Initials, usernames and emails follow the stand-in name, and a first name fits a `gender`, `sex` or `title` like `Ms.` beside it.
 - A plain run of digits that could be a phone number, like `912355201` under `ein`, keeps its digits instead of becoming `+1 555-…`, since it may as well be an account, tax or ID number.
-- Names are found by the on-device recogniser, by the field they sit in (`name`, `assigned_to`, `manager`), and before an email address, as in `Priya Raghunathan <priya@example.com>`, quoted or written last name first. In role fields a name can also be `Raghunathan, Priya`, carry a note like `(Support)`, or be a common first name alone. Values with team words, like `Platform Team` or `Support Team`, are left as they are.
+- Names are found by the on-device recogniser, by the field they sit in (`name`, `assigned_to`, `manager`, `Customer:`), before an email address, as in `Priya Raghunathan <priya@example.com>` or `Priya Raghunathan (priya@example.com)`, quoted or written last name first, and before a mailing address, as in `Ship to Priya Raghunathan, 12 Pine St, …`. In role fields a name can also be `Raghunathan, Priya`, carry a note like `(Support)`, or be a common first name alone. Values with team words, like `Platform Team` or `Support Team`, are left as they are.
 - Card numbers keep their network, length and checksum when they sit in a field. In free text a card is always replaced, but can get a different kind of stand-in.
 
 Not covered, so check for these yourself:
@@ -151,6 +156,8 @@ Not covered, so check for these yourself:
 - Values split across XML markup, as in `alice<em>@</em>example.com`.
 - Personal data that appears only in XML element or attribute names, unless the same person also appears in the data. Runs of seven or more digits in JSON keys and XML names are always replaced.
 - Record identifiers such as `customer_id` values, which are kept so records still line up.
+- Addresses outside the US, Canada, the UK and Australia keep their shape, but their parts aren't matched to one real place. So are cities written in running text without a state or postcode after them.
+- Ages with no birth date in the same file stay as they are.
 
 ## Keyboard
 
@@ -183,7 +190,7 @@ swift test                 # unit, regression and property-based tests
 scripts/prove-offline.sh   # the offline proof above
 ```
 
-Property tests take `SCRUB_PROPERTY_SEED` and `SCRUB_PROPERTY_CASES` (default 24) to reproduce a failure or run deeper.
+Property tests take `SCRUB_PROPERTY_SEED` and `SCRUB_PROPERTY_CASES` (default 24) to reproduce a failure or run deeper. The payload tests generate realistic API payloads (signups, identity checks, payments, form submissions, webhooks, audit logs, HR and FHIR records), render each as JSON, XML, CSV, pasted JSON, a curl command, a log line, JavaScript, Python and YAML, and as a support note or mailing label, and check every field: personal values replaced by stand-ins of the same type, everything else unchanged, the output still parses, and values that belong together still agree (an address is one real place with its time zone and area code, an email and username follow the name, an age follows the birth date, last digits end their number). `SCRUB_PAYLOAD_REPORT=/path` writes an example input for each kind of failure.
 
 ## Layout
 
