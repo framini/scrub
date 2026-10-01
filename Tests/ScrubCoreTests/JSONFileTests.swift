@@ -212,7 +212,9 @@ func orderedJSONFixtureOutput(_ name: String) throws {
     """#
     let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
     for original in ["Alberta", "Charleson", "accountholder0", "2025550123", "Cameron", "Jane Smith"] { #expect(!output.contains(original)) }
-    for kept in [#""name": "Everyday Checking""#, #""subtype": "checking""#, #""region": "NY""#, #""type": "home""#, #""A1""#] { #expect(output.contains(kept)) }
+    for kept in [#""name": "Everyday Checking""#, #""subtype": "checking""#, #""type": "home""#, #""A1""#] { #expect(output.contains(kept)) }
+    // The region moves with the address, still a state code.
+    #expect(!output.contains(#""region": "NY""#) && output.range(of: #""region": "[A-Z]{2}""#, options: .regularExpression) != nil)
 }
 
 @Test(arguments: [
