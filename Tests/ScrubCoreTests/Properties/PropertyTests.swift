@@ -35,7 +35,11 @@ struct ScrubberProperties {
             #expect(before.leaves.map(\.path) == after.leaves.map(\.path), diagnostic)
             for (a, b) in zip(before.leaves, after.leaves) {
                 let containsPlanted = doc.planted.contains { a.value.localizedCaseInsensitiveContains($0.original) }
-                if KeyHints.hint(a.key) == nil && !containsPlanted {
+                // Seven or more digits in a name read as an ID ("user_12345678"),
+                // so a name may change in those digits alone.
+                let idDigits = /[0-9]{7,}/
+                let renamedID = a.path.hasSuffix("/name") && a.value.replacing(idDigits, with: "#") == b.value.replacing(idDigits, with: "#")
+                if KeyHints.hint(a.key) == nil && !containsPlanted && !renamedID {
                     #expect(a.value == b.value, "Changed plain leaf \(a.path): \(a.value) -> \(b.value). \(diagnostic)")
                 }
             }

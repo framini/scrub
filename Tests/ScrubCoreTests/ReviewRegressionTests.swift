@@ -107,3 +107,27 @@ func recognizerVariants(_ input: String) throws {
     #expect(try FileManager.default.contentsOfDirectory(atPath: locked.path).isEmpty)
     #expect(try Set(FileManager.default.contentsOfDirectory(atPath: directory.path)) == ["result.txt", "locked"])
 }
+
+/// A stand-in card ending as the real one did showed its last four digits,
+/// and left "last4" beside it nothing to take but a placeholder.
+@Test func standInNumbersNeverKeepTheRealEnding() {
+    // Seeds that drew a stand-in card ending in 9119 before the fix.
+    for seed in [49_799, 78_379, 94_800] + Array(UInt64(0)..<2_000) {
+        let job = Job(seed: seed)
+        let card = job.replacement(for: "CREDIT_CARD", original: "4831860760789119")
+        let last4 = job.replacement(for: "LAST_DIGITS", original: "9119")
+        #expect(!card.hasSuffix("9119"), "seed \(seed): \(card)")
+        #expect(last4.count == 4 && last4.allSatisfy(\.isNumber) && last4 != "9119", "seed \(seed): \(last4)")
+    }
+}
+
+@Test func lastDigitsFollowTheCardNotAPhoneEndingAlike() {
+    // The phone is replaced first and ends as the card does.
+    for seed in UInt64(0)..<200 {
+        let job = Job(seed: seed)
+        _ = job.replacement(for: "PHONE_NUMBER", original: "(646) 380-5792")
+        let card = job.replacement(for: "CREDIT_CARD", original: "4937337937055792")
+        let last4 = job.replacement(for: "LAST_DIGITS", original: "5792")
+        #expect(card.hasSuffix(last4), "seed \(seed): \(card) \(last4)")
+    }
+}

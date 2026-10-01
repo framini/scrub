@@ -37,25 +37,40 @@ enum Patterns {
     static func find(_ text: String, contextWords: Set<String> = [], isCancelled: () -> Bool = { Task.isCancelled }) -> [Span] {
         var spans: [Span] = []
         for (entity, regex, base, context) in compiled {
-            for (index, match) in regex.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length)).enumerated() {
-                if index.isMultiple(of: 64) && isCancelled() { return spans }
+            if isCancelled() { return spans }
+            // Reports progress between matches as well, so a long text stops
+            // partway through one pattern once cancelled.
+            regex.enumerateMatches(in: text, options: .reportProgress, range: NSRange(location: 0, length: (text as NSString).length)) { match, _, stop in
+                if isCancelled() { stop.pointee = true; return }
+                guard let match else { return }
                 var range = match.range.location..<NSMaxRange(match.range)
                 if entity == "IBAN_CODE" {
-                    guard let trimmed = longestIBAN(in: text, range: range) else { continue }
+                    guard let trimmed = longestIBAN(in: text, range: range) else { return }
                     range = trimmed
                 }
                 if entity == "IP_ADDRESS", range.upperBound < (text as NSString).length {
                     let tail = TextRanges.substring(text, range.upperBound..<min((text as NSString).length, range.upperBound + 2))
-                    if tail.range(of: #"^\.[0-9]|^:[0-9A-Fa-f]"#, options: .regularExpression) != nil { continue }
+                    if tail.range(of: #"^\.[0-9]|^:[0-9A-Fa-f]"#, options: .regularExpression) != nil { return }
                 }
                 let value = TextRanges.substring(text, range)
-                if entity == "PERSON" && NameTagger.namesOrganisation(value) { continue }
-                guard valid(value, entity: entity), !(entity == "US_SSN" && base <= 0.5 && invalidSSN(value)) else { continue }
+                if entity == "PERSON" && NameTagger.namesOrganisation(value) { return }
+                // "https://deploy:hunter2@git.example.test" holds a password and a host, no address.
+                if entity == "EMAIL_ADDRESS", inURLCredentials(text, at: range.lowerBound) { return }
+                guard valid(value, entity: entity), !(entity == "US_SSN" && base <= 0.5 && invalidSSN(value)) else { return }
                 let score = context.isDisjoint(with: contextWords) ? Context.enhanced(base, words: context, range: range, text: text) : min(1, max(0.4, base + 0.35))
                 if score >= 0.4 { spans.append(Span(range: range, entity: entity, score: score)) }
             }
         }
         return spans
+    }
+    private static let credentials = TextPattern(#"[A-Za-z][A-Za-z0-9+.\-]*://[^\s/@]*:$"#)
+    /// Whether `start` follows a URL's scheme and user name ("https://deploy:").
+    private static func inURLCredentials(_ text: String, at start: Int) -> Bool {
+        let ns = text as NSString
+        var from = start
+        while from > 0, start - from < 96, let scalar = Unicode.Scalar(ns.character(at: from - 1)), !CharacterSet.whitespacesAndNewlines.contains(scalar) { from -= 1 }
+        guard from < start else { return false }
+        return !TextRanges.matches(credentials, in: ns.substring(with: NSRange(location: from, length: start - from))).isEmpty
     }
     private static func longestIBAN(in text: String, range: Range<Int>) -> Range<Int>? {
         let candidate = TextRanges.substring(text, range)

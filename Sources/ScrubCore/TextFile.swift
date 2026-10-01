@@ -15,7 +15,7 @@ public enum TextFile: FileFormat {
         let text = try decode(data)
         try Scrubber.checkCancellation()
         progress(.finding, 0, 1)
-        let result = try DocumentPipeline.run([DocumentLeaf(text)], job: job, forceFullDetection: forceFullDetection)[0]
+        let result = try DocumentPipeline.run([DocumentLeaf(text)], job: job, forceFullDetection: forceFullDetection, progress: progress)[0]
         let (output, finalMarks, unresolved) = (result.text, result.marks, result.unresolved)
         try Scrubber.checkCancellation()
         progress(.finding, 1, 1)

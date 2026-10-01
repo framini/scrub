@@ -119,8 +119,8 @@ enum DocumentPipeline {
         return leaf.text.contains("/") && TimeZone(identifier: leaf.text) != nil
     }
 
-    static func run(_ leaves: [DocumentLeaf], job: Job, forceFullDetection: Bool = false) throws -> [DocumentValue] {
-        var (gazetteer, values, emptyBases) = try detectAndPrepare(leaves, job: job)
+    static func run(_ leaves: [DocumentLeaf], job: Job, forceFullDetection: Bool = false, progress: (Stage, Int, Int) -> Void = { _, _, _ in }) throws -> [DocumentValue] {
+        var (gazetteer, values, emptyBases) = try detectAndPrepare(leaves, job: job, progress: progress)
         var active = Array(repeating: true, count: values.count)
         var originals = OriginalMatcher(job)
         for _ in 0..<3 {
@@ -144,8 +144,9 @@ enum DocumentPipeline {
             for index in changedIndices { active[index] = true }
             let newOriginals = newReplacements.map(\.original).filter { !$0.isEmpty }
             if !newOriginals.isEmpty {
-                let newMatcher = Matcher(newOriginals)
+                let newMatcher = Matcher(newOriginals, isCancelled: { Task.isCancelled })
                 for index in values.indices where !active[index] {
+                    if index.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
                     let value = values[index]
                     guard !value.marks.contains(where: { $0.range == 0..<(value.text as NSString).length }) else { continue }
                     if !newMatcher.matches(in: value.text).isEmpty { active[index] = true }
@@ -154,8 +155,8 @@ enum DocumentPipeline {
         }
         return values
     }
-    private static func detectAndPrepare(_ leaves: [DocumentLeaf], job: Job) throws -> (GazetteerMatcher, [DocumentValue], [Bool]) {
-        let bases = try detectBases(leaves)
+    private static func detectAndPrepare(_ leaves: [DocumentLeaf], job: Job, progress: (Stage, Int, Int) -> Void) throws -> (GazetteerMatcher, [DocumentValue], [Bool]) {
+        let bases = try detectBases(leaves, progress: progress)
         let prepared = try prepare(leaves, bases: bases, job: job)
         return (prepared.0, prepared.1, bases.map { $0?.isEmpty == true })
     }
@@ -167,6 +168,7 @@ enum DocumentPipeline {
         for leaf in leaves {
             if let entity = leaf.numericEntity { job.reserveNumeric(leaf.text, entity: entity) }
         }
+        try Scrubber.checkCancellation()
         // These steps stop early when cancelled; the check after each one throws
         // before anything partial is used.
         let owners = associateOwners(leaves, job: job)
@@ -181,7 +183,12 @@ enum DocumentPipeline {
         var values = [DocumentValue?](repeating: nil, count: leaves.count)
         // An age or last four digits is read off the stand-ins it belongs with, so those come first.
         let later = { (index: Int) in StandIns.derived.contains(leaves[index].numericEntity ?? KeyHints.hint(leaves[index].key) ?? "") || KeyHints.hint(leaves[index].key) != nil && StandIns.isMasked(leaves[index].text) }
-        let order = leaves.indices.filter { !later($0) } + leaves.indices.filter(later)
+        var order: [Int] = [], derived: [Int] = []
+        for index in leaves.indices {
+            if index.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
+            if later(index) { derived.append(index) } else { order.append(index) }
+        }
+        order += derived
         for index in order {
             try Scrubber.checkCancellation()
             let (leaf, stored) = (leaves[index], bases[index])
@@ -221,7 +228,8 @@ enum DocumentPipeline {
             recordFields[record]?.set(leaf.text, for: hint)
         }
         // A gender beside a name object ("gender" next to "name": {"first": …}) is that person's.
-        for leaf in leaves {
+        for (index, leaf) in leaves.enumerated() {
+            if index.isMultiple(of: 1024) && Task.isCancelled { return [] }
             guard let record = leaf.lastRecord, recordFields[record] != nil, recordFields[record]?.gender == nil, let gender = leaf.owner(in: genders) else { continue }
             recordFields[record]?.gender = gender
         }
@@ -232,7 +240,8 @@ enum DocumentPipeline {
         // A record whose name sits in one child object ("applicant": {"name": {"first": …},
         // "contact": {"emails": […]}}) is that person's; a list of several people is no one's.
         var parents = [Int?](repeating: nil, count: maxRecord + 1)
-        for leaf in leaves {
+        for (index, leaf) in leaves.enumerated() {
+            if index.isMultiple(of: 1024) && Task.isCancelled { return [] }
             for (child, parent) in zip(leaf.enclosing, leaf.enclosing.dropFirst()) where parents[child] == nil { parents[child] = parent }
         }
         var named = [Set<Int>](repeating: [], count: maxRecord + 1)
@@ -241,6 +250,7 @@ enum DocumentPipeline {
             if identities[record] == nil, named[record].count == 1 { identities[record] = named[record].first }
             if let parent = parents[record], !named[record].isEmpty { named[parent].formUnion(named[record].count == 1 ? named[record] : [-1, -2]) }
         }
+        if Task.isCancelled { return [] }
         for leaf in leaves where KeyHints.hint(leaf.key) == "EMAIL_ADDRESS" && !leaf.text.isEmpty {
             if let record = leaf.owner(in: identities), recordFields[record]?.email == nil {
                 recordFields[record]?.email = leaf.text
@@ -270,12 +280,14 @@ enum DocumentPipeline {
         }
         // Only a part that repeats ("billing_city" and "shipping_city") splits a record's addresses.
         var slots: [Int: [String: Set<String>]] = [:]
-        for leaf in leaves {
+        for (index, leaf) in leaves.enumerated() {
+            if index.isMultiple(of: 1024) && Task.isCancelled { return [] }
             guard let record = leaf.lastRecord, let key = leaf.key, let hint = KeyHints.hint(key), ["LOCATION", "REGION", "POSTAL_CODE"].contains(hint) else { continue }
             slots[record, default: [:]][hint, default: []].insert(qualifier(key))
         }
         let split = Set(slots.compactMap { record, byHint in byHint.values.contains { $0.count > 1 } ? record : nil })
         for (index, leaf) in leaves.enumerated() {
+            if index.isMultiple(of: 1024) && Task.isCancelled { return [] }
             guard let record = leaf.lastRecord, let key = leaf.key ?? leaf.rawKey, !leaf.text.isEmpty else { continue }
             let words = KeyHints.words(key)
             let hint = KeyHints.hint(leaf.key) ?? leaf.numericEntity
@@ -299,6 +311,7 @@ enum DocumentPipeline {
         // ("home_phone" beside "city"). A wrapped part ("zip": {"value": …}) is
         // already in the record around it.
         for (index, leaf) in leaves.enumerated() {
+            if index.isMultiple(of: 1024) && Task.isCancelled { return [] }
             guard let group = member[index], let record = leaf.lastRecord else { continue }
             let hint = KeyHints.hint(leaf.key) ?? leaf.numericEntity ?? ""
             let qualifier = String(group.drop { $0 != "\u{0}" }.dropFirst())
@@ -322,6 +335,7 @@ enum DocumentPipeline {
         // "phone" next to "address": {…}, or "geo": {"coordinates": …} as its sibling.
         var inherited: [Int: AddressParts] = [:], own: [Int: AddressParts] = [:]
         for (index, leaf) in leaves.enumerated() {
+            if index.isMultiple(of: 1024) && Task.isCancelled { return [] }
             guard let group = member[index], let parts = groups[group], parts.city != nil || parts.region != nil || parts.postal != nil else { continue }
             if let record = leaf.lastRecord, own[record] == nil { own[record] = parts }
             for record in leaf.enclosing.dropFirst() where inherited[record] == nil { inherited[record] = parts }
@@ -364,9 +378,13 @@ enum DocumentPipeline {
         return [Span(range: 0..<(leaf.text as NSString).length, entity: entity, score: 1)]
     }
 
-    private static func detectBases(_ leaves: [DocumentLeaf]) throws -> [[Span]?] {
+    private static func detectBases(_ leaves: [DocumentLeaf], progress: (Stage, Int, Int) -> Void) throws -> [[Span]?] {
         let count = leaves.count
         guard count > 0 else { return [] }
+        // The context model first: its findings fill only what every other detector leaves.
+        let context = try ContextStage.find(leaves.map { leaf in
+            leaf.numericEntity != nil || leaf.fieldName || KeyHints.hint(leaf.key) != nil || KeyHints.isStructural(leaf.key) ? nil : leaf.text
+        }, progress: progress, cancelled: CancellationFlag())
         let chunkSize = max(128, (count + max(1, ProcessInfo.processInfo.activeProcessorCount) * 4 - 1) / (max(1, ProcessInfo.processInfo.activeProcessorCount) * 4))
         let chunkCount = (count + chunkSize - 1) / chunkSize
         let results = Mutex(Array<[Span]?>(repeating: nil, count: count))
@@ -387,7 +405,7 @@ enum DocumentPipeline {
                     let leaf = leaves[index]
                     if leaf.numericEntity != nil || KeyHints.hint(leaf.key) != nil && !leaf.text.isEmpty { local.append(nil) }
                     else if leaf.fieldName { local.append(Patterns.find(leaf.text, isCancelled: { cancelled.isSet })) }
-                    else { local.append(detector.base(leaf.text, key: leaf.key, contextWords: leaf.contextWords)) }
+                    else { local.append(detector.base(leaf.text, key: leaf.key, contextWords: leaf.contextWords, context: context[index] ?? [])) }
                 }
                 results.withLock { $0.replaceSubrange(start..<end, with: local) }
             }
@@ -401,7 +419,7 @@ enum DocumentPipeline {
     }
 }
 
-private final class CancellationFlag: Sendable {
+final class CancellationFlag: Sendable {
     private let value = Atomic(false)
     var isSet: Bool { value.load(ordering: .relaxed) }
     func set() { value.store(true, ordering: .relaxed) }

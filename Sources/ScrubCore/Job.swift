@@ -55,7 +55,8 @@ public final class Job {
     // first name is no English word, so "thanks daniel" counts too, and so do
     // handles like "daniel.okafor".
     private func rememberParts(of name: String) {
-        let tokens = (People.naturalOrder(name) ?? name).split { $0.isWhitespace || $0 == "," }.map(String.init)
+        // A title before a name ("Ms E. Okafor") is part of no one's name.
+        let tokens = (People.naturalOrder(name) ?? name).split { $0.isWhitespace || $0 == "," }.map(String.init).drop { People.isTitle($0) }
         guard tokens.count >= 2, let first = tokens.first, let last = tokens.last else { return }
         let parts = [first, last].filter { part in
             part.count >= 2 && part.first?.isUppercase == true
@@ -201,6 +202,8 @@ public final class Job {
             leaves.append(DocumentLeaf(TextRanges.substring(text, field.range), key: field.key, records: structure.ancestry(field.level)))
         }
         let placed = DocumentPipeline.associateAddresses(leaves)
+        // Cut short when cancelled; the caller stops before reading anything.
+        guard placed.count == leaves.count else { return nil }
         let people = DocumentPipeline.associateOwners(leaves, job: self)
         let loose = spans.indices.filter { leafOf[$0] == nil }
         let nearAddresses = Self.addresses(in: text, loose.map { spans[$0] })

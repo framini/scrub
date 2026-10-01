@@ -241,7 +241,9 @@ final class People {
         guard !last.isEmpty, !rest.isEmpty, !last.contains(where: \.isWhitespace) else { return nil }
         return rest + " " + last
     }
-    private static let titles: Set<String> = ["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "madam"]
+    private static let titles: Set<String> = ["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "dame", "madam"]
+    private static func isInitials(_ word: String) -> Bool { word.count >= 2 && word.allSatisfy { $0 == "." || $0.isUppercase } && word.hasSuffix(".") }
+    static func isTitle(_ word: String) -> Bool { titles.contains(word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) }
     func registerFull(_ value: String, emailSafe: Bool = false, gender: String? = nil) -> (Persona, Int) {
         var tokens = (Self.naturalOrder(value) ?? value).split { $0.isWhitespace || $0 == "," }.map(String.init)
         var gender = gender
@@ -274,6 +276,20 @@ final class People {
         // "Ms. Siobhan Okafor" keeps its title, which the stand-in name fits.
         let title = value.split(separator: " ").first.map(String.init).flatMap { Self.titles.contains($0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) ? $0 + " " : nil } ?? ""
         if parts == 2, Self.naturalOrder(value) != nil { return person.last + ", " + person.first }
+        // "Ms E. Okafor" and "Mrs H.S. Lind" keep their initials, and a surname in capitals its capitals.
+        let named = value.split(separator: " ").map(String.init).drop { Self.isTitle($0) }
+        if parts == 2, named.count >= 2, named.dropLast().allSatisfy(Self.isInitials) {
+            // Read off the stand-in, so the same person keeps the same initials everywhere.
+            var seed = person.full.unicodeScalars.reduce(UInt32(5381)) { ($0 &* 33) &+ $1.value }
+            let alphabet = Array("ABCDEFGHJKLMNPRSTW")
+            var letters = ([person.first.first ?? "A"] + (0..<8).map { _ in
+                seed = seed &* 1_103_515_245 &+ 12345
+                return alphabet[Int(seed >> 16) % alphabet.count]
+            }).makeIterator()
+            let initials = named.dropLast().map { word in String(word.map { $0.isLetter ? letters.next() ?? $0 : $0 }) }
+            let last = named.last.map { $0 == $0.uppercased() && $0.count > 1 } == true ? person.last.uppercased() : person.last
+            return title + (initials + [last]).joined(separator: " ")
+        }
         return title + (parts == 1 ? person.first : parts == -1 ? person.last : person.full)
     }
     func find(email: String) -> Persona? {

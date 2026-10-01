@@ -199,13 +199,27 @@ struct AddressParts: Hashable, Sendable {
     /// A latitude, longitude or pair, which places an address with no other part.
     var coordinates: String?
     var isEmpty: Bool { city == nil && region == nil && postal == nil && coordinates == nil }
-    /// Parts written as one line: "4821 Juniper Hollow Rd, Tacoma, WA 98402",
-    /// "Tacoma, WA", "Toronto, ON M5V 2T6, Canada".
-    static func line(_ text: String) -> (parts: AddressParts, pieces: [String])? {
-        // One line of an address, never a sentence around one: every piece is rewritten.
-        guard !text.contains(where: \.isNewline), text.utf16.count <= 160, !text.contains(". "), !text.contains(";") else { return nil }
+    /// Parts written as one line, "4821 Juniper Hollow Rd, Tacoma, WA 98402",
+    /// "Tacoma, WA", "Toronto, ON M5V 2T6, Canada", or as a signature writes
+    /// them, a street over its city ("2200 Kessler Ave, Suite 410⏎Austin, TX
+    /// 78701"). The separators come back as written, so a rewrite keeps the lines.
+    static func line(_ text: String) -> (parts: AddressParts, pieces: [String], separators: [String])? {
+        // One address, never a sentence around one: every piece is rewritten.
+        // "P.O. Box" and "Louisiana St. 808B" have full stops inside them, not between two sentences.
+        let sentences = text.contains(". ") ? text.replacingOccurrences(of: #"(?i)\b(?:p\.\s?o|st|ave|rd|dr|blvd|ln|ct|pl|ste|apt|hwy|pkwy|mt|[nsew])\.\s"#, with: "_ ", options: .regularExpression) : text
+        let lines = text.split(whereSeparator: \.isNewline)
+        guard lines.count <= 3, lines.count == 1 || lines.allSatisfy({ $0.utf16.count <= 64 }), text.utf16.count <= 160, !sentences.contains(". "), !text.contains(";") else { return nil }
         let trailing = text.last == "." ? String(text.dropLast()) : text
-        let pieces = trailing.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        let ns = trailing as NSString
+        var pieces: [String] = [], separators: [String] = [], start = 0
+        for match in TextRanges.matches(pieceBreak, in: trailing) {
+            pieces.append(ns.substring(with: NSRange(location: start, length: match.range.location - start)).trimmingCharacters(in: .whitespaces))
+            // A comma reads as ", " as before; a line break stays where it was.
+            let separator = ns.substring(with: match.range)
+            separators.append(separator.contains(where: \.isNewline) ? separator : ", ")
+            start = NSMaxRange(match.range)
+        }
+        pieces.append(ns.substring(from: start).trimmingCharacters(in: .whitespaces))
         guard pieces.count >= 2, pieces.count <= 6, pieces.allSatisfy({ !$0.isEmpty && $0.count <= 48 }) else { return nil }
         var parts = AddressParts()
         var rest = pieces[...]
@@ -233,6 +247,7 @@ struct AddressParts: Hashable, Sendable {
         // What comes before the city is a street and its unit, each with a number.
         guard rest.dropLast().allSatisfy({ $0.contains(where: \.isNumber) }) else { return nil }
         parts.city = city
-        return (parts, pieces)
+        return (parts, pieces, separators)
     }
+    private static let pieceBreak = TextPattern(#"[ \t]*,[ \t]*(?:\r?\n[ \t]*)?|[ \t]*\r?\n[ \t]*"#)
 }

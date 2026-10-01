@@ -8,7 +8,10 @@ swift build -c release --product Scrub
 APP=build/Scrub.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$(swift build -c release --show-bin-path)/Scrub" "$APP/Contents/MacOS/Scrub"
+BIN="$(swift build -c release --show-bin-path)"
+cp "$BIN/Scrub" "$APP/Contents/MacOS/Scrub"
+# The models' weights (name model, context model parts); both look for them in Contents/Resources.
+ditto "$BIN/Scrub_ScrubCore.bundle" "$APP/Contents/Resources/Scrub_ScrubCore.bundle"
 cp Support/Info.plist "$APP/Contents/Info.plist"
 cp Support/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/THIRD_PARTY_NOTICES.md"

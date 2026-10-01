@@ -25,6 +25,7 @@ enum Copy {
         case "IP_ADDRESS": "IP addresses"
         case "SECRET": "Secrets"
         case "USERNAME": "Usernames"
+        case "EMPLOYER": "Employers"
         default: "IDs"
         }
     }

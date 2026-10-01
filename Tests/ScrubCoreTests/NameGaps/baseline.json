@@ -1,0 +1,80 @@
+{
+  "csvRemark" : {
+    "apple" : 37,
+    "cases" : 40,
+    "detector" : 38,
+    "scrub" : 38
+  },
+  "diverse" : {
+    "apple" : 37,
+    "cases" : 40,
+    "detector" : 38,
+    "scrub" : 38
+  },
+  "fragments" : {
+    "apple" : 13,
+    "cases" : 40,
+    "detector" : 23,
+    "scrub" : 23
+  },
+  "greeting" : {
+    "apple" : 11,
+    "cases" : 40,
+    "detector" : 33,
+    "scrub" : 33
+  },
+  "handles" : {
+    "apple" : 0,
+    "cases" : 40,
+    "detector" : 15,
+    "scrub" : 26
+  },
+  "jsonNote" : {
+    "apple" : 38,
+    "cases" : 40,
+    "detector" : 32,
+    "scrub" : 33
+  },
+  "lowercase" : {
+    "apple" : 3,
+    "cases" : 40,
+    "detector" : 23,
+    "scrub" : 24
+  },
+  "plain" : {
+    "apple" : 39,
+    "cases" : 40,
+    "detector" : 39,
+    "scrub" : 39
+  },
+  "signOff" : {
+    "apple" : 13,
+    "cases" : 40,
+    "detector" : 35,
+    "scrub" : 36
+  },
+  "surnameOnly" : {
+    "apple" : 35,
+    "cases" : 40,
+    "detector" : 32,
+    "scrub" : 32
+  },
+  "toolsAndOrgs" : {
+    "apple" : 26,
+    "cases" : 40,
+    "detector" : 34,
+    "scrub" : 34
+  },
+  "wordNames" : {
+    "apple" : 21,
+    "cases" : 40,
+    "detector" : 10,
+    "scrub" : 14
+  },
+  "wordsNotNames" : {
+    "apple" : 40,
+    "cases" : 40,
+    "detector" : 40,
+    "scrub" : 40
+  }
+}

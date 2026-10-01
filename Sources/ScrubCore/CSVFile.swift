@@ -51,13 +51,16 @@ public enum CSVFile: FileFormat {
             }
         }
         progress(.finding, 0, leaves.count)
-        let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection)
+        let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
+        let found = leaves.count
         leaves.removeAll(keepingCapacity: false)
-        progress(.finding, leaves.count, leaves.count)
+        progress(.finding, found, found)
+        try Scrubber.checkCancellation()
         var marks: [TableMark] = []
         let unresolved = values.flatMap(\.unresolved)
         var valueIndex = 0
         for row in rows.indices {
+            if row.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
             for column in rows[row].indices {
                 rows[row][column] = values[valueIndex].text
                 if row < previewRows {
@@ -109,7 +112,10 @@ public enum CSVFile: FileFormat {
             output.append(contentsOf: newline.utf8)
         }
         if hasHeader { append(columns) }
-        for row in rows { append(row) }
+        for (index, row) in rows.enumerated() {
+            if index.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
+            append(row)
+        }
         progress(.checking, 1, 1)
         return ScrubResult(format: "csv", output: output, preview: .table(columns: previewColumns, rows: Array(rows.prefix(previewRows)), rowCount: rows.count, marks: marks), counts: job.counts, unresolved: unresolved, neutralized: neutralized)
     }
@@ -149,6 +155,7 @@ public enum CSVFile: FileFormat {
         let quote = quoteCharacter.unicodeScalars.first
         var index = 0
         while index < chars.count {
+            if index.isMultiple(of: 65_536) { try Scrubber.checkCancellation() }
             let char = chars[index]
             if quoted {
                 if char == quote {

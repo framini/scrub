@@ -12,6 +12,12 @@ final class StandIns {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.caseInsensitiveCompare(original.trimmingCharacters(in: .whitespacesAndNewlines)) != .orderedSame && !originals.contains(trimmed.lowercased())
     }
+    /// A stand-in number never ends as the real one does: its last four digits
+    /// would show the real ones, and "last4" beside it would have none to take.
+    private func keepsEnding(_ entity: String, _ candidate: String, _ original: String) -> Bool {
+        let real = original.filter { $0.isASCII && $0.isNumber }, made = candidate.filter { $0.isASCII && $0.isNumber }
+        return Self.numbered.contains(entity) && real.count >= 7 && made.count >= 4 && real.suffix(4) == made.suffix(4)
+    }
     private var rng: any RandomNumberGenerator
     init(rng: any RandomNumberGenerator = SystemRandomNumberGenerator()) {
         self.people = People(rng: rng)
@@ -60,6 +66,7 @@ final class StandIns {
             let free = place != nil && ["REGION", "POSTAL_CODE", "TIME_ZONE", "LATITUDE", "LONGITUDE"].contains(actual) && candidate.caseInsensitiveCompare(original) != .orderedSame
                 // Initials read off the stand-in name are right even where they happen to match.
                 || actual == "INITIALS" && persona != nil
+            if keepsEnding(actual, candidate, original) { continue }
             if free || unused(candidate, original) || attempt >= 2 && stablePerson && candidate.caseInsensitiveCompare(original) != .orderedSame {
                 fake = candidate; break
             }
@@ -69,7 +76,7 @@ final class StandIns {
             assigned[key] = fake
             if assigned[plain] == nil { assigned[plain] = fake }
         }
-        remember(original, fake)
+        remember(actual, original, fake)
         if let digitKey = digitKey(actual, original), assigned[digitKey] == nil { assigned[digitKey] = normalized(actual, fake) }
         return fake
     }
@@ -96,6 +103,7 @@ final class StandIns {
     /// "age" and "ssn_last4" can agree with the stand-ins they come from.
     private var years: [Int: Int] = [:]
     private var endings: [String: String] = [:]
+    private var phoneEndings: Set<String> = []
     /// Last four digits written as a bare number ("ssn_last4": 7784) can't
     /// start with a zero, so a number they end keeps its stand-in's fourth-last
     /// digit off zero (and a card its check digit valid).
@@ -116,10 +124,15 @@ final class StandIns {
         var iterator = digits.makeIterator()
         return String(fake.map { $0.isASCII && $0.isNumber ? iterator.next() ?? $0 : $0 })
     }
-    private func remember(_ original: String, _ fake: String) {
+    /// A phone number may end as a card does; "last4" is the card's, so a
+    /// phone's ending gives way to any other number's.
+    private func remember(_ entity: String, _ original: String, _ fake: String) {
         let real = original.filter { $0.isASCII && $0.isNumber }, made = fake.filter { $0.isASCII && $0.isNumber }
         guard real.count >= 7, made.count >= 4, !original.contains(where: { Self.maskCharacters.contains($0) }) else { return }
-        if endings[String(real.suffix(4))] == nil { endings[String(real.suffix(4))] = String(made.suffix(4)) }
+        let ending = String(real.suffix(4))
+        guard endings[ending] == nil || phoneEndings.contains(ending) && entity != "PHONE_NUMBER" else { return }
+        endings[ending] = String(made.suffix(4))
+        if entity == "PHONE_NUMBER" { phoneEndings.insert(ending) } else { phoneEndings.remove(ending) }
     }
     /// A birth year moves one to eight years: enough that the date names no
     /// one, close enough that an age bracket or age estimate beside it still reads true.
@@ -297,18 +310,25 @@ final class StandIns {
     }
     /// A one-line address rewritten piece by piece, all from one place:
     /// "4821 Juniper Hollow Rd, Apt 2B, Tacoma, WA 98402" → "512 Oak Street, Apt 7C, Denver, CO 80205".
-    private func line(_ original: String, _ parsed: (parts: AddressParts, pieces: [String]), _ place: Place) -> String {
+    private func line(_ original: String, _ parsed: (parts: AddressParts, pieces: [String], separators: [String]), _ place: Place) -> String {
         let parts = parsed.parts
+        var separators = parsed.separators.makeIterator()
         return parsed.pieces.enumerated().map { index, piece in
-            if piece == parts.city { return city(of: place, like: piece) }
-            if piece == parts.country { return piece }
-            if piece == parts.region { return Places.write(place, like: piece) }
-            if piece == parts.postal { return placedPostal(place, piece, bare: false) }
-            if let region = parts.region, let code = parts.postal, piece == region + " " + code {
-                return Places.write(place, like: region) + " " + placedPostal(place, code, bare: false)
+            let written: String
+            if piece == parts.city { written = city(of: place, like: piece) }
+            else if piece == parts.country { written = piece }
+            else if piece == parts.region { written = Places.write(place, like: piece) }
+            else if piece == parts.postal { written = placedPostal(place, piece, bare: false) }
+            // "TX  78701" keeps the gap it was written with.
+            else if let region = parts.region, let code = parts.postal, piece.hasPrefix(region), piece.hasSuffix(code),
+                    piece.dropFirst(region.count).dropLast(code.count).allSatisfy({ $0 == " " || $0 == "\t" }), piece.count > region.count + code.count {
+                written = Places.write(place, like: region) + piece.dropFirst(region.count).dropLast(code.count) + placedPostal(place, code, bare: false)
             }
-            return unit(piece) ?? street(like: piece)
-        }.joined(separator: ", ") + (original.hasSuffix(".") ? "." : "")
+            // A mail stop or room code beside the street ("EB3880D") keeps its shape.
+            else if !piece.contains(" "), piece.contains(where: \.isNumber), piece.contains(where: \.isLetter) { written = unit(piece) ?? idLike(piece) }
+            else { written = unit(piece) ?? street(like: piece) }
+            return written + (index < parsed.pieces.count - 1 ? separators.next() ?? ", " : "")
+        }.joined() + (original.hasSuffix(".") ? "." : "")
     }
     private static let suffixes: Set<String> = ["st", "street", "rd", "road", "ave", "av", "avenue", "blvd", "boulevard", "dr", "drive", "ln", "lane", "ct", "court", "way", "pl", "place", "pkwy", "parkway", "ter", "terrace", "cir", "circle", "hwy", "highway", "trl", "trail", "loop", "sq", "square"]
     /// A street written as the original is: its house number's length and its
@@ -343,6 +363,9 @@ final class StandIns {
             let country = code.dropFirst()
             fresh = country + (country.count..<digits.count).map { index in index == country.count ? digit(true) : digit() }.joined()
         } else if digits.count >= 7 {
+            fresh = self.digits(digits.count)
+        } else if digits.count >= 4, !plus {
+            // An extension ("x41872", "ext. 5-3310") stays one, in its own layout.
             fresh = self.digits(digits.count)
         } else {
             return "+1 \(pick(Places.all.filter { $0.country == "US" }.map(\.areaCode)) ?? "303")-555-01\(String(format: "%02d", Int.random(in: 0...99, using: &rng)))"
@@ -384,9 +407,10 @@ final class StandIns {
             let number = words.count > 1 ? idLike(String(words.last!)) : digits(2)
             return String(trimmed.prefix(trimmed.count - (words.count > 1 ? words.last!.count : 0))) + (words.count > 1 ? number : " " + number)
         }
-        if trimmed.lowercased().hasPrefix("po box") || trimmed.lowercased().hasPrefix("p.o. box") {
-            let number = trimmed.reversed().prefix { $0.isNumber }.count
-            return number > 0 ? String(trimmed.dropLast(number)) + digits(number) : nil
+        if Self.boxes.contains(where: trimmed.lowercased().hasPrefix) {
+            // The box's own number, not the postcode after it ("PO Box 4324, Halifax NS B3J 2K9").
+            guard let number = trimmed.range(of: #"\d+"#, options: .regularExpression) else { return nil }
+            return trimmed.replacingCharacters(in: number, with: digits(trimmed.distance(from: number.lowerBound, to: number.upperBound)))
         }
         return nil
     }
@@ -459,9 +483,11 @@ final class StandIns {
         let kept = barelyEnding(entity, original, fake)
         if let digitKey = digitKey(entity, whole), assigned[digitKey] == nil { assigned[digitKey] = normalized(entity, kept) }
         assigned[key] = kept
-        remember(original, kept)
+        remember(entity, original, kept)
         return kept
     }
+    /// A post office box keeps its kind and the length of its number.
+    private static let boxes = ["po box", "p.o. box", "p.o.box", "p o box", "post office box", "postfach", "apartado", "private bag"]
     private static let units: Set<String> = ["apt", "apartment", "suite", "ste", "unit", "floor", "fl", "room", "rm", "bldg", "building", "#"]
     private static let digitsOnly: Set<String> = ["PHONE_NUMBER", "US_SSN", "ID_NUMBER", "POSTAL_CODE", "US_BANK_NUMBER", "US_PASSPORT", "US_DRIVER_LICENSE", "US_ITIN", "MEDICAL_LICENSE"]
     private func make(_ entity: String, _ original: String, _ persona: Persona?, _ place: Place? = nil) -> String {
@@ -522,6 +548,7 @@ final class StandIns {
             var drawn = (count == letters.count ? letters : count == 3 && letters.count == 2 ? [letters[0], pick(Array("ABCDEFGHJKLMNPRSTW")) ?? "A", letters[1]] : (0..<count).map { _ in pick(Array("ABCDEFGHJKLMNPRSTW")) ?? "A" }).makeIterator()
             return String(original.map { $0.isLetter ? drawn.next() ?? $0 : $0 })
         case "DATE_OF_BIRTH": return dateLike(original)
+        case "EMPLOYER": return company(like: original)
         case "US_SSN":
             // In the original's grouping: "123-45-6789", "123 45 6789".
             let separator = original.first { !$0.isNumber } ?? "-"
@@ -563,6 +590,19 @@ final class StandIns {
             })
         default: return "[\(entity)]"
         }
+    }
+    /// Invented companies: a stand-in employer names no real one.
+    private static let companyHeads = ["Corvane", "Tallowmere", "Quillfen", "Marrowby", "Pellingham", "Ostrevan", "Wexmoor", "Halvercroft", "Dunmarrow", "Fenwyck",
+                                       "Lowmarch", "Carrowind", "Elsinby", "Thornquist", "Varrowden", "Kestrelby", "Ambermoor", "Glimmerton", "Sorrelby", "Ravenmoss"]
+    private static let companyKinds = ["Logistics", "Health", "Partners", "Systems", "Foods", "Supply", "Studio", "Clinic", "Group", "Services", "Consulting",
+                                       "Works", "Labs", "Trading", "Dental", "Freight", "Academy", "Care", "Insurance", "Engineering"]
+    private static let legalForms: Set<String> = ["inc", "inc.", "ltd", "ltd.", "llc", "plc", "gmbh", "co.", "corp", "corp.", "s.a.", "bv", "ag", "llp", "pty"]
+    /// An invented company in the original's case, keeping its legal form ("Ltd", "GmbH").
+    private func company(like original: String) -> String {
+        let trimmed = original.trimmingCharacters(in: .whitespaces)
+        let legal = trimmed.split(separator: " ").last.map(String.init).flatMap { Self.legalForms.contains($0.lowercased()) && trimmed.contains(" ") ? $0 : nil }
+        let name = [pick(Self.companyHeads) ?? "Corvane", pick(Self.companyKinds) ?? "Group", legal].compactMap { $0 }.joined(separator: " ")
+        return trimmed == trimmed.uppercased() && trimmed != trimmed.lowercased() ? name.uppercased() : name
     }
     /// Keeps the network (the first digit, two for 3x cards like Amex), the
     /// length and the grouping, with a fresh body and a valid check digit.
@@ -608,18 +648,29 @@ final class StandIns {
             let word = runs[index].lowercased()
             return full.contains(word) || short.contains(word) || word == "sept"
         }
+        func padded(_ value: Int, like run: String) -> String { run.count >= 2 ? String(format: "%0*d", run.count, value) : String(value) }
+        func monthWord(like word: String) -> String {
+            let name = word.count > 3 && word.lowercased() != "sept" ? formatter.monthSymbols[month - 1] : formatter.shortMonthSymbols[month - 1]
+            return word == word.uppercased() ? name.uppercased() : word == word.lowercased() ? name.lowercased() : name
+        }
+        // A month with only its year or only its day: "October 1958", "March 3".
+        if let named, numbers.count == 1 {
+            var output = runs
+            let only = numbers[0]
+            if runs[only].count == 4, let real = Int(runs[only]) { output[only] = String(self.year(for: real)) }
+            else { output[only] = padded(day, like: runs[only]) }
+            output[named] = monthWord(like: runs[named])
+            return output.joined()
+        }
         guard let yearIndex = numbers.first(where: { runs[$0].count == 4 }), numbers.count == (named == nil ? 3 : 2) else {
             return String(format: "%04d-%02d-%02d", year, month, day)
         }
         let rest = numbers.filter { $0 != yearIndex }
         var output = runs
-        func padded(_ value: Int, like run: String) -> String { run.count >= 2 ? String(format: "%0*d", run.count, value) : String(value) }
         if let real = Int(runs[yearIndex]) { year = self.year(for: real) }
         output[yearIndex] = String(year)
         if let named {
-            let word = runs[named]
-            let name = word.count > 3 && word.lowercased() != "sept" ? formatter.monthSymbols[month - 1] : formatter.shortMonthSymbols[month - 1]
-            output[named] = word == word.uppercased() ? name.uppercased() : word == word.lowercased() ? name.lowercased() : name
+            output[named] = monthWord(like: runs[named])
             output[rest[0]] = padded(day, like: runs[rest[0]])
         } else if yearIndex < rest[0] {
             output[rest[0]] = padded(month, like: runs[rest[0]])

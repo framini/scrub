@@ -1,0 +1,154 @@
+import Foundation
+
+/// Names written where no sentence surrounds them, so a tagger reads them
+/// poorly: the people a mail header lists ("To: Okafor, Ama; Lind, Per"), mail
+/// addresses that start with a name ("Ama Okafor/HOU/CVN@CVN"), the sender
+/// above a timestamp, and a title before initials or a surname ("Ms E. Okafor",
+/// "Dr Lind").
+enum WrittenNames {
+    struct Found {
+        var spans: [Span] = []
+        /// What holds no name: an address's office path, a header's date.
+        var quiet: [Range<Int>] = []
+    }
+
+    /// "Ama Okafor/HOU/CVN@CVN": a name, the offices it sits in, and the mail
+    /// system. A long list wraps between a first name and a surname.
+    private static let officePath = TextPattern(#"(?<![\p{L}\p{N}/@.])(\p{Lu}[\p{L}'’.-]*(?:(?:[ \t]+|[ \t]*\r?\n[ \t]*)\p{Lu}[\p{L}'’.-]*){1,3})(/[\p{L}\p{N}&. -]{1,40}(?:/[\p{L}\p{N}&. -]{1,40}){0,3}@[\p{L}\p{N}.-]+)"#)
+    private static let listLabel = TextPattern(#"^[ \t>]*(?i:to|cc|bcc|from)[ \t]*:$"#)
+    private static let header = TextPattern(#"(?m)^[ \t>]*(from|to|cc|bcc|sent by|reply-to|sender|sent|date)[ \t]*:[ \t]*(\S[^\r\n]*)$"#, options: [.caseInsensitive])
+    /// The sender written above the time they sent it.
+    private static let sender = TextPattern(#"(?m)^[ \t]*(\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*){1,3})[ \t]*\r?\n[ \t]*\d{1,2}/\d{1,2}/\d{2,4}[ \t]+\d{1,2}:\d{2}"#)
+    /// A title, then initials and a surname or a full name. A surname in
+    /// capitals is one only after initials ("Ms E. STRADLING").
+    /// An apostrophe joins a name only before a capital ("O’Brien"), never a possessive "’s".
+    private static let titled = TextPattern(#"(?<![\p{L}\p{N}])(?:Mr|Mrs|Ms|Miss|Mx|Dr|Prof|Sir|Dame)\.?[ \t]+(?:(?:\p{Lu}\.[ \t]?){1,3}[ \t]*(?:\p{Lu}\p{Ll}+|\p{Lu}{2,}(?:-\p{Lu}{2,})?)|\p{Lu}\p{Ll}+)(?:['’]\p{Lu}\p{Ll}+)?(?:-\p{Lu}\p{Ll}+)?(?:[ \t]+(?:\p{Lu}\.[ \t]?)*\p{Lu}\p{Ll}+(?:['’]\p{Lu}\p{Ll}+)?(?:-\p{Lu}\p{Ll}+)?){0,3}(?![\p{L}\p{N}])"#)
+    /// A name's own place or business ("Dr Lind’s Surgery") is named after someone, not someone.
+    private static let possessiveName = TextPattern(#"^['’]s[ \t]+\p{Lu}"#)
+    private static let lastFirst = TextPattern(#"^(\p{Lu}[\p{L}'’-]+(?:[ \t]\p{Lu}[\p{L}'’-]+)?),[ \t]*\p{Lu}[\p{L}'’-]+(?:[ \t]+\p{Lu}\.?)?$"#)
+    private static let firstLast = TextPattern(#"^\p{Lu}[\p{L}'’-]*\.?(?:[ \t]+\p{Lu}[\p{L}'’-]*\.?){1,3}$"#)
+    /// Words a title or a header can stand before that name no one.
+    private static let notNames: Set<String> = roles.union(["the", "and", "of", "in", "on", "at", "all", "everyone", "undisclosed", "recipients", "list", "users", "employees", "staff", "announcements", "distribution", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february", "march", "april", "june", "july", "august", "september", "october", "november", "december"])
+
+    /// A word that names an office, not its holder ("Chair", "Justice").
+    static func isRole(_ word: String) -> Bool { roles.contains(word.lowercased()) }
+    private static let roles: Set<String> = ["justice", "president", "speaker", "chairman", "chair", "chairwoman", "secretary", "deputy", "chief", "mayor", "governor", "commissioner", "registrar", "agent", "adviser", "advisor", "counsel", "solicitor", "barrister", "lawyer", "attorney", "judge", "qc", "kc", "director", "manager", "officer", "esq"]
+
+    static func scan(_ text: String, isCancelled: () -> Bool = { false }) -> Found {
+        var found = Found()
+        let ns = text as NSString
+        if text.contains("@"), text.contains("/") {
+            for match in TextRanges.matches(officePath, in: text, isCancelled: isCancelled) {
+                var name = match.range(at: 1)
+                // A wrapped name continues an address list; a subject ending in capitals
+                // ("Subject: Storage⏎Ama Okafor/…") starts none, so the name is what follows the break.
+                if ns.substring(with: name).contains(where: \.isNewline) {
+                    let line = ns.lineRange(for: NSRange(location: name.location, length: 0))
+                    let before = ns.substring(with: NSRange(location: line.location, length: name.location - line.location)).trimmingCharacters(in: .whitespaces)
+                    if before.last.map({ ",;".contains($0) }) != true && TextRanges.matches(listLabel, in: before).isEmpty {
+                        let broken = ns.range(of: "\n", options: .backwards, range: name)
+                        var from = NSMaxRange(broken)
+                        while from < NSMaxRange(name), ns.character(at: from) == 32 || ns.character(at: from) == 9 { from += 1 }
+                        name = NSRange(location: from, length: NSMaxRange(name) - from)
+                    }
+                }
+                guard isName(ns.substring(with: name)) else { continue }
+                found.spans.append(Span(range: range(name), entity: "PERSON", score: 0.95))
+                found.quiet.append(range(match.range(at: 2)))
+            }
+        }
+        if text.contains(":") {
+            for match in TextRanges.matches(header, in: text, isCancelled: isCancelled) {
+                let label = ns.substring(with: match.range(at: 1)).lowercased(), value = match.range(at: 2)
+                if label == "sent" || label == "date" { found.quiet.append(range(value)); continue }
+                for item in listed(ns, value) where isName(ns.substring(with: item)) {
+                    found.spans.append(Span(range: range(item), entity: "PERSON", score: 0.95))
+                }
+            }
+        }
+        for match in TextRanges.matches(sender, in: text, isCancelled: isCancelled) where isName(ns.substring(with: match.range(at: 1))) {
+            found.spans.append(Span(range: range(match.range(at: 1)), entity: "PERSON", score: 0.95))
+        }
+        for match in TextRanges.matches(titled, in: text, isCancelled: isCancelled) {
+            guard let name = titledName(ns, match.range) else { continue }
+            found.spans.append(Span(range: name, entity: "PERSON", score: 0.95))
+        }
+        return found
+    }
+
+    private static func range(_ range: NSRange) -> Range<Int> { range.location..<NSMaxRange(range) }
+
+    /// The people a header value lists: "Okafor, Ama; Lind, Per", "Ama Okafor,
+    /// Per Lind", "Lind, Per   On Behalf Of Okafor, Ama", "\"Okafor, Ama\"
+    /// <ama@corvane.test>". What follows a wide gap is the time it was sent;
+    /// quotes and addresses around a name are no part of it.
+    private static func listed(_ ns: NSString, _ value: NSRange) -> [NSRange] {
+        let masked = NSMutableString(string: ns.substring(with: value))
+        if let gap = (masked as String).range(of: #"\s{2,}(?=\d)"#, options: .regularExpression) {
+            let cut = NSRange(gap, in: masked as String).location
+            masked.replaceCharacters(in: NSRange(location: cut, length: masked.length - cut), with: String(repeating: " ", count: masked.length - cut))
+        }
+        // Blanked in place, so every offset still points into the original.
+        for match in TextRanges.matches(enclosed, in: masked as String).reversed() {
+            masked.replaceCharacters(in: match.range, with: String(repeating: " ", count: match.range.length))
+        }
+        let text = masked as String
+        let whole = text.trimmingCharacters(in: CharacterSet.whitespaces.union(quotes))
+        let separator = text.contains(";") || text.range(of: #"(?i)\s+on behalf of\s+"#, options: .regularExpression) != nil ? #";|(?i)\s+on behalf of\s+"#
+            : TextRanges.matches(lastFirst, in: whole).isEmpty ? "," : nil
+        var cuts: [NSRange] = [], start = 0
+        if let separator {
+            for match in TextRanges.matches(TextPattern(separator), in: text) {
+                cuts.append(NSRange(location: start, length: match.range.location - start))
+                start = NSMaxRange(match.range)
+            }
+        }
+        cuts.append(NSRange(location: start, length: masked.length - start))
+        return cuts.compactMap { cut in
+            let item = masked.substring(with: cut)
+            guard !item.contains("@"), !item.contains("/") else { return nil }
+            let leading = item.prefix { $0.isWhitespace || quotes.contains($0.unicodeScalars.first!) }.utf16.count
+            let trimmed = item.trimmingCharacters(in: CharacterSet.whitespaces.union(quotes))
+            guard !trimmed.isEmpty else { return nil }
+            return NSRange(location: value.location + cut.location + leading, length: trimmed.utf16.count)
+        }
+    }
+    private static let enclosed = TextPattern(#"<[^<>\r\n]*>|\[mailto:[^\]\r\n]*\]"#, options: [.caseInsensitive])
+    private static let quotes = CharacterSet(charactersIn: "\"'“”")
+
+    /// Two to four capitalised words, or "Last, First": no organisation, no
+    /// word that names a role, a day or a group, no word all in capitals
+    /// beyond initials ("TK Abernathy", not "CORVANE NORTH AMERICA").
+    private static func isName(_ value: String) -> Bool {
+        let single = value.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        guard !TextRanges.matches(lastFirst, in: single).isEmpty || !TextRanges.matches(firstLast, in: single).isEmpty else { return false }
+        let words = single.split { $0 == " " || $0 == "," }.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".")) }
+        guard !NameTagger.namesOrganisation(single), !words.contains(where: { notNames.contains($0.lowercased()) }) else { return false }
+        return words.allSatisfy { $0.count <= 2 || $0.contains(where: \.isLowercase) }
+    }
+
+    /// The title and the name after it. A role after the title ("Mr Justice
+    /// Lind", "Madam Chair") is left to the tagger, and a word that ends the
+    /// name is no part of it ("Dr Lind On Monday"). "Dr" after a street's name
+    /// ("Wexford Dr Apt 4") is the street's.
+    private static func titledName(_ ns: NSString, _ match: NSRange) -> Range<Int>? {
+        let text = ns.substring(with: match) as NSString
+        var words = (text as String).split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard words.count >= 2, !notNames.contains(words[1].lowercased()) else { return nil }
+        if words[0].hasPrefix("Dr") {
+            var at = match.location
+            while at > 0, ns.character(at: at - 1) == 32 || ns.character(at: at - 1) == 9 { at -= 1 }
+            var start = at
+            while start > 0, let scalar = Unicode.Scalar(ns.character(at: start - 1)), CharacterSet.alphanumerics.contains(scalar) { start -= 1 }
+            if start < at, let first = ns.substring(with: NSRange(location: start, length: at - start)).first, first.isUppercase || first.isNumber { return nil }
+        }
+        // The name ends where a role or a word that is no name starts ("Mr J. Lind Adviser", "Dr Lind On Monday").
+        if let role = words.indices.dropFirst().first(where: { notNames.contains(words[$0].lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) }) { words = Array(words[..<role]) }
+        guard words.count >= 2, !NameTagger.namesOrganisation(words.dropFirst().joined(separator: " ")) else { return nil }
+        let end = text.range(of: words[words.count - 1], options: .backwards)
+        let found = match.location..<(match.location + NSMaxRange(end))
+        let after = ns.substring(with: NSRange(location: found.upperBound, length: min(8, ns.length - found.upperBound)))
+        guard TextRanges.matches(possessiveName, in: after).isEmpty else { return nil }
+        return NameTagger.partOfOrganisation(found, in: ns as String) ? nil : found
+    }
+}

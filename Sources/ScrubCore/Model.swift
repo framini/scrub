@@ -1,6 +1,8 @@
 import Foundation
 
-public enum Stage: String, Sendable { case starting, finding, checking }
+/// Where a scrub is: `reading` is the context model's pass over free text,
+/// reported window by window between the start and end of `finding`.
+public enum Stage: String, Sendable { case starting, finding, reading, checking }
 public struct Mark: Sendable, Equatable {
     public let range: Range<Int>
     public let entity: String
@@ -85,9 +87,14 @@ enum TextRanges {
     static func replace(_ text: String, _ range: Range<Int>, with value: String) -> String {
         (text as NSString).replacingCharacters(in: NSRange(location: range.lowerBound, length: range.count), with: value)
     }
-    static func matches(_ pattern: TextPattern, in text: String) -> [NSTextCheckingResult] {
+    static func matches(_ pattern: TextPattern, in text: String, isCancelled: () -> Bool = { false }) -> [NSTextCheckingResult] {
         guard let regex = pattern.regex else { return [] }
-        return regex.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length))
+        var found: [NSTextCheckingResult] = []
+        regex.enumerateMatches(in: text, options: .reportProgress, range: NSRange(location: 0, length: (text as NSString).length)) { match, _, stop in
+            if isCancelled() { stop.pointee = true; return }
+            if let match { found.append(match) }
+        }
+        return found
     }
     // One pass over the text: replacing edits one at a time copies the whole
     // text per edit. Edits are sorted by start and disjoint (resolved spans).
