@@ -13,12 +13,12 @@ enum Copy {
 
     static func label(_ entity: String) -> String {
         switch entity {
-        case "PERSON", "FIRST_NAME", "LAST_NAME": "Names"
+        case "PERSON", "FIRST_NAME", "LAST_NAME", "INITIALS": "Names"
         case "EMAIL_ADDRESS": "Emails"
         case "PHONE_NUMBER": "Phones"
         case "ADDRESS", "POSTAL_CODE": "Addresses"
-        case "LOCATION": "Places"
-        case "DATE_OF_BIRTH": "Birth dates"
+        case "LOCATION", "REGION", "LATITUDE", "LONGITUDE", "COORDINATES", "TIME_ZONE": "Places"
+        case "DATE_OF_BIRTH", "AGE": "Birth dates"
         case "US_SSN": "SSNs"
         case "CREDIT_CARD": "Cards"
         case "IBAN_CODE", "US_BANK_NUMBER": "Bank accounts"

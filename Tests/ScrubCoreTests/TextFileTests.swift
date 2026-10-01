@@ -64,7 +64,9 @@ func streetAddressesInFreeText(_ address: String) throws {
     }'
     """#)
     for original in ["acharleston@email.com", "Anna", "Charleston", "94103", "123456789"] { #expect(!text.contains(original)) }
-    for kept in [#""street2": "Apt 1A""#, #""country": "US""#, #""type": "us_ssn""#, "api.example.com"] { #expect(text.contains(kept)) }
+    for kept in [#""country": "US""#, #""type": "us_ssn""#, "api.example.com"] { #expect(text.contains(kept)) }
+    // A second address line is replaced, and stays one.
+    #expect(!text.contains("Apt 1A") && text.range(of: #""street2": "Apt \d[A-Z]""#, options: .regularExpression) != nil)
     #expect(text.range(of: #""value": "\d{9}""#, options: .regularExpression) != nil)
     if case let .text(preview, marks, _) = result.preview {
         let ids = marks.filter { $0.entity == "ID_NUMBER" }.map { (preview as NSString).substring(with: NSRange(location: $0.range.lowerBound, length: $0.range.count)) }
@@ -111,11 +113,13 @@ func streetAddressesInFreeText(_ address: String) throws {
     #expect(KeyedValues.find("don't say name: it's 'Bob Stone'").isEmpty)
 }
 
-@Test func coordinatesAndAcronymsInPastedCodeStay() throws {
+// A point locates someone, so it moves, to the same precision; codes and acronyms around it stay.
+@Test func coordinatesMoveAndAcronymsInPastedCodeStay() throws {
     let (text, _) = try scrubText("""
     {"latitude": 47.2529001, "longitude": -122.4443, "metroCode": 819}
     CLIENT_KEY = "/path/to/client.key"       # client private key (PEM)
     """)
-    #expect(text.contains(#""longitude": -122.4443,"#))
+    #expect(!text.contains("47.2529001") && !text.contains("-122.4443"))
+    #expect(text.range(of: #""latitude": -?\d{1,2}\.\d{7}, "longitude": -?\d{1,3}\.\d{4}, "metroCode": 819"#, options: .regularExpression) != nil, "\(text)")
     #expect(text.contains("(PEM)"))
 }

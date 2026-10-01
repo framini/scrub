@@ -65,11 +65,17 @@ enum NameTagger {
             let upper = input.utf16.distance(from: input.utf16.startIndex, to: range.upperBound.samePosition(in: input.utf16) ?? input.utf16.endIndex)
             var mapped = lower..<upper
             let written = TextRanges.substring(original, mapped)
-            let following = TextRanges.substring(original, mapped.upperBound..<(original as NSString).length)
+            // Only the next few words matter; the rest of a long text would make each tag cost its length.
+            let following = TextRanges.substring(original, mapped.upperBound..<min((original as NSString).length, mapped.upperBound + 120))
             let nextWord = TextRanges.matches(leadingWord, in: following).first.map {
                 TextRanges.substring(following, $0.range.location..<NSMaxRange($0.range)).trimmingCharacters(in: .whitespaces).lowercased()
             }
-            if namesOrganisation(written) || nextWord.map({ organisationWords.contains($0) }) == true { return true }
+            // The rest of a capitalised run names what the tagged words are part of: "Northwind Traders LLC".
+            let run = following.split(separator: " ", omittingEmptySubsequences: true).prefix(4).prefix { word in
+                word.first?.isUppercase == true || ["&", "and", "of"].contains(word.lowercased())
+            }
+            if namesOrganisation(written) || nextWord.map({ organisationWords.contains($0) }) == true
+                || run.contains(where: { organisationWords.contains($0.lowercased().trimmingCharacters(in: .punctuationCharacters)) }) { return true }
             if tag == .personalName { mapped = trimmedToWrittenCapitals(mapped, in: original) }
             if tag == .personalName {
                 let value = TextRanges.substring(original, mapped)
@@ -91,6 +97,8 @@ enum NameTagger {
             if tag == .placeName, found == found.uppercased(), !found.contains(" "), !Names.citiesFolded.contains(found.lowercased()) { return true }
             // "San Francisco" reads as a first name and a surname; the city list knows better.
             let isCity = tag == .personalName && Names.citiesFolded.contains(found.lowercased())
+            // A country ("Canada", "United States") is where millions live; it names no one.
+            if tag == .placeName, let country = Places.country(found), country != "other" { return true }
             result.append(Span(range: mapped, entity: tag == .personalName && !isCity ? "PERSON" : "LOCATION", score: tag == .personalName && !isCity ? 0.85 : 0.6))
             return true
         }

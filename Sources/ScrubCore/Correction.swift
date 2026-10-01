@@ -89,8 +89,18 @@ struct OriginalMatcher {
         matcher = Matcher(literals)
         entities = labels
     }
+    /// Whether an original is long enough to hunt through the rest of the text.
+    /// A one-character one ("a" as a password) only breaks prose, and a short
+    /// number (a birth day of 18) turns up in every timestamp.
+    static func spreads(_ original: String, entity: String = "") -> Bool {
+        // A region code ("WA", "IN", "OR") is a word everywhere else, and
+        // initials, ages, coordinates and time zones only mean something where they were found.
+        if ["REGION", "INITIALS", "AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE", "COORDINATES", "TIME_ZONE"].contains(entity) { return false }
+        let significant = original.filter { $0.isLetter || $0.isNumber }
+        return significant.count >= (significant.allSatisfy(\.isNumber) ? 5 : 2)
+    }
     mutating func add(_ replacements: ArraySlice<Replacement>) {
-        let originals = replacements.filter { $0.original.filter({ $0.isLetter || $0.isNumber }).count >= 2 }
+        let originals = replacements.filter { Self.spreads($0.original, entity: $0.entity) }
         guard !originals.isEmpty else { return }
         let literals = originals.map(\.original)
         let labels = originals.map(\.entity)
@@ -102,9 +112,7 @@ struct OriginalMatcher {
         var seen: [FoldHash: Int] = [:]
         var collisions: [FoldHash: [Int]] = [:]
         func add(_ candidate: SensitiveOriginal) {
-            // A one-character original ("a" as a password) is replaced where it
-            // was found; hunting it through the rest of the text only breaks prose.
-            guard candidate.original.filter({ $0.isLetter || $0.isNumber }).count >= 2 else { return }
+            guard spreads(candidate.original, entity: candidate.entity) else { return }
             let folded = Matcher.fold(candidate.original)
             let key = FoldHash(folded)
             if let first = seen[key] {
@@ -134,7 +142,12 @@ private extension Matcher {
         let ns = text as NSString
         // An original matched inside a longer word ("Ann" in "annual") is not that person.
         return matches(in: text, accepting: { range in
-            !TextRanges.joinsWord(ns, at: range.lowerBound, underscore: false) && !TextRanges.joinsWord(ns, at: range.upperBound, underscore: false)
+            guard !TextRanges.joinsWord(ns, at: range.lowerBound, underscore: false) && !TextRanges.joinsWord(ns, at: range.upperBound, underscore: false) else { return false }
+            // A short number tied to a word ("client-transaction-12345", "order_12345") is part of an identifier.
+            if range.count < 7, range.lowerBound >= 2, let separator = Unicode.Scalar(ns.character(at: range.lowerBound - 1)), "-_".unicodeScalars.contains(separator),
+               let before = Unicode.Scalar(ns.character(at: range.lowerBound - 2)), CharacterSet.letters.contains(before),
+               ns.substring(with: NSRange(location: range.lowerBound, length: range.count)).allSatisfy(\.isNumber) { return false }
+            return true
         }).map { Span(range: $0.range, entity: entities[$0.index], score: 1.1) }
     }
 }
