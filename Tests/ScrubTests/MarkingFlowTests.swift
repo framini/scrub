@@ -148,3 +148,90 @@ private func preview(_ done: Finished) throws -> (String, [Mark]) {
     model.select(nil)
     #expect(model.pick.isEmpty)
 }
+
+/// A mark is one ⌘Z away from gone, and one ⇧⌘Z away from back: what Copy
+/// writes follows each step, and the bar under the preview says what happened.
+@MainActor
+@Test func aMarkCanBeUndoneAndRedone() async throws {
+    let (model, board) = try await finished(handover)
+    _ = try await reviewed(model)
+    model.copy()
+    let before = try #require(board.string(forType: .string))
+    try #require(before.contains("Quillmere"), "Scrub must have missed the depot: \(before)")
+    #expect(!model.canUndo && !model.canRedo)
+    model.mark(["Quillmere"], as: "LOCATION")
+    try await settled(model)
+    #expect(model.notice?.text == "Replaced “Quillmere” as a place in 3 places" && model.notice?.undone == false, "\(String(describing: model.notice))")
+    #expect(model.undoTitle == "Undo Replace “Quillmere”")
+    model.copy()
+    let marked = try #require(board.string(forType: .string))
+    #expect(!marked.lowercased().contains("quillmere"))
+    model.undo()
+    try await settled(model)
+    #expect(model.notice?.undone == true && model.redoTitle == "Redo Replace “Quillmere”" && !model.canUndo)
+    model.copy()
+    #expect(board.string(forType: .string) == before)
+    guard case .finished(let undone) = model.state else { Issue.record("not finished"); return }
+    #expect(undone.marks.isEmpty && undone.result.byHand.isEmpty)
+    model.redo()
+    try await settled(model)
+    model.copy()
+    #expect(board.string(forType: .string) == marked && !model.canRedo)
+    // A new change after an undo drops what was undone.
+    model.undo()
+    try await settled(model)
+    model.mark(["QUILLMERE"], as: "LOCATION")
+    try await settled(model)
+    #expect(!model.canRedo && model.canUndo)
+}
+
+/// A mark the person made is taken off from the stand-in itself, and the
+/// bar says it is theirs.
+@MainActor
+@Test func aMarkIsTakenOffFromItsStandIn() async throws {
+    let (model, board) = try await finished(handover)
+    _ = try await reviewed(model)
+    model.copy()
+    let before = try #require(board.string(forType: .string))
+    model.mark(["Quillmere"], as: "LOCATION")
+    try await settled(model)
+    guard case .finished(let done) = model.state else { Issue.record("not finished"); return }
+    let (text, marks) = try preview(done)
+    let mine = try #require(marks.first { $0.byHand })
+    model.select(PreviewSelection(text: text, marks: marks, range: mine.range.lowerBound..<mine.range.lowerBound))
+    #expect(!model.pick.marked.isEmpty && model.pick.replaced.isEmpty && model.notice == nil)
+    model.applySelection()
+    try await settled(model)
+    model.copy()
+    #expect(board.string(forType: .string) == before)
+    #expect(model.notice?.text.hasPrefix("Took the mark off “Quillmere”") == true && model.undoTitle == "Undo Remove Mark on “Quillmere”")
+}
+
+/// Undoing the review's choices asks for the review again before anything
+/// leaves; undoing a mark made after it does not.
+@MainActor
+@Test func undoingTheReviewClosesTheGateAgain() async throws {
+    let note = "Ms Odalys Ferriter called about the refund. Brightwater from billing called back, and Brightwater wants the invoice. The Quillmere depot has it."
+    let (model, board) = try await finished(note)
+    guard case .finished(let done) = model.state else { Issue.record("not finished"); return }
+    try #require(done.needsReview, "the note must hold something to check")
+    var choices = done.choices
+    for finding in done.result.uncertain { choices.set(finding, leave: !choices.leaves(try #require(finding.places.first), of: finding)) }
+    model.review()
+    model.finishReview(choices)
+    try await settled(model)
+    model.mark(["Quillmere"], as: "LOCATION")
+    try await settled(model)
+    model.undo()
+    try await settled(model)
+    guard case .finished(let unmarked) = model.state else { Issue.record("not finished"); return }
+    #expect(unmarked.mayExport && unmarked.choices == choices)
+    #expect(model.undoTitle == "Undo Review Choices")
+    model.undo()
+    try await settled(model)
+    guard case .finished(let unreviewed) = model.state else { Issue.record("not finished"); return }
+    #expect(!unreviewed.mayExport && unreviewed.choices == done.choices)
+    board.clearContents()
+    model.copy()
+    #expect(model.reviewing && board.string(forType: .string) == nil)
+}

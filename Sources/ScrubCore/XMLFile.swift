@@ -206,7 +206,7 @@ public enum XMLFile: FileFormat {
         }
         let nameMarks = markedValues
         func render(_ values: [DocumentValue], counts: [String: Int]) throws -> ScrubResult {
-            var markedValues: [(String, String)] = []
+            var markedValues: [(String, String, Bool)] = []
             for (index, group) in nodes.enumerated() {
                 let value = values[valueIDs[index]]
                 if group.count == 1 {
@@ -217,17 +217,17 @@ public enum XMLFile: FileFormat {
                     let written = pieces.count == group.count ? pieces : [pieces.joined()] + Array(repeating: "", count: group.count - 1)
                     for (node, piece) in zip(group, written) where node.stringValue != piece { node.stringValue = piece }
                 }
-                for mark in value.marks { markedValues.append((TextRanges.substring(value.text, mark.range).replacingOccurrences(of: Visible.joint, with: ""), mark.entity)) }
+                for mark in value.marks { markedValues.append((TextRanges.substring(value.text, mark.range).replacingOccurrences(of: Visible.joint, with: ""), mark.entity, mark.byHand)) }
             }
-            markedValues += nameMarks
+            markedValues += nameMarks.map { ($0.0, $0.1, false) }
             let unresolved = values.flatMap(\.unresolved)
             var output = counts.isEmpty ? text : XMLSerialization.render(document)
             output = output.replacingOccurrences(of: #"^<\?xml(?=\s)[\s\S]*?\?>\s*"#, with: "", options: .regularExpression)
             if declarationEnd(in: source) != nil, let end = text.range(of: "?>") { output = String(text[..<end.upperBound]) + "\n" + output }
             guard try parses(Data(output.utf8)) else { throw ScrubError.unsupported("internal") }
             var marks: [Mark] = []
-            for (value, entity) in markedValues where !value.isEmpty {
-                for range in TextRanges.ranges(of: value, in: output, options: []) where !marks.contains(where: { $0.range.overlaps(range) }) { marks.append(Mark(range: range, entity: entity)) }
+            for (value, entity, byHand) in markedValues where !value.isEmpty {
+                for range in TextRanges.ranges(of: value, in: output, options: []) where !marks.contains(where: { $0.range.overlaps(range) }) { marks.append(Mark(range: range, entity: entity, byHand: byHand)) }
             }
             marks.sort { $0.range.lowerBound < $1.range.lowerBound }
             let length = (output as NSString).length

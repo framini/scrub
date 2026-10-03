@@ -12,10 +12,12 @@ public struct Mark: Sendable, Equatable {
     public let confidence: Double?
     /// Why this place is worth a person's look beyond how sure the detector was.
     public let doubt: Doubt?
-    public init(range: Range<Int>, entity: String, original: String? = nil, confidence: Double? = nil, doubt: Doubt? = nil) {
-        self.range = range; self.entity = entity; self.original = original; self.confidence = confidence; self.doubt = doubt
+    /// A value the person marked by hand (see `Marks`), so the preview can show it as theirs.
+    public let byHand: Bool
+    public init(range: Range<Int>, entity: String, original: String? = nil, confidence: Double? = nil, doubt: Doubt? = nil, byHand: Bool = false) {
+        self.range = range; self.entity = entity; self.original = original; self.confidence = confidence; self.doubt = doubt; self.byHand = byHand
     }
-    func moved(to range: Range<Int>) -> Mark { Mark(range: range, entity: entity, original: original, confidence: confidence, doubt: doubt) }
+    func moved(to range: Range<Int>) -> Mark { Mark(range: range, entity: entity, original: original, confidence: confidence, doubt: doubt, byHand: byHand) }
 }
 public struct TableMark: Sendable, Equatable {
     public static let header = -1
@@ -23,8 +25,9 @@ public struct TableMark: Sendable, Equatable {
     public let column: Int
     public let range: Range<Int>
     public let entity: String
-    public init(row: Int, column: Int, range: Range<Int>, entity: String) {
-        self.row = row; self.column = column; self.range = range; self.entity = entity
+    public let byHand: Bool
+    public init(row: Int, column: Int, range: Range<Int>, entity: String, byHand: Bool = false) {
+        self.row = row; self.column = column; self.range = range; self.entity = entity; self.byHand = byHand
     }
 }
 public enum Preview: Sendable {

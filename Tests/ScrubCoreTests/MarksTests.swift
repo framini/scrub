@@ -96,6 +96,38 @@ func aMarkedValueAndItsVariantsLeaveNoTrace(_ shape: HandoverShape) throws {
     #expect(marked.counts.values.reduce(0, +) >= result.counts.values.reduce(0, +) + added)
 }
 
+/// The preview tells the person's own stand-ins from Scrub's, in every shape,
+/// so a mark can be found again and taken off.
+@Test(arguments: HandoverShape.allCases)
+func thePreviewShowsWhichStandInsWereMarkedByHand(_ shape: HandoverShape) throws {
+    let result = try scrubbed(shape)
+    // A value Scrub left in this shape, as written.
+    let value = try #require(missed.first { text(result).contains($0.text) })
+    var marks = Marks()
+    marks.add(value.text, as: value.entity)
+    let marked = try result.applying(result.choices, marks: marks)
+    let standIn = try #require(marked.byHand.first?.standIn).lowercased()
+    let customer = try #require(result.findings.first { $0.original == "Odalys Ferriter" }).standIn.lowercased()
+    // Each stand-in shown, with whether the person marked it.
+    var shown: [(text: String, byHand: Bool)] = []
+    switch marked.preview {
+    case .text(let text, let marks, _): shown = marks.map { (TextRanges.substring(text, $0.range), $0.byHand) }
+    case .table(let columns, let rows, _, let marks):
+        shown = marks.map { mark in
+            let cell = mark.row == TableMark.header ? columns[mark.column] : rows[mark.row][mark.column]
+            return (TextRanges.substring(cell, mark.range), mark.byHand)
+        }
+    }
+    let mine = shown.filter(\.byHand).map { $0.text.lowercased() }
+    #expect(!mine.isEmpty && mine.allSatisfy { $0.contains(standIn) }, "\(shape): \(mine) for \(standIn) )")
+    #expect(shown.contains { $0.text.lowercased() == customer && !$0.byHand }, "\(shape): \(shown)")
+    // Before any mark, nothing is shown as the person's.
+    switch result.preview {
+    case .text(_, let marks, _): #expect(!marks.contains { $0.byHand })
+    case .table(_, _, _, let marks): #expect(!marks.contains { $0.byHand })
+    }
+}
+
 @Test(arguments: HandoverShape.allCases)
 func theSameScrubAndMarksWriteTheSameBytes(_ shape: HandoverShape) throws {
     let first = try scrubbed(shape), second = try scrubbed(shape)

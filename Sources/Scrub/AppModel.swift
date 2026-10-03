@@ -35,6 +35,23 @@ struct PreviewSelection {
     var key: String?
 }
 
+/// One state of the person's own changes: what to leave, what they marked,
+/// whether the review was done, and what the change that made it was called
+/// (for the Edit menu). Undoing a review asks for it again before anything leaves.
+struct Step {
+    let choices: Choices
+    let marks: Marks
+    var reviewed: Bool
+    let name: String
+}
+
+/// What the last change did, said under the preview with the way back.
+struct Notice: Equatable {
+    let text: String
+    /// Undo when the change was just made, Redo when it was just undone.
+    let undone: Bool
+}
+
 struct ShortcutPulse: Equatable {
     let shortcut: Shortcut
     let count: Int
@@ -64,6 +81,12 @@ final class AppModel {
     /// are marked as: guessed with each selection, and the person's to change.
     private(set) var pick = Pick()
     var markKind = "PERSON"
+    /// The person's changes, oldest first, and the one the result is (or is
+    /// being) written with. Undo and redo move along it; a new change drops
+    /// what was undone. Kept for this file only, as the marks are.
+    private var history: [Step] = []
+    private var position = 0
+    private(set) var notice: Notice?
     /// Copy or Save asked for while the result is being written again; run once it is.
     private var afterRewrite: Shortcut?
     private var rewrites = 0
@@ -158,6 +181,15 @@ final class AppModel {
         return false
     }
 
+    /// Whether a selection in the preview may leave right now. Asked at the
+    /// moment it would be copied, dragged or sent to a service, never kept:
+    /// while marks or choices are being written in, the preview still shows
+    /// the text without them, so nothing of it leaves until they are.
+    var selectionMayLeave: Bool {
+        guard case .finished(let done) = state else { return false }
+        return done.mayExport && !applyingReview
+    }
+
     /// A selection in the preview tried to leave while the result waits for
     /// review: its menu's Copy (`copying`), a drag or a service. Nothing was
     /// written; the review opens, and a copy then copies the result, as ⌘C does.
@@ -195,11 +227,14 @@ final class AppModel {
     /// Writes the result again as `choices` say, always from the scrub as
     /// first made, then copies or saves if asked.
     func finishReview(_ choices: Choices) {
-        guard case .finished(let done) = state else { return }
+        guard case .finished = state, let latest else { return }
         reviewing = false
         let next = afterReview
         afterReview = nil
-        rewrite(choices, done.marks, reviewed: true, then: next)
+        // A review that changes nothing is no change to undo; it is done all the same.
+        if choices != latest.choices { record(Step(choices: choices, marks: latest.marks, reviewed: true, name: "Review Choices")) } else { history[position].reviewed = true }
+        notice = nil
+        rewrite(history[position], then: next)
     }
 
     /// Reads what a selection in the preview stands on; nil clears it.
@@ -209,6 +244,7 @@ final class AppModel {
             return
         }
         pick = done.result.pick(in: selection.text, marks: selection.marks, range: selection.range)
+        if !pick.isEmpty { notice = nil }
         if let first = pick.missed.first { markKind = Marks.guess(first, key: selection.key) }
     }
 
@@ -220,28 +256,74 @@ final class AppModel {
 
     /// Replaces `texts` as `entity` everywhere they and their variants are written.
     func mark(_ texts: [String], as entity: String) {
-        guard case .finished(let done) = state, !texts.isEmpty else { return }
-        let (choices, marks) = done.result.marking(texts, as: entity, choices: done.choices, marks: done.marks)
-        rewrite(choices, marks)
+        guard case .finished(let done) = state, !texts.isEmpty, let latest else { return }
+        let (choices, marks) = done.result.marking(texts, as: entity, choices: latest.choices, marks: latest.marks)
+        let keys = Set(texts.map { $0.lowercased() })
+        record(Step(choices: choices, marks: marks, reviewed: latest.reviewed, name: "Replace \(Copy.quoted(texts))"))
+        rewrite(history[position]) { revised in
+            let places = revised.byHand.filter { keys.contains($0.original.lowercased()) }.reduce(0) { $0 + $1.places.count }
+            return Notice(text: Copy.replaced(texts, places: places, as: entity), undone: false)
+        }
     }
 
-    /// Leaves what the selection's stand-ins replaced as written, everywhere.
+    /// Leaves what the selection's stand-ins replaced as written, everywhere,
+    /// and takes back the marks it is on.
     func keepOriginal() {
-        guard case .finished(let done) = state, !pick.isEmpty else { return }
-        let (choices, marks) = done.result.keeping(pick, choices: done.choices, marks: done.marks)
-        rewrite(choices, marks)
+        guard case .finished(let done) = state, !pick.isEmpty, let latest else { return }
+        let picked = pick
+        let (choices, marks) = done.result.keeping(picked, choices: latest.choices, marks: latest.marks)
+        let unmarked = Set(picked.marked.map(\.text))
+        let places = (picked.replaced + done.result.byHand.filter { unmarked.contains($0.original) }).reduce(0) { $0 + $1.places.count }
+        let originals = ResultView.originals(of: picked)
+        let unmarking = picked.replaced.isEmpty
+        record(Step(choices: choices, marks: marks, reviewed: latest.reviewed, name: unmarking ? "Remove Mark on \(Copy.quoted(originals))" : Copy.keepOriginal(originals)))
+        rewrite(history[position]) { _ in Notice(text: Copy.kept(originals, places: places, unmarking: unmarking), undone: false) }
     }
 
-    /// Writes the result again with `choices` and `marks`, always from the
-    /// scrub as first made, then copies or saves if asked. A newer rewrite
-    /// replaces one still running.
-    private func rewrite(_ choices: Choices, _ marks: Marks, reviewed: Bool = false, then next: Shortcut? = nil) {
+    var canUndo: Bool { position > 0 && !reviewing }
+    var canRedo: Bool { position + 1 < history.count && !reviewing }
+    /// The Edit menu's titles, naming the change: "Undo Replace “zephyrine”".
+    var undoTitle: String { canUndo ? "Undo \(history[position].name)" : "Undo" }
+    var redoTitle: String { canRedo ? "Redo \(history[position + 1].name)" : "Redo" }
+
+    /// ⌘Z: writes the result as it was before the last change.
+    func undo() {
+        guard canUndo else { return }
+        let name = history[position].name
+        position -= 1
+        rewrite(history[position]) { _ in Notice(text: Copy.undid(name), undone: true) }
+    }
+
+    /// ⇧⌘Z: makes the change undone last again.
+    func redo() {
+        guard canRedo else { return }
+        position += 1
+        let name = history[position].name
+        rewrite(history[position]) { _ in Notice(text: Copy.redid(name), undone: false) }
+    }
+
+    /// The state the result is written with, or is being written with now.
+    private var latest: Step? { history.indices.contains(position) ? history[position] : nil }
+
+    private func record(_ step: Step) {
+        history = Array(history.prefix(position + 1)) + [step]
+        // A long session keeps its last hundred changes.
+        if history.count > 101 { history.removeFirst(history.count - 101) }
+        position = history.count - 1
+    }
+
+    /// Writes the result again as `step` says, always from the scrub as first
+    /// made, then copies or saves if asked, and says what changed. A newer
+    /// rewrite replaces one still running.
+    private func rewrite(_ step: Step, then next: Shortcut? = nil, notice told: (@MainActor @Sendable (ScrubResult) -> Notice?)? = nil) {
         guard case .finished(let done) = state else { return }
+        let (choices, marks, reviewed) = (step.choices, step.marks, step.reviewed)
         let ticket = generation
         let result = done.result
         rewrites += 1
         let mine = rewrites
         pick = Pick()
+        notice = nil
         applyingReview = true
         work?.cancel()
         work = Task.detached(priority: .userInitiated) { [weak self] in
@@ -256,9 +338,10 @@ final class AppModel {
                     current.result = revised
                     current.choices = choices
                     current.marks = marks
-                    if reviewed { current.reviewed = true }
+                    current.reviewed = reviewed
                     current.copied = false
                     self.state = .finished(current)
+                    self.notice = told?(revised)
                     switch after {
                     case .copy: self.copy()
                     case .save: self.save()
@@ -323,6 +406,9 @@ final class AppModel {
         applyingReview = false
         afterRewrite = nil
         pick = Pick()
+        history = []
+        position = 0
+        notice = nil
     }
 
     private func fail(_ name: String, _ source: Source, _ code: String) {
@@ -350,6 +436,8 @@ final class AppModel {
                 switch outcome {
                 case .success(let result):
                     self.state = .finished(Finished(name: name, source: source, result: result, choices: result.choices))
+                    self.history = [Step(choices: result.choices, marks: Marks(), reviewed: false, name: "")]
+                    self.position = 0
                     // The first selection in a large file then answers at once.
                     Task.detached(priority: .utility) { result.prepareMarking() }
                 case .failure(let error): self.state = .failed(name: name, source: source, code: Self.code(for: error))

@@ -246,7 +246,7 @@ final class Review: @unchecked Sendable {
                 let suspect = value.unresolved[index]
                 return (suspect.range, value.proposals[index], Mark(range: suspect.range, entity: suspect.entity, original: suspect.original, confidence: suspect.confidence, doubt: suspect.doubt))
             }
-            edits += manual.map { ($0.range, $0.value, Mark(range: $0.range, entity: $0.entity, original: $0.original, confidence: 1)) }
+            edits += manual.map { ($0.range, $0.value, Mark(range: $0.range, entity: $0.entity, original: $0.original, confidence: 1, byHand: true)) }
             edits.sort { $0.range.lowerBound < $1.range.lowerBound }
             for index in reverted { changed[marks[index].entity, default: 0] -= 1 }
             for index in applied { changed[value.unresolved[index].entity, default: 0] += 1 }
