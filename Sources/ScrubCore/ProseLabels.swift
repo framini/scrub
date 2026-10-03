@@ -38,6 +38,10 @@ enum ProseLabels {
     /// An age said as one: "aged 38", "age: 38", "38 years old", "a 38-year-old", "38 y/o".
     /// It moves only with a birth date near it (see `StandIns.age`), so one alone stays.
     private static let age = TextPattern(#"(?i)\b(?:aged|age:?)[ \t]+(\d{1,3})\b|\b(\d{1,3})(?:[ -]years?[ -]old\b|[ \t]?y/?o\b)"#)
+    /// An age said after a birth date in the same sentence, with no word for
+    /// an age: "born on 14 March 1987 and is 38", "…, now 38.". Read only
+    /// after a birth date, so "the invoice is 38" stays.
+    private static let bareAge = TextPattern(#"(?i)\b(?:is|was|turned|turns|turning|now)[ \t]+(?:now[ \t]+|just[ \t]+)?(\d{1,3})(?=[ \t]*(?:[.,;!?)]|\r?\n|$)|[ \t]+(?:and|but|now|today|this|so|which)\b)"#)
     /// An extension written after a number or alone: "x41872", "ext. 5-3310", "extension 4471".
     private static let phoneExtension = TextPattern(#"(?<![\p{L}\p{N}_./\-])((?i:ext)\.?[ \t]*|(?i:extension)[ \t]+|[xX]-?)(\d(?:-?\d){3,5})(?![\p{L}\p{N}-])"#)
     private static let someone: Set<String> = ["i", "he", "she", "they", "we", "who", "whom", "her", "his", "my", "our", "their", "both", "each", "applicant", "applicants", "patient", "patients", "client", "clients", "claimant", "claimants", "defendant", "defendants", "plaintiff", "appellant", "petitioner", "victim", "victims", "son", "daughter", "child", "children", "wife", "husband", "mother", "father", "brother", "sister", "baby", "twins", "man", "woman", "boy", "girl", "author", "member", "employee", "resident", "citizen", "national", "nationals", "mr", "mrs", "ms", "miss", "dr"]
@@ -46,6 +50,17 @@ enum ProseLabels {
     /// capture, not a lookbehind, which ICU would try at every character of a long text.
     private static let urlPassword = TextPattern(#"\b[A-Za-z][A-Za-z0-9+.\-]{0,15}://[^\s/@:]{1,64}:([^\s/@]{1,128})@(?=[A-Za-z0-9])"#)
     private static let trailing = CharacterSet(charactersIn: ".,;:!?)]}\"'")
+
+    /// From `start` to the end of its sentence, at most 80 units on.
+    private static func sentenceRest(_ ns: NSString, from start: Int) -> NSRange {
+        var end = start
+        while end < min(ns.length, start + 80) {
+            let unit = ns.character(at: end)
+            if unit == 10 || [46, 33, 63].contains(unit) && (end + 1 == ns.length || [32, 10, 13].contains(ns.character(at: end + 1))) { break }
+            end += 1
+        }
+        return NSRange(location: start, length: end - start)
+    }
 
     static func scan(_ text: String, isCancelled: () -> Bool = { false }) -> Found {
         var found = Found()
@@ -84,6 +99,15 @@ enum ProseLabels {
             let group = match.range(at: 1).location != NSNotFound ? match.range(at: 1) : match.range(at: 2)
             guard let years = Int(ns.substring(with: group)), (0...120).contains(years) else { continue }
             found.spans.append(Span(range: range(group), entity: "AGE", score: 0.9))
+        }
+        // After a birth date, the rest of its sentence may say the age bare.
+        for birthDate in found.spans where birthDate.entity == "DATE_OF_BIRTH" {
+            let rest = sentenceRest(ns, from: birthDate.range.upperBound)
+            for match in TextRanges.matches(bareAge, in: ns.substring(with: rest)) {
+                let group = NSRange(location: rest.location + match.range(at: 1).location, length: match.range(at: 1).length)
+                guard let years = Int(ns.substring(with: group)), (0...120).contains(years), !found.spans.contains(where: { $0.range.overlaps(range(group)) }) else { continue }
+                found.spans.append(Span(range: range(group), entity: "AGE", score: 0.9))
+            }
         }
         for match in TextRanges.matches(phoneExtension, in: text, isCancelled: isCancelled) {
             found.labels.append(range(match.range(at: 1)))

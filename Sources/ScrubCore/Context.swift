@@ -277,6 +277,21 @@ public enum KeyHints {
             && folded.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || $0 == "_" }
         return !status || !folded.contains("_") && !statusWords.contains(folded)
     }
+    /// A value an address field holds that `fits` turns down for having no
+    /// number, but that reads as a place: words of letters, more than one,
+    /// and no status, placeholder or note ("same as billing", "n/a"). Such a
+    /// value is replaced as an address when its record's other address parts
+    /// are (see `DocumentPipeline`): "the old rectory, church lane" beside a
+    /// city and a postcode is the rest of that address.
+    static func numberlessLine(_ key: String?, _ value: String) -> Bool {
+        guard hint(key) == "ADDRESS" else { return false }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines), lower = trimmed.lowercased()
+        let words = lower.split { !$0.isLetter && $0 != "'" && $0 != "’" }
+        guard !trimmed.contains(where: \.isNumber), words.count >= 2, trimmed.filter(\.isLetter).count >= 5, !typeWords.contains(lower), !statusWords.contains(lower),
+              !placeholderOpenings.contains(where: { lower.hasPrefix($0) }) else { return false }
+        return !lower.contains("_")
+    }
+    private static let placeholderOpenings = ["same as", "see ", "as above", "as per", "not ", "no ", "none", "unknown", "n/a", "tbd", "tbc", "redacted", "withheld", "remote", "various", "pending", "to be ", "on file", "same"]
     private static let unitKeys: Set<String> = ["unit", "apt", "apartment", "street2", "address2", "addr2", "line2", "addressline2", "streetline2", "aptsuite", "apartmentnumber", "aptnumber", "suitenumber", "unitnumber", "addressline3", "line3"]
     private static func compactKey(_ key: String?) -> String { (key ?? "").lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) } }
     /// A coordinate written to at least two decimals ("47.2529"); a bare 47 is a count.

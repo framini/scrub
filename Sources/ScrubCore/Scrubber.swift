@@ -22,6 +22,8 @@ public enum Scrubber {
         // Cancelling stops a scrub; it never hands back one that stopped looking partway.
         try checkCancellation()
         result.coverage = coverage
+        // Stand-ins drawn for values marked later follow the seed, as every other does.
+        result.review?.salt = seed ?? UInt64.random(in: .min ... .max)
         return result
     }
     public static func classify(_ data: Data, name: String) throws -> String {

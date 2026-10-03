@@ -17,8 +17,9 @@ public final class Detector {
     /// The links `found` read in the text `base` judges, so `Links.outside` needn't read them again.
     private var foundLinks: [Range<Int>]?
     /// The people only a model read that the last `base` call did not keep
-    /// but that are too likely to ignore (see `PersonScorer.reviewFrom`):
-    /// left as written, and put to a person in review.
+    /// but that are too likely to ignore (see `PersonScorer.reviewFrom`), and
+    /// the streets or houses named alone (see `AddressModel.read`): left as
+    /// written, and put to a person in review.
     private(set) var doubts: [Span] = []
     public init() {
         isCancelled = { Task.isCancelled }
@@ -44,8 +45,9 @@ public final class Detector {
             doubts = []
             foundLinks = nil
             // A person a reading detector found, cut to what a name can hold (see NameShape).
+            // A rule's person keeps its words, but not the verb that opens its sentence ("Call Odalys").
             let spans = found(text, key: key, contextWords: contextWords, modelled: modelled, context: context).compactMap { span in
-                span.entity == "PERSON" && span.score < 0.95 ? NameShape.trimmed(span, in: text) : span
+                span.entity != "PERSON" ? span : span.score < 0.95 ? NameShape.trimmed(span, in: text) : NameShape.withoutCommand(span, in: text)
             }
             // "RFC4716" names a standard, and "t.co/x" a link: neither is anyone's.
             // A secret under a query key ends with its parameter, whichever detector read it.
@@ -97,7 +99,9 @@ public final class Detector {
             let nameModel = modelled ? names : nil
             let reading = nameModel?.read(text, isCancelled: isCancelled)
             let named = nameModel.flatMap { model in reading.map { model.find(text, reading: $0) } } ?? []
-            let located = modelled && addresses ? AddressModel.find(text, isCancelled: isCancelled) : []
+            let (located, unsure) = modelled && addresses ? AddressModel.read(text, isCancelled: isCancelled) : ([], [])
+            // A street or a house named alone is asked about, never replaced on a guess.
+            doubts += unsure
             spans = Self.addressed(spans, in: text)
             spans.removeAll { Self.namesNoOne($0, in: text) }
             // A place right after a title or a rank is the person it names: "Private Ellery", "Ms Paris".
@@ -137,6 +141,8 @@ public final class Detector {
             spans.append(contentsOf: ListedNames.scan(text, isCancelled: isCancelled).filter { span in
                 !unsaid.contains { $0.overlaps(span.range) } && (span.score != ListedNames.pairScore || !organisations.contains { $0.overlaps(span.range) })
             })
+            // Names in capitals beside a first name or a title ("Julie BEET", "Ms BEET").
+            spans.append(contentsOf: CapitalNames.scan(text, isCancelled: isCancelled).filter { span in !unsaid.contains { $0.overlaps(span.range) } })
             // The name model only fills gaps: where anything else found something, that finding stands.
             var covered = IndexSet()
             for range in spans.map(\.range) + quiet + written.quiet + organisations + labelled.labels where !range.isEmpty { covered.insert(integersIn: range) }
@@ -186,7 +192,16 @@ public final class Detector {
                 guard !organised.intersects(integersIn: range), !strong.intersects(integersIn: range) else { return false }
                 return !weak.contains { $0.overlaps(range) && !(range.lowerBound <= $0.lowerBound && $0.upperBound <= range.upperBound) }
             }
-            var guesses = context.spans
+            // A street or a house the model reads as a place ("on Mill Lane") gets no town's
+            // stand-in: like the address model's single pieces, it is asked about instead.
+            var guesses: [Span] = []
+            for span in context.spans {
+                if span.entity == "LOCATION", !taken.intersects(integersIn: span.range), AddressModel.streetAlone(TextRanges.substring(text, span.range)) {
+                    doubts.append(Span(range: span.range, entity: "ADDRESS", score: AddressModel.doubtScore))
+                } else {
+                    guesses.append(span)
+                }
+            }
             for (index, person) in context.people.enumerated() {
                 if index.isMultiple(of: 64) && isCancelled() { return scored(spans) }
                 let guess = Span(range: person.range, entity: "PERSON", score: ContextStage.score)

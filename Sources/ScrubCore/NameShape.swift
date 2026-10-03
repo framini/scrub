@@ -30,6 +30,32 @@ enum NameShape {
         }
     }
 
+    /// Verbs that open an instruction about someone: "Call Odalys on …",
+    /// "Ask Ama", "Ping Per". Opening a sentence, such a word is never the
+    /// first of the name after it, whichever detector read the two together.
+    static let commands: Set<String> = ["call", "email", "mail", "ask", "ping", "tell", "text", "message", "contact", "phone", "ring", "telephone",
+                                        "remind", "thank", "invite", "notify", "inform", "cc", "bcc", "dm", "meet", "brief", "nudge", "warn", "alert",
+                                        "update", "forward", "loop", "reach", "help", "pay", "send", "let", "get", "have", "see", "visit",
+                                        "welcome", "congratulate", "thanks", "escalate", "assign", "add", "tag", "mention", "include", "introduce"]
+    /// Whether the word is such a verb opening its sentence or line.
+    static func commands(_ word: Word, in text: String) -> Bool {
+        commands.contains(word.bare) && word.text.first?.isUppercase == true && NameCues.opens(word.range, in: text)
+    }
+
+    /// A person read with the verb that opens its sentence ("Call Odalys"),
+    /// cut to the name after it; nil when the verb was all there was. Any
+    /// other span is returned as it is.
+    static func withoutCommand(_ span: Span, in text: String) -> Span? {
+        guard span.entity == "PERSON" else { return span }
+        let parts = words(span.range, in: text)
+        guard let first = parts.first, commands(first, in: text) else { return span }
+        guard let rest = parts.dropFirst().first(where: { !joining.contains($0.bare) }) else { return nil }
+        // "Call Center" was never anyone: what is left must hold a name or a word no list calls ordinary.
+        let kept = parts.filter { $0.range.lowerBound >= rest.range.lowerBound }
+        guard kept.contains(where: { NameLists.isName($0.bare) || !NameLists.isOrdinary($0.bare) }) else { return nil }
+        return Span(range: rest.range.lowerBound..<span.range.upperBound, entity: span.entity, score: span.score)
+    }
+
     static func isRole(_ word: String) -> Bool {
         let bare = word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".'’"))
         // "Private Ellery", "Major Quist": a rank that is also a word counts only with its capital.
@@ -61,7 +87,7 @@ enum NameShape {
             trailingRole = trailingRole || isRole(last.text)
             parts.removeLast()
         }
-        while let first = parts.first, isRole(first.text) || joining.contains(first.bare) { parts.removeFirst() }
+        while let first = parts.first, isRole(first.text) || joining.contains(first.bare) || commands(first, in: text) { parts.removeFirst() }
         // "Assistant Secretary": the ordinary words before a role are part of the
         // role, not a name ("Sergeant Gamble" is someone).
         if trailingRole, parts.allSatisfy({ NameLists.isOrdinary($0.bare) && !NameLists.isName($0.bare) }) { return nil }
@@ -128,6 +154,8 @@ enum NameCues {
     private static let irregular: Set<String> = ["said", "says", "left", "told", "sent", "wrote", "took", "gave", "made", "came", "went", "got", "paid", "spoke", "knew", "thought",
                                                  "found", "rang", "brought", "bought", "met", "felt", "kept", "heard", "saw", "ran", "won", "lost", "wants", "needs", "thinks",
                                                  "asks", "writes", "calls", "agrees", "agreed", "is", "was", "has", "had", "will", "would", "can", "could", "should", "might"]
+    /// Verbs that tell what someone did, not who: "SAID", "WROTE" in capitals name no one.
+    static let verbs = reporting.union(irregular)
     /// The word after is a verb, so the one before is its subject: "Faith
     /// confirmed", "Will asked". "Gas Day January", "Article 47" are no clause.
     static func acts(_ range: Range<Int>, in text: String) -> Bool {

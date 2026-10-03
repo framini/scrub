@@ -75,7 +75,8 @@ def main():
     for name, url, _, _ in GITHUB:
         path = os.path.join(args.out, name)
         if not os.path.exists(path):
-            with urllib.request.urlopen(url) as response, open(path, "wb") as f:
+            request = urllib.request.Request(url, headers={"User-Agent": "scrub-tools/1.0"})
+            with urllib.request.urlopen(request) as response, open(path, "wb") as f:
                 shutil.copyfileobj(response, f)
     if args.share_alike:
         for name, repo, revision, file, _, _ in HF:

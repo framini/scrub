@@ -4,7 +4,7 @@ import Synchronization
 /// Runs the context model over a document's free text: every value of three
 /// words or more, or with letters outside the Latin script. Its windows are
 /// spread over every core, report progress as `.reading`, and stop between
-/// windows once cancelled. Above `gateFrom` UTF-16 units of free text, a
+/// windows once cancelled. Above `gateLimit` UTF-16 units of free text, a
 /// window is read only if a sentence in it has something the model could find
 /// (see `ContextGate`); below it the model reads everything.
 enum ContextStage {
@@ -13,13 +13,23 @@ enum ContextStage {
     /// The gate misses a few findings reading everything catches, so it waits
     /// for documents where reading everything costs minutes: the model adds
     /// about 20 seconds a megabyte of prose on an M1 Max, the rest of a scrub
-    /// several times that.
+    /// several times that. Tests may move it, in debug builds only.
+    #if DEBUG
     static let gateFrom = Atomic<Int>(10_000_000)
+    static var gateLimit: Int { gateFrom.load(ordering: .relaxed) }
+    #else
+    static var gateLimit: Int { 10_000_000 }
+    #endif
     /// The most a non-Latin name's pieces may lean to no label, set per build
     /// of the model from its held-out generated set (`ContextWeights`).
     static let nonLatinDoubt = ContextWeights.shipped.nonLatinDoubt
-    /// Off only in tests that measure Scrub without the model.
+    /// Off only in tests that measure Scrub without the model; release builds have no switch.
+    #if DEBUG
     static let enabled = Atomic(true)
+    static var isEnabled: Bool { enabled.load(ordering: .relaxed) }
+    #else
+    static var isEnabled: Bool { true }
+    #endif
 
     /// What the model read in one text: its findings as Scrub names them,
     /// and the people it read in Latin script, which count only where
@@ -37,10 +47,10 @@ enum ContextStage {
 
     /// The model's findings for each text, nil where it read nothing.
     static func find(_ texts: [String?], progress: (Stage, Int, Int) -> Void, cancelled: CancellationFlag) throws -> [Reading?] {
-        guard enabled.load(ordering: .relaxed), !Coverage.withheld.contains(.contextModel), let model = ContextModel.shared else { return texts.map { _ in nil } }
+        guard isEnabled, !Coverage.withheld.contains(.contextModel), let model = ContextModel.shared else { return texts.map { _ in nil } }
         let readable = texts.indices.filter { texts[$0].map(isFreeText) == true }
         guard !readable.isEmpty else { return texts.map { _ in nil } }
-        let gated = readable.reduce(0) { $0 + (texts[$1]! as NSString).length } >= gateFrom.load(ordering: .relaxed)
+        let gated = readable.reduce(0) { $0 + (texts[$1]! as NSString).length } >= gateLimit
 
         // Pieces, in chunks so a long text is cut on every core.
         let chunks = readable.flatMap { leaf in Self.chunks(texts[leaf]!).map { (leaf, $0) } }

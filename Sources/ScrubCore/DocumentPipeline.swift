@@ -23,11 +23,15 @@ struct DocumentLeaf: Sendable {
     var seen: String { view?.clean ?? text }
     /// The object a flattened header names within its record ("applicant" of "applicant.first_name").
     let objectPath: String
+    /// The key of an address field whose value has no number ("line1": "the
+    /// old rectory, church lane"), which `key` leaves out (see `KeyHints.numberlessLine`).
+    let addressKey: String?
 
     init(_ text: String, key: String? = nil, records: [Int] = [], contextWords: Set<String> = [], numericEntity: String? = nil, fieldName: Bool = false, objectPath: String = "") {
         self.objectPath = objectPath
         self.text = text
         self.key = numericEntity != nil || KeyHints.fits(key, text) ? key : nil
+        addressKey = self.key == nil && numericEntity == nil && KeyHints.numberlessLine(key, text) ? key : nil
         self.rawKey = KeyHints.hint(key) == nil ? key : nil
         self.records = RecordPath(records)
         self.contextWords = contextWords
@@ -293,6 +297,12 @@ enum DocumentPipeline {
                 // An ID in running text that spells someone out ("cus_odalys_ferriter") is theirs too.
                 found = Detector.resolve(found + ids)
             }
+            // An address field with no number, beside address parts that are replaced, is
+            // the rest of that address: it never stays as written while they change.
+            if leaf.addressKey != nil, let address = addresses[index], address.city != nil || address.postal != nil || address.region != nil,
+               !found.contains(where: { $0.entity == "ADDRESS" && $0.range.count * 2 >= (leaf.seen as NSString).length }) {
+                found = [Span(range: 0..<(leaf.seen as NSString).length, entity: "ADDRESS", score: 1)]
+            }
             job.recordOriginals([(leaf.seen, found)])
             // Read in the text as seen, replaced in the text as written.
             if let view = leaf.view { found = found.map(view.raw) }
@@ -308,7 +318,7 @@ enum DocumentPipeline {
                 marks = [Mark(range: 0..<(text as NSString).length, entity: "TIME_ZONE", original: leaf.text, confidence: 1)]
             } else {
                 held = doubts.indices.contains(index) ? doubts[index].map { doubt in
-                    Mark(range: leaf.view?.raw(doubt.range) ?? doubt.range, entity: "PERSON", original: TextRanges.substring(leaf.seen, doubt.range), confidence: min(doubt.score, Doubt.unconfirmed.confidence), doubt: .unconfirmed)
+                    Mark(range: leaf.view?.raw(doubt.range) ?? doubt.range, entity: doubt.entity, original: TextRanges.substring(leaf.seen, doubt.range), confidence: min(doubt.score, Doubt.unconfirmed.confidence), doubt: .unconfirmed)
                 } : []
                 (text, marks) = try job.apply(leaf.text, spans: found, owner: owner, address: addresses[index], held: &held)
             }
@@ -395,9 +405,9 @@ enum DocumentPipeline {
         let split = Set(slots.compactMap { record, byHint in byHint.values.contains { $0.count > 1 } ? record : nil })
         for (index, leaf) in leaves.enumerated() {
             if index.isMultiple(of: 1024) && Task.isCancelled { return [] }
-            guard let record = leaf.lastRecord, let key = leaf.key ?? leaf.rawKey, !leaf.text.isEmpty else { continue }
+            guard let record = leaf.lastRecord, let key = leaf.key ?? leaf.rawKey ?? leaf.addressKey, !leaf.text.isEmpty else { continue }
             let words = KeyHints.words(key)
-            let hint = KeyHints.hint(leaf.key) ?? leaf.numericEntity
+            let hint = KeyHints.hint(leaf.key ?? leaf.addressKey) ?? leaf.numericEntity
             let country = leaf.key == nil && (words.last == "country" || words.suffix(2) == ["country", "code"])
             guard StandIns.placed.contains(hint ?? "") || StandIns.local.contains(hint ?? "") || country || isTimeZone(leaf) else { continue }
             let group = "\(record)\u{0}\(split.contains(record) ? qualifier(key) : "")"

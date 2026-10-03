@@ -74,6 +74,8 @@ final class StandIns {
     private func drawn(_ entity: String, _ original: String, persona: Persona?, address: AddressParts?) -> String {
         let actual = entity == "LOCATION" && people.knows(original) ? "PERSON" : entity
         if actual == "AGE" { return age(original) }
+        // A team's or a list's mailbox ("ops-team@…") names no one: it keeps its name, and only its domain is another.
+        if actual == "EMAIL_ADDRESS", original.contains("@"), People.isRoleMailbox(original) { return String(original.prefix { $0 != "@" }) + "@" + people.domain(of: original) }
         // A birth date's month or day alone follows the date of its own record.
         if actual == "DATE_OF_BIRTH", original.count <= 2, let value = Int(original), let part = datePart(value) { return String(part) }
         // Read off the number nearest it every time, never from a table of
@@ -285,13 +287,20 @@ final class StandIns {
     }
     /// An age moved by as many years as the birth year it fits (within a
     /// year, for a birthday still to come), from the nearest scope that holds
-    /// a birth date. Where that scope's birth dates fit none, or the
-    /// document holds none, it tells nothing and stays.
+    /// a birth date. In its own record, sentence or paragraph, an age may
+    /// have been written years before the scrub ("1994-11-02" beside 30 in a
+    /// file from 2024), so there it moves with a birth date it could have been
+    /// the age at, up to 30 years ago. Where that scope's birth dates fit
+    /// none, or the document holds none, it tells nothing and stays.
     private func age(_ original: String) -> String {
         guard let age = Int(original.trimmingCharacters(in: .whitespaces)) else { return original }
         let distance = { (year: Int) in abs((self.now - year) - age) }
-        let found = nearest({ self.scopedYears[$0] ?? [] }, document: yearOrder)
-        let fitting = found.filter { distance($0) <= 1 }
+        let scope = scopes.first { !(self.scopedYears[$0] ?? []).isEmpty }
+        let found = scope.flatMap { self.scopedYears[$0] } ?? yearOrder
+        var fitting = found.filter { distance($0) <= 1 }
+        // A record ("r3"), or a sentence or paragraph of a value ("v0s2", "v0p1"); not a whole text.
+        let own = scope.map { $0.first == "r" || $0.dropFirst().contains { $0 == "s" || $0 == "p" } } ?? false
+        if fitting.isEmpty, own { fitting = found.filter { (0...30).contains((self.now - $0) - age) } }
         if fitting.count > 1 { unclear = true }
         // The first-met of the closest: `min` keeps the first of equals.
         guard let real = fitting.min(by: { distance($0) < distance($1) }), let fake = years[real] else { return original }

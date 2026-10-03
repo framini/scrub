@@ -17,15 +17,74 @@ struct ResultView: View {
                 Divider().overlay(Color.line)
             }
             preview
+            if !model.pick.isEmpty {
+                Divider().overlay(Color.line)
+                selectionBar
+            }
             Divider().overlay(Color.line)
             footer
         }
         .background(Color.snow, in: .rect(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.rule))
         .sheet(isPresented: Binding(get: { model.reviewing }, set: { if !$0 { model.cancelReview() } })) {
-            ReviewView(findings: finished.result.uncertain, choices: finished.choices, onDone: { model.finishReview($0) }, onCancel: { model.cancelReview() })
+            ReviewView(findings: finished.result.uncertain, marked: finished.result.byHand, kept: kept, choices: finished.choices, onDone: { model.finishReview($0) }, onCancel: { model.cancelReview() })
                 .preferredColorScheme(.light)
         }
+    }
+
+    /// What the stand-ins a selection is on replaced, once each.
+    static func originals(of pick: Pick) -> [String] {
+        var seen: Set<String> = []
+        return (pick.replaced.map(\.original) + pick.marked.map(\.text)).filter { seen.insert($0).inserted }
+    }
+
+    /// Findings Scrub was sure of that the person chose to keep as written somewhere.
+    private var kept: [Finding] {
+        guard !finished.choices.left.isEmpty || finished.choices.places.values.contains(true) else { return [] }
+        return finished.result.findings.filter { finding in !finding.needsReview && finding.places.contains { finished.choices.leaves($0, of: finding) } }
+    }
+
+    /// What the preview's selection stands on, and the one action for it (⌘E):
+    /// replace what Scrub missed, as the kind it guessed or one chosen, or keep
+    /// the original of what it replaced.
+    private var selectionBar: some View {
+        HStack(spacing: 10) {
+            let pick = model.pick
+            if !pick.missed.isEmpty {
+                Text(Copy.quoted(pick.missed)).font(.system(size: 12, weight: .semibold, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                Text("isn’t replaced").foregroundStyle(Color.slate)
+                Spacer()
+                Menu {
+                    ForEach(Marks.kinds, id: \.self) { kind in
+                        Button(Copy.kind(kind)) { model.markKind = kind }
+                    }
+                } label: {
+                    Text(Copy.kind(model.markKind))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("What to replace it as")
+                Button { model.applySelection() } label: {
+                    HStack(spacing: 6) { Text("Replace"); KeyHint(key: "⌘E") }
+                }
+                .buttonStyle(SecondaryButton())
+                .help(Copy.replaceSelectionHelp)
+            } else {
+                Text("Stand-in for").foregroundStyle(Color.slate)
+                Text(Copy.quoted(Self.originals(of: pick))).font(.system(size: 12, weight: .semibold, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                Spacer()
+                Button { model.keepOriginal() } label: {
+                    HStack(spacing: 6) { Text("Keep original"); KeyHint(key: "⌘E") }
+                }
+                .buttonStyle(SecondaryButton())
+                .help(Copy.keepOriginalHelp)
+            }
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 20)
+        .padding(.vertical, 8)
+        .background(Color.mist)
+        .disabled(model.applyingReview)
     }
 
     private var header: some View {
@@ -91,15 +150,8 @@ struct ResultView: View {
         switch finished.result.preview {
         case .text(let text, let marks, let truncated):
             VStack(spacing: 0) {
-                ScrollView {
-                    Text(Self.highlighted(text, marks))
-                        .font(.system(size: 13, design: .monospaced))
-                        .lineSpacing(6)
-                        .modifier(Selectable(enabled: finished.mayExport))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 16)
-                }
+                // Selectable always, so a value can be marked; it leaves the app only once `mayExport` allows.
+                PreviewText(text: text, marks: marks, mayExport: finished.mayExport, model: model)
                 if truncated {
                     Text("Showing the start of the file. The saved or copied file has everything.")
                         .font(.system(size: 12))
@@ -111,7 +163,7 @@ struct ResultView: View {
                 }
             }
         case .table(let columns, let rows, let rowCount, let marks):
-            TablePreview(columns: columns, rows: rows, rowCount: rowCount, marks: marks)
+            TablePreview(columns: columns, rows: rows, rowCount: rowCount, marks: marks, mayExport: finished.mayExport, model: model)
         }
     }
 
@@ -137,6 +189,14 @@ struct ResultView: View {
                 .buttonStyle(.plain)
                 .help("See the replacements Scrub is least sure of, and leave any that aren’t personal")
             }
+            let marked = finished.result.byHand.count, keptCount = kept.count
+            if marked + keptCount > 0 {
+                Button { model.review() } label: {
+                    Text(Copy.changes(marked: marked, kept: keptCount)).fontWeight(.semibold).foregroundStyle(Color.slate)
+                }
+                .buttonStyle(.plain)
+                .help("See the values you marked or kept, and undo any of them, place by place")
+            }
             if finished.result.neutralized > 0 {
                 Text("\(finished.result.neutralized) \(finished.result.neutralized == 1 ? "formula" : "formulas") made inert")
                     .foregroundStyle(Color.slate)
@@ -151,22 +211,24 @@ struct ResultView: View {
 
     /// Marks are UTF-16 offsets, the same units NSString ranges use.
     static func highlighted(_ text: String, _ marks: [Mark]) -> AttributedString {
-        let styled = NSMutableAttributedString(string: text)
+        (try? AttributedString(styled(text, marks), including: \.appKit)) ?? AttributedString(text)
+    }
+
+    /// The text with each stand-in marked, in `font` when given, for the AppKit previews.
+    static func styled(_ text: String, _ marks: [Mark], font: NSFont? = nil, lineSpacing: CGFloat = 0) -> NSMutableAttributedString {
+        var base: [NSAttributedString.Key: Any] = [:]
+        if let font {
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineSpacing = lineSpacing
+            base = [.font: font, .foregroundColor: NSColor(Color.ink), .paragraphStyle: paragraph]
+        }
+        let styled = NSMutableAttributedString(string: text, attributes: base)
         let length = (text as NSString).length
         for mark in marks where mark.range.lowerBound >= 0 && mark.range.upperBound <= length {
             let range = NSRange(location: mark.range.lowerBound, length: mark.range.count)
             styled.addAttributes([.backgroundColor: NSColor(Color.lichen), .foregroundColor: NSColor(Color.evergreen)], range: range)
         }
-        return (try? AttributedString(styled, including: \.appKit)) ?? AttributedString(text)
-    }
-}
-
-/// Text that can be selected, and so copied, dragged, shared or sent to a
-/// service, only once the result may leave the app (`Finished.mayExport`).
-private struct Selectable: ViewModifier {
-    let enabled: Bool
-    func body(content: Content) -> some View {
-        if enabled { content.textSelection(.enabled) } else { content.textSelection(.disabled) }
+        return styled
     }
 }
 
@@ -174,13 +236,17 @@ private struct TablePreview: View {
     let columns: [String]
     let rows: [[String]]
     let rowCount: Int
+    let mayExport: Bool
+    let model: AppModel
     private let widths: [CGFloat]
     private let cellMarks: [Int: [Int: [Mark]]]
 
-    init(columns: [String], rows: [[String]], rowCount: Int, marks: [TableMark]) {
+    init(columns: [String], rows: [[String]], rowCount: Int, marks: [TableMark], mayExport: Bool, model: AppModel) {
         self.columns = columns
         self.rows = rows
         self.rowCount = rowCount
+        self.mayExport = mayExport
+        self.model = model
         widths = columns.indices.map { column in
             let longest = max(columns[column].count, rows.prefix(100).compactMap { column < $0.count ? $0[column].count : nil }.max() ?? 0)
             return min(240, max(100, CGFloat(longest * 8 + 12)))
@@ -249,9 +315,9 @@ private struct TablePreview: View {
             let hidden = marks.contains { $0.range.upperBound > firstLine }
             let line = (value as NSString).substring(to: firstLine)
             let length = (line as NSString).length
-            Text(ResultView.highlighted(line + " …", shown + (hidden ? [Mark(range: (length + 1)..<(length + 2), entity: "")] : []))).help(value)
+            PreviewCell(text: line + " …", marks: shown + (hidden ? [Mark(range: (length + 1)..<(length + 2), entity: "")] : []), column: columns[column], mayExport: mayExport, model: model).help(value)
         } else {
-            Text(ResultView.highlighted(value, marks)).help(value)
+            PreviewCell(text: value, marks: marks, column: columns[column], mayExport: mayExport, model: model).help(value)
         }
     }
 

@@ -3,15 +3,20 @@ import SwiftUI
 
 /// The findings Scrub is least sure of, each with where it stands, to keep
 /// replaced or leave as written before the file goes anywhere. A choice
-/// covers every place the value appears, or one place at a time.
+/// covers every place the value appears, or one place at a time. Below them,
+/// the values the person marked or kept, each to undo everywhere or place by place.
 struct ReviewView: View {
     let findings: [Finding]
+    let marked: [Finding]
+    let kept: [Finding]
     let onDone: (Choices) -> Void
     let onCancel: () -> Void
     @State private var choices: Choices
 
-    init(findings: [Finding], choices: Choices, onDone: @escaping (Choices) -> Void, onCancel: @escaping () -> Void) {
+    init(findings: [Finding], marked: [Finding] = [], kept: [Finding] = [], choices: Choices, onDone: @escaping (Choices) -> Void, onCancel: @escaping () -> Void) {
         self.findings = findings
+        self.marked = marked
+        self.kept = kept
         self.onDone = onDone
         self.onCancel = onCancel
         _choices = State(initialValue: choices)
@@ -22,8 +27,8 @@ struct ReviewView: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(Copy.reviewTitle(findings.count)).font(.system(size: 17, weight: .semibold))
-                Text(Copy.reviewBody).font(.system(size: 13)).foregroundStyle(Color.slate).fixedSize(horizontal: false, vertical: true)
+                Text(findings.isEmpty ? Copy.yourChanges : Copy.reviewTitle(findings.count)).font(.system(size: 17, weight: .semibold))
+                Text(findings.isEmpty ? Copy.yourChangesBody : Copy.reviewBody).font(.system(size: 13)).foregroundStyle(Color.slate).fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(20)
@@ -34,16 +39,22 @@ struct ReviewView: View {
                         ReviewRow(finding: finding, choices: $choices)
                         Divider().overlay(Color.fog)
                     }
+                    section(Copy.markedSection, marked)
+                    section(Copy.keptSection, kept)
                 }
             }
             Divider().overlay(Color.line)
             HStack(spacing: 14) {
-                Button("Replace all") { choices = Choices() }
-                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Color.slate)
-                Button("Leave all") { choices = Choices(left: Set(findings.map(\.id))) }
-                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Color.slate)
+                if !findings.isEmpty {
+                    Button("Replace all") { for finding in findings { choices.set(finding, leave: false) } }
+                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Color.slate)
+                    Button("Leave all") { for finding in findings { choices.set(finding, leave: true) } }
+                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Color.slate)
+                }
                 Spacer()
-                Text(Copy.reviewTally(leaving: leaving, of: findings.count)).font(.system(size: 12)).foregroundStyle(Color.slate)
+                if !findings.isEmpty {
+                    Text(Copy.reviewTally(leaving: leaving, of: findings.count)).font(.system(size: 12)).foregroundStyle(Color.slate)
+                }
                 Button { onCancel() } label: {
                     HStack(spacing: 6) { Text("Cancel"); KeyHint(key: "esc") }
                 }
@@ -62,6 +73,23 @@ struct ReviewView: View {
         .frame(width: 680, height: 540)
         .background(Color.snow)
         .foregroundStyle(Color.ink)
+    }
+
+    /// The person's own changes, under a heading of their own.
+    @ViewBuilder private func section(_ title: String, _ rows: [Finding]) -> some View {
+        if !rows.isEmpty {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.slate)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                .background(Color.mist)
+            ForEach(rows) { finding in
+                ReviewRow(finding: finding, choices: $choices)
+                Divider().overlay(Color.fog)
+            }
+        }
     }
 }
 

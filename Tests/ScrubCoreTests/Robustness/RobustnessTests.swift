@@ -114,8 +114,8 @@ struct Robustness {
         Transform(name: "sharedLastFour", column: "Shared last-four"),
         Transform(name: "links", column: "URLs", writing: Writing(link: true)),
     ]
-    /// Limits the README names: a value split across XML elements is read element by element.
-    static let known: Set<String> = ["xmlElementSplit"]
+    /// Limits the README names. None today: a value split across XML elements is read whole.
+    static let known: Set<String> = []
 
     /// The output as a reader sees it: hidden characters gone, a no-break
     /// space a space, inline tags and emphasis marks gone, entities read.

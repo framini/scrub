@@ -17,8 +17,12 @@ public struct Coverage: Sendable, Equatable {
     /// Parts a test withholds, as if their files had failed to load. Read in
     /// the scrub's own task when it starts (worker threads see no task-local
     /// values), so a scrub started in a `withValue` scope runs without them
-    /// throughout. Nothing in the app sets it.
+    /// throughout. Only debug builds, which tests run, can set it.
+    #if DEBUG
     @TaskLocal static var withheld: Set<Part> = []
+    #else
+    static var withheld: Set<Part> { [] }
+    #endif
 
     /// What this scrub can use, read once as it starts.
     static func current() -> Coverage {

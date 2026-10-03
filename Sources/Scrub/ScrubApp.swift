@@ -27,6 +27,10 @@ struct ScrubApp: App {
                 Button("Paste") { model.paste() }.keyboardShortcut("v")
                 Button("Select All") { NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil) }.keyboardShortcut("a")
             }
+            // In place of Find, whose "Use Selection for Find" also takes ⌘E; nothing in Scrub is edited.
+            CommandGroup(replacing: .textEditing) {
+                Button("Replace Selection or Keep Original") { model.applySelection() }.keyboardShortcut("e")
+            }
             CommandGroup(replacing: .saveItem) {
                 Button("Save…") { model.viaShortcut(.save) }.keyboardShortcut("s")
             }

@@ -18,30 +18,38 @@ struct Visible {
     /// Unseen characters: zero-width space, non-joiner and joiner, word joiner, byte-order mark, soft hyphen.
     static let hidden: Set<UInt16> = [0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF, 0x00AD]
     private static let nbsp: UInt16 = 0x00A0
+    /// Where one text of a value ends and the next begins, when a format
+    /// joins several to read them as one (an XML element's text around its
+    /// inline elements, see `XMLFile`): unseen like a hidden character, but
+    /// kept by `rewrite` like markup, so the pieces can be parted again.
+    static let joint = "\u{2063}"
+    private static let jointUnit: UInt16 = 0x2063
     /// Formatting against a word: emphasis asterisks and strike-through
     /// touching a letter ("*Odalys*", "Odal**ys"), never a digit ("****1234"
     /// is a mask), and inline tags touching one ("<b>Odal</b>ys").
     private static let markup = TextPattern(
         #"(?<=[\p{L}])(?:\*{1,3}|~~)(?![\p{N}*~])|(?<![\p{N}*~])(?:\*{1,3}|~~)(?=[\p{L}])"#
-        + #"|(?<=[\p{L}])</?(?:b|i|u|s|em|strong|mark|span|small|sup|sub|del|ins|font|code)(?:\s[^<>]{0,80})?>|</?(?:b|i|u|s|em|strong|mark|span|small|sup|sub|del|ins|font|code)(?:\s[^<>]{0,80})?>(?=[\p{L}])"#,
+        + #"|(?<=[\p{L}])</?(?:b|i|u|s|em|strong|mark|span|small|sup|sub|del|ins|font|code)(?:\s[^<>]{0,80})?>|</?(?:b|i|u|s|em|strong|mark|span|small|sup|sub|del|ins|font|code)(?:\s[^<>]{0,80})?>(?=[\p{L}])"#
+        + #"|\x{2063}"#,
         options: [.caseInsensitive])
 
     /// The visible text of `text`, or nil when it is all visible already.
     init?(_ text: String) {
         // Most text has nothing hidden and no markup against a word: one pass, no copy.
-        var hasHidden = false, hasMarkup = false
+        var hasHidden = false, hasMarkup = false, hasJoint = false
         var previous: UInt16 = 32
         for unit in text.utf16 {
+            if unit == Self.jointUnit { hasJoint = true }
             if unit == 0x00A0 || unit == 0x200B || unit == 0x200C || unit == 0x200D || unit == 0x2060 || unit == 0xFEFF || unit == 0x00AD { hasHidden = true }
             // Markup that may touch a word: a mark or a tag after a letter, or before one (checked below).
             if (unit == 42 || unit == 126 || unit == 60) && !hasMarkup { hasMarkup = true }
             if (previous == 42 || previous == 126 || previous == 62) && Self.isLetter(unit) { hasMarkup = true }
             previous = unit
         }
-        guard hasHidden || hasMarkup else { return nil }
+        guard hasHidden || hasMarkup || hasJoint else { return nil }
         let units = Array(text.utf16)
         var removed = [Bool](repeating: false, count: units.count)
-        for (index, unit) in units.enumerated() where Self.hidden.contains(unit) { removed[index] = true }
+        for (index, unit) in units.enumerated() where Self.hidden.contains(unit) || unit == Self.jointUnit { removed[index] = true }
         if hasMarkup {
             for match in Self.markupMatches(text, units) {
                 for index in match.location..<NSMaxRange(match) { removed[index] = true }
@@ -120,7 +128,7 @@ struct Visible {
     /// have as many ("*Ingvar* **Peltomaa**" → "*Maren* **Holt**"); otherwise
     /// the markup inside after it, so "Odal</b>ys" becomes "Maren</b>".
     static func rewrite(_ raw: String, with standIn: String) -> String {
-        guard raw.utf16.contains(where: { hidden.contains($0) || $0 == nbsp || $0 == 42 || $0 == 126 || $0 == 60 }) else { return standIn }
+        guard raw.utf16.contains(where: { hidden.contains($0) || $0 == nbsp || $0 == 42 || $0 == 126 || $0 == 60 || $0 == jointUnit }) else { return standIn }
         let rawWords = raw.split(whereSeparator: { $0 == " " || $0 == "\u{00A0}" }).map(String.init)
         let fakeWords = standIn.split(separator: " ").map(String.init)
         if rawWords.count > 1, rawWords.count == fakeWords.count {

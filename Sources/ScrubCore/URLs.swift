@@ -154,9 +154,18 @@ enum URLs {
             // A page under a person ("/users/sign_in", "/profile/settings") is no one.
             // Nor is a word for a part of the site ("/authors/id/T/TOMC"), and a
             // two-letter handle is too likely a word to replace wherever it is written.
-            if pages.contains(value.lowercased()) || value.count < 3 && !bare { return nil }
+            if pages.contains(value.lowercased()) || value.count < 3 && !bare || isFileName(value) { return nil }
             return TextRanges.matches(handle, in: value).isEmpty ? nil : "USERNAME"
         }
+    }
+    /// Extensions of the files a site serves: "/user/default.asp" and
+    /// "/users/index.html" are pages, not people.
+    private static let fileExtensions: Set<String> = ["html", "htm", "shtml", "xhtml", "asp", "aspx", "ashx", "asmx", "php", "php3", "php5", "phtml", "jsp", "jspx",
+                                                      "do", "action", "cgi", "pl", "py", "rb", "cfm", "cfml", "nsf", "dll", "exe", "js", "mjs", "css", "json",
+                                                      "xml", "rss", "atom", "txt", "md", "csv", "pdf", "png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "zip"]
+    static func isFileName(_ value: String) -> Bool {
+        guard let dot = value.lastIndex(of: "."), dot != value.startIndex else { return false }
+        return fileExtensions.contains(value[value.index(after: dot)...].lowercased())
     }
     /// Pages a site keeps under its people, not people.
     private static let pages: Set<String> = ["new", "edit", "settings", "me", "self", "login", "logout", "signin", "sign_in", "signup", "sign_up", "register", "search", "list", "all",

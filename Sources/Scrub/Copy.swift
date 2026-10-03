@@ -7,6 +7,7 @@ enum Copy {
         "Replaces each one with a realistic stand-in. The same person or value gets the same stand-in everywhere in the file.",
         "Checks the result against what it replaced: a name, number or email written another way is replaced too, and anything it only suspects is left for you to decide.",
         "Asks you about the replacements it’s least sure of before you copy or save, so you can leave any that aren’t personal.",
+        "Lets you select anything it missed in the result and replace it too, everywhere it’s written, or keep the original of anything it shouldn’t have replaced.",
         "Keeps the file’s structure, so JSON, CSV and XML stay valid.",
     ]
     static let howItWorksFooter = "macOS sandboxes the app with no network access, so nothing can be sent anywhere."
@@ -62,7 +63,8 @@ enum Copy {
     /// Why Scrub asks about a finding, in a few words; nil when its kind and confidence say enough.
     static func reason(_ finding: Finding) -> String? {
         switch finding.doubt {
-        case .unconfirmed: "Looks like a name, but nothing else in the text agrees"
+        case .unconfirmed: finding.entity == "ADDRESS" ? "Looks like a street or a house, but nothing beside it says it is an address"
+            : "Looks like a name, but nothing else in the text agrees"
         case .unclearOwner: "More than one person nearby could own this; it follows the first"
         case nil: finding.suspected ? "Written like a value Scrub replaced, but not surely it" : nil
         }
@@ -70,6 +72,25 @@ enum Copy {
     static func places(_ count: Int) -> String { "Choose for each of \(count) places" }
     static let leaveHere = "Leave here"
     static func toCheck(_ count: Int) -> String { count == 1 ? "1 to check" : "\(count) to check" }
+
+    // Marking values by hand.
+    static let yourChanges = "Your changes"
+    static let yourChangesBody = "Values you marked are replaced everywhere they’re written, and values you kept stay as written. Leave a place to undo it there, or everywhere to undo it all."
+    static let markedSection = "Marked by you"
+    static let keptSection = "Kept as written by you"
+    static func changes(marked: Int, kept: Int) -> String {
+        [marked > 0 ? "\(marked) marked" : nil, kept > 0 ? "\(kept) kept" : nil].compactMap { $0 }.joined(separator: " · ") + " by you"
+    }
+    /// A selected value, quoted, short enough for the bar under the preview.
+    static func quoted(_ values: [String]) -> String {
+        let first = values.first ?? ""
+        let line = first.split(whereSeparator: \.isNewline).first.map(String.init) ?? first
+        let shown = line.count > 40 ? String(line.prefix(39)) + "…" : line
+        return "“\(shown)”" + (values.count > 1 ? " and \(values.count - 1) more" : "")
+    }
+    static let replaceSelectionHelp = "Replace it with a stand-in everywhere it’s written, with its variants"
+    static let keepOriginalHelp = "Put back what this stand-in replaced, everywhere"
+    static func keepOriginal(_ originals: [String]) -> String { originals.count == 1 ? "Keep “\(originals[0])”" : "Keep \(originals.count) originals" }
     static func checked(leaving: Int) -> String { leaving == 0 ? "Checked" : "Checked · \(leaving) left as written" }
 
     static let reducedCoverageTitle = "Reduced coverage"

@@ -34,6 +34,8 @@ import sys
 import urllib.request
 import zipfile
 
+# Says who is asking, so a source's owner can tell these fetches apart.
+USER_AGENT = "scrub-tools/1.0"
 SSA = ("https://www.ssa.gov/oact/babynames/names.zip", "20260928194647",
        "cd78e975ed7bb358e018dd62fbe14ced89295e9581c49172ca4eedcb011b3724")
 CENSUS = ("https://www2.census.gov/topics/genealogy/2010surnames/names.zip", "20260909180332",
@@ -117,7 +119,7 @@ def fetch(url, digest, cache, snapshot=None):
         sources = [url] + ([f"https://web.archive.org/web/{snapshot}id_/{url}"] if snapshot else [])
         for source in sources:
             try:
-                request = urllib.request.Request(source, headers={"User-Agent": "Mozilla/5.0"})
+                request = urllib.request.Request(source, headers={"User-Agent": USER_AGENT})
                 data = urllib.request.urlopen(request, timeout=120).read()
             except OSError as error:
                 print(f"{source}: {error}", file=sys.stderr)
