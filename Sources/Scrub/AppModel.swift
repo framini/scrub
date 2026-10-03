@@ -8,9 +8,15 @@ enum Source { case file, paste }
 struct Finished {
     let name: String
     let source: Source
-    let result: ScrubResult
+    /// What Copy and Save write: the scrub with the findings the person chose to leave taken back.
+    var result: ScrubResult
     var savedAs: String?
     var copied = false
+    /// Uncertain findings to leave as written, and whether the person has looked
+    /// at them. A suspect the final check found starts left as written.
+    var skipped: Set<Finding.ID> = []
+    var reviewed = false
+    var needsReview: Bool { !reviewed && !result.uncertain.isEmpty }
 }
 
 enum Shortcut { case copy, save }
@@ -36,6 +42,10 @@ final class AppModel {
     private(set) var state: ViewState = .idle
     private(set) var pulse: ShortcutPulse?
     var failedSave = false
+    /// The review of uncertain findings is open; `afterReview` runs once it is done.
+    var reviewing = false
+    private var afterReview: Shortcut?
+    private(set) var applyingReview = false
 
     // Clear, and any newer input, bumps the generation; work finishing after
     // that is dropped, so cleared content never comes back.
@@ -116,8 +126,56 @@ final class AppModel {
         viaShortcut(.copy)
     }
 
+    /// Opens the review of uncertain findings; `then` copies or saves once it is done.
+    func review(then shortcut: Shortcut? = nil) {
+        guard case .finished = state else { return }
+        afterReview = shortcut
+        reviewing = true
+    }
+
+    func cancelReview() {
+        afterReview = nil
+        reviewing = false
+    }
+
+    /// Writes the result again with `skipped` left as written everywhere,
+    /// always from the scrub as first made, then copies or saves if asked.
+    func finishReview(skipping skipped: Set<Finding.ID>) {
+        guard case .finished(let done) = state else { return }
+        reviewing = false
+        let next = afterReview
+        afterReview = nil
+        let ticket = generation
+        let result = done.result
+        applyingReview = true
+        work = Task.detached(priority: .userInitiated) { [weak self] in
+            let outcome = Result { try result.skipping(skipped) }
+            await MainActor.run {
+                guard let self, self.generation == ticket, case .finished(var current) = self.state else { return }
+                self.applyingReview = false
+                switch outcome {
+                case .success(let revised):
+                    current.result = revised
+                    current.skipped = skipped
+                    current.reviewed = true
+                    current.copied = false
+                    self.state = .finished(current)
+                    switch next {
+                    case .copy: self.copy()
+                    case .save: self.save()
+                    case nil: break
+                    }
+                case .failure(let error):
+                    self.state = .failed(name: current.name, source: current.source, code: Self.code(for: error))
+                }
+            }
+        }
+    }
+
     func copy() {
-        guard case .finished(var done) = state, let text = String(data: done.result.output, encoding: .utf8) else { return }
+        guard case .finished(var done) = state else { return }
+        if done.needsReview { return review(then: .copy) }
+        guard let text = String(data: done.result.output, encoding: .utf8) else { return }
         board.clearContents()
         board.setString(text, forType: .string)
         copiedChangeCount = board.changeCount
@@ -136,6 +194,7 @@ final class AppModel {
 
     func save() {
         guard case .finished(var done) = state else { return }
+        if done.needsReview { return review(then: .save) }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "scrubbed.\(Self.fileExtension(done.result.format))"
         panel.canCreateDirectories = true
@@ -162,6 +221,9 @@ final class AppModel {
         generation += 1
         work?.cancel()
         work = nil
+        reviewing = false
+        afterReview = nil
+        applyingReview = false
     }
 
     private func fail(_ name: String, _ source: Source, _ code: String) {
@@ -186,7 +248,7 @@ final class AppModel {
             await MainActor.run {
                 guard let self, self.generation == ticket else { return }
                 switch outcome {
-                case .success(let result): self.state = .finished(Finished(name: name, source: source, result: result))
+                case .success(let result): self.state = .finished(Finished(name: name, source: source, result: result, skipped: result.leftAsWritten))
                 case .failure(let error): self.state = .failed(name: name, source: source, code: Self.code(for: error))
                 }
             }

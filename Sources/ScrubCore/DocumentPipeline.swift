@@ -71,25 +71,29 @@ private enum RecordPath: Sendable {
 struct DocumentValue {
     let text: String
     private let storedMarks: [Mark]
-    private let fullEntity: String?
+    private let full: Mark?
+    /// What the final check left as written and asks about: the original's
+    /// range in `text`, and with `proposals`, the stand-in each would take.
     let unresolved: [Mark]
+    let proposals: [String]
 
-    init(text: String, marks: [Mark], unresolved: [Mark]) {
+    init(text: String, marks: [Mark], unresolved: [Mark], proposals: [String] = []) {
         self.text = text
         self.unresolved = unresolved
+        self.proposals = proposals
         if marks.count == 1, marks[0].range == 0..<(text as NSString).length {
             storedMarks = []
-            fullEntity = marks[0].entity
+            full = marks[0]
         } else {
             storedMarks = marks
-            fullEntity = nil
+            full = nil
         }
     }
     var marks: [Mark] {
-        if let fullEntity { return [Mark(range: 0..<(text as NSString).length, entity: fullEntity)] }
+        if let full { return [full] }
         return storedMarks
     }
-    var fullyMarked: Bool { fullEntity != nil }
+    var fullyMarked: Bool { full != nil }
 }
 
 enum DocumentPipeline {
@@ -123,6 +127,9 @@ enum DocumentPipeline {
         var (gazetteer, values, emptyBases) = try detectAndPrepare(leaves, job: job, progress: progress)
         var active = Array(repeating: true, count: values.count)
         var originals = OriginalMatcher(job)
+        // What every value's stand-ins replaced, for the leak gate to find written another way.
+        var gate = LeakGate(values)
+        try Scrubber.checkCancellation()
         for _ in 0..<3 {
             let beforeReplacements = job.replacements.count
             var changedIndices: [Int] = []
@@ -132,27 +139,47 @@ enum DocumentPipeline {
                 let previous = values[index]
                 if previous.fullyMarked { continue }
                 let reusable = !forceFullDetection && emptyBases[index] && previous.text == leaves[index].text
-                let (text, marks, unresolved) = try Correction.run(previous.text, marks: previous.marks, job: job, matcher: originals, gazetteer: gazetteer, passes: 1, base: reusable ? [] : nil)
+                let (text, marks, unresolved) = try Correction.run(previous.text, marks: previous.marks, job: job, matcher: originals, gazetteer: gazetteer, gate: gate, passes: 1, base: reusable ? [] : nil)
                 if text != previous.text { changed = true; changedIndices.append(index) }
                 values[index] = DocumentValue(text: text, marks: marks, unresolved: unresolved)
             }
             if !changed { break }
             let newReplacements = job.replacements[beforeReplacements...]
             originals.add(newReplacements)
+            gate.add(newReplacements)
             if forceFullDetection { continue }
             active = Array(repeating: false, count: values.count)
             for index in changedIndices { active[index] = true }
             let newOriginals = newReplacements.map(\.original).filter { !$0.isEmpty }
             if !newOriginals.isEmpty {
                 let newMatcher = Matcher(newOriginals, isCancelled: { Task.isCancelled })
+                // A value read before these were found may hold them written another way.
+                var newGate = LeakGate()
+                newGate.add(newReplacements)
                 for index in values.indices where !active[index] {
                     if index.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
                     let value = values[index]
                     guard !value.marks.contains(where: { $0.range == 0..<(value.text as NSString).length }) else { continue }
-                    if !newMatcher.matches(in: value.text).isEmpty { active[index] = true }
+                    if !newMatcher.matches(in: value.text).isEmpty || !newGate.isEmpty && newGate.hits(value.text) { active[index] = true }
                 }
             }
         }
+        // What is left as written gets the stand-in it would take, drawn in
+        // document order once the rounds are done, so review can offer it.
+        for index in values.indices where !values[index].unresolved.isEmpty {
+            try Scrubber.checkCancellation()
+            let value = values[index]
+            var kept: [Mark] = [], proposals: [String] = []
+            for mark in value.unresolved {
+                guard let original = mark.original, let fake = job.proposal(for: mark.entity, original: original) else { continue }
+                kept.append(mark)
+                proposals.append(fake)
+            }
+            values[index] = DocumentValue(text: value.text, marks: value.marks, unresolved: kept, proposals: proposals)
+        }
+        // Detectors and matchers stop early once cancelled and hand back what
+        // they found so far; a scrub cut short that way throws, never returns.
+        try Scrubber.checkCancellation()
         return values
     }
     private static func detectAndPrepare(_ leaves: [DocumentLeaf], job: Job, progress: (Stage, Int, Int) -> Void) throws -> (GazetteerMatcher, [DocumentValue], [Bool]) {
@@ -176,7 +203,7 @@ enum DocumentPipeline {
         try Scrubber.checkCancellation()
         observeInitial(leaves, bases: bases, job: job)
         try Scrubber.checkCancellation()
-        let gazetteer = GazetteerMatcher(job.gazetteer, nameParts: job.nameParts, isCancelled: { Task.isCancelled })
+        let gazetteer = GazetteerMatcher(job.gazetteer, nameParts: job.nameParts, cuedParts: job.cuedParts, isCancelled: { Task.isCancelled })
         try Scrubber.checkCancellation()
         job.setReplacementRecording(false)
         defer { job.setReplacementRecording(true) }
@@ -198,10 +225,10 @@ enum DocumentPipeline {
             var (text, marks): (String, [Mark])
             if let entity = leaf.numericEntity {
                 text = job.numericLexeme(leaf.text, entity: entity, address: addresses[index])
-                marks = [Mark(range: 0..<(text as NSString).length, entity: entity)]
+                marks = [Mark(range: 0..<(text as NSString).length, entity: entity, original: leaf.text, confidence: 1)]
             } else if found.isEmpty, let address = addresses[index], isTimeZone(leaf) {
                 text = job.replacement(for: "TIME_ZONE", original: leaf.text, persona: nil, address: address)
-                marks = [Mark(range: 0..<(text as NSString).length, entity: "TIME_ZONE")]
+                marks = [Mark(range: 0..<(text as NSString).length, entity: "TIME_ZONE", original: leaf.text, confidence: 1)]
             } else {
                 (text, marks) = try job.apply(leaf.text, spans: found, owner: owner, address: addresses[index])
             }
@@ -391,11 +418,13 @@ enum DocumentPipeline {
         // Worker threads are outside the task, so Task.isCancelled is always false
         // there; the calling thread watches it and raises a flag they can see.
         let cancelled = CancellationFlag()
+        // Read here, in the scrub's task: the worker threads below see no task-local values.
+        let addresses = AddressModel.active, learned = PersonScorer.learned
         let done = DispatchGroup()
         done.enter()
         DispatchQueue.global(qos: .userInitiated).async {
             DispatchQueue.concurrentPerform(iterations: chunkCount) { chunk in
-                let detector = Detector(isCancelled: { cancelled.isSet })
+                let detector = Detector(isCancelled: { cancelled.isSet }, addresses: addresses, learned: learned)
                 let start = chunk * chunkSize
                 let end = min(count, start + chunkSize)
                 var local: [[Span]?] = []
@@ -405,7 +434,7 @@ enum DocumentPipeline {
                     let leaf = leaves[index]
                     if leaf.numericEntity != nil || KeyHints.hint(leaf.key) != nil && !leaf.text.isEmpty { local.append(nil) }
                     else if leaf.fieldName { local.append(Patterns.find(leaf.text, isCancelled: { cancelled.isSet })) }
-                    else { local.append(detector.base(leaf.text, key: leaf.key, contextWords: leaf.contextWords, context: context[index] ?? [])) }
+                    else { local.append(detector.base(leaf.text, key: leaf.key, contextWords: leaf.contextWords, context: context[index])) }
                 }
                 results.withLock { $0.replaceSubrange(start..<end, with: local) }
             }

@@ -6,7 +6,14 @@ public enum Stage: String, Sendable { case starting, finding, reading, checking 
 public struct Mark: Sendable, Equatable {
     public let range: Range<Int>
     public let entity: String
-    public init(range: Range<Int>, entity: String) { self.range = range; self.entity = entity }
+    /// What the stand-in replaced, and how sure Scrub was of it (see
+    /// `Finding.confidence`); nil on marks that only show where a stand-in is.
+    public let original: String?
+    public let confidence: Double?
+    public init(range: Range<Int>, entity: String, original: String? = nil, confidence: Double? = nil) {
+        self.range = range; self.entity = entity; self.original = original; self.confidence = confidence
+    }
+    func moved(to range: Range<Int>) -> Mark { Mark(range: range, entity: entity, original: original, confidence: confidence) }
 }
 public struct TableMark: Sendable, Equatable {
     public static let header = -1
@@ -29,6 +36,10 @@ public struct ScrubResult: Sendable {
     public let counts: [String: Int]
     public let unresolved: [Mark]
     public let neutralized: Int
+    /// What a person may take back before saving (see `findings` and `skipping`).
+    var review: Review?
+    /// The findings this result leaves as written, when a review chose them; nil for the scrub as made.
+    var left: Set<Int>?
     public init(format: String, output: Data, preview: Preview, counts: [String: Int], unresolved: [Mark], neutralized: Int = 0) {
         self.format = format; self.output = output; self.preview = preview; self.counts = counts; self.unresolved = unresolved; self.neutralized = neutralized
     }
@@ -56,6 +67,9 @@ enum TextRanges {
         if range.lowerBound == 0 && range.upperBound == ns.length { return text }
         return ns.substring(with: NSRange(location: range.lowerBound, length: range.count))
     }
+    // Fetched once: each read of a system set builds it again, and this runs
+    // for every name found in a long text.
+    private static let digits = CharacterSet.decimalDigits, capitals = CharacterSet.uppercaseLetters, alphanumerics = CharacterSet.alphanumerics
     /// Whether the characters meeting at `index` belong to one word. A letter
     /// next to a digit, or a lowercase letter before a capital ("mariaGonzalez"),
     /// starts a new word.
@@ -75,9 +89,9 @@ enum TextRanges {
         func kind(_ scalar: Unicode.Scalar?) -> Character? {
             guard let scalar else { return nil }
             if underscore && scalar == "_" { return "_" }
-            if CharacterSet.decimalDigits.contains(scalar) { return "9" }
-            if CharacterSet.uppercaseLetters.contains(scalar) { return "A" }
-            return CharacterSet.alphanumerics.contains(scalar) ? "a" : nil
+            if digits.contains(scalar) { return "9" }
+            if capitals.contains(scalar) { return "A" }
+            return alphanumerics.contains(scalar) ? "a" : nil
         }
         switch (kind(scalar(endingAt: index)), kind(scalar(startingAt: index))) {
         case (nil, _), (_, nil), ("9", "a"), ("9", "A"), ("a", "9"), ("A", "9"), ("a", "A"): return false
@@ -125,7 +139,7 @@ enum TextRanges {
                 if edits[middle].range.upperBound <= mark.range.lowerBound { low = middle + 1 } else { high = middle }
             }
             if low < edits.count && edits[low].range.overlaps(mark.range) { return nil }
-            return Mark(range: (mark.range.lowerBound + offsets[low])..<(mark.range.upperBound + offsets[low]), entity: mark.entity)
+            return mark.moved(to: (mark.range.lowerBound + offsets[low])..<(mark.range.upperBound + offsets[low]))
         }
     }
     static func ranges(of literal: String, in text: String, options: NSString.CompareOptions = [.caseInsensitive]) -> [Range<Int>] {

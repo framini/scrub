@@ -1,0 +1,112 @@
+# Handwritten held-out set, written before the shipped model was chosen and scored once, after the choice.
+# Invented people, streets and numbers only. Cases are separated by "===="; addresses are marked ⟦…⟧.
+Thanks again,
+Odile Marchetti-Rowe
+Partnerships
+⟦Unit 14, Fernbrook Business Centre
+22 Lockkeeper Way
+Nottingham NG2 3AP⟧
+====
+All the best,
+Kalani
+⟦808 Pikake Loop, Apt 3C
+Hilo, HI 96720⟧
+(808) 555-0177
+====
+Groetjes,
+Joost
+⟦Tulpstraat 9
+2312 BR Leiden⟧
+====
+Med venlig hilsen
+Asger Kjærsgaard
+⟦Nørrebrogade 212, 3. tv.
+2200 København N⟧
+====
+Atentamente,
+Lucía Barrenechea
+⟦Av. Revolución 1450, Int. 6
+Col. San Ángel, 01000 Ciudad de México⟧
+====
+Could you redirect my post to ⟦28 Mallard Rise, Exeter EX4 6QJ⟧ from Monday?
+====
+The landlord's address for service is ⟦Flat B, 9 Gowan Terrace, Edinburgh EH10 4JU⟧.
+====
+I'm subletting my room at ⟦3/41 Mulberry Street, Annandale NSW 2038⟧ for July.
+====
+Die Rechnung bitte an ⟦Wiesenstraße 5, 79098 Freiburg im Breisgau⟧ schicken.
+====
+Envoyez le chèque au ⟦14 avenue des Tilleuls, 44100 Nantes⟧ s'il vous plaît.
+====
+Our tasting room is at ⟦212 Vineyard Hollow Rd, Healdsburg, CA 95448⟧ — open weekends.
+====
+Mailing address: ⟦PO Box 4410, Station A, Edmonton AB T5J 2K1⟧
+====
+moved to ⟦47 juniper crescent, guelph on n1e 4x2⟧ last week fyi
+====
+{"tenant": "M. Okonkwo", "note": "new address ⟦Lindenweg 12, 3012 Bern⟧ from 1 August"}
+====
+ref,client,remark
+88,Halvorsen,"post returned from ⟦Strandvägen 7A, 114 56 Stockholm⟧"
+====
+<comment>Courier left it at ⟦Calle Arenal 19, 3º izq., 28013 Madrid⟧.</comment>
+====
+Ship to
+Aroha Te Rangi
+⟦17 Kowhai Street
+Mount Eden
+Auckland 1024⟧
+====
+⟦Suite 2B, 1 Harbourside Plaza
+Cork T12 X7RD
+Ireland⟧
+====
+Pick up from ⟦Rua Augusta 118, 2º Dto., 1100-053 Lisboa⟧ before noon.
+====
+Tamar's new place: ⟦ul. Długa 33/7, 80-827 Gdańsk⟧ (top buzzer).
+====
+The claim relates to damage at ⟦61 Coronation Avenue⟧ in early March.
+====
+Registered office: ⟦7th Floor, 140 Kestrel Quay, Belfast BT1 3FG⟧
+====
+Witness lives at ⟦1206 Larkspur Ct, Naperville, IL 60540⟧ with her parents.
+====
+⟦Plot 22, Greenfields Enclave, 3rd Main Road
+Koramangala
+Bengaluru, Karnataka 560034⟧
+====
+Head office: ⟦Via Garibaldi 41, 16124 Genova GE, Italia⟧
+====
+Release 3.8.2 adds 14 new Map Styles and 2 Street View modes.
+====
+re: invoice 55812
+Dear Ms Okafor,
+
+Payment of 310.00 GBP is overdue.
+====
+Standup moved to 10:15 in Room 2.07, North Wing.
+====
+Batch 12 of 40 complete; 3 Main Errors, 7 Warnings.
+====
+Gate 22, Terminal 5 — boarding at 06:40.
+====
+ls -la /var/log | grep 2024 | head -n 12
+====
+Q4 2025: 18 New Stores, 4 Regions, 2 Distribution Centres.
+====
+Chapter 7 Section 2 of the Housing Act 1988 applies.
+====
+Item 4, Lot 212: Edwardian Oak Bookcase, 3 Shelves.
+====
+Episode 9: The Long Road Home (Season 2 Finale)
+====
+Bench 4, Lane 3, Pool B — heats start at 9:30.
+====
+Model 7 Pro, 256 GB, Space Grey, 2 Year Warranty
+====
+-t timeout
+        Wait timeout seconds. With -r 3 the request is retried three times.
+====
+Revenue up 12% in 31 Markets; 4 Main Segments grew.
+====
+Call 0800 555 0199 between 9 and 5, Monday to Friday.

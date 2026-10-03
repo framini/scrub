@@ -1,0 +1,270 @@
+# Handwritten held-out cases for the address model. Invented people, streets and numbers only.
+# Each case is separated by a line "====". Addresses are marked ⟦…⟧; a case with no marks must find nothing.
+Thanks,
+Orla Penhallow
+Senior Paralegal
+Fenwright & Toll LLP
+⟦Suite 1400, 88 Quarrendon Street
+Leeds LS1 4DX⟧
+T: +44 113 496 0821
+====
+Best regards,
+Mateus Ferreira-Lind
+⟦Rua das Amendoeiras 214, 3º Esq.
+1170-023 Lisboa
+Portugal⟧
+====
+Kind regards,
+
+Dagny Holmqvist | Office Manager | ⟦Sörbyvägen 17, 752 36 Uppsala⟧ | +46 18 555 0193
+====
+Cheers,
+Bram
+--
+Bram Oyelaran
+Kestrelwood Studio
+⟦Unit 6, 41 Tamsin Road
+Collingwood VIC 3066⟧
+0412 555 019
+====
+Regards,
+Ines Okonkwo-Varga
+⟦Level 9, 120 Wexcombe Street
+Wellington 6011
+New Zealand⟧
+====
+Mit freundlichen Grüßen
+Jannik Oberreuter
+Brandtwerk GmbH
+⟦Lindenhofer Straße 48a
+70178 Stuttgart⟧
+Tel. +49 711 555 0144
+====
+Cordialement,
+Solène Varenne
+⟦Bâtiment C, 17 allée des Glycines
+69007 Lyon⟧
+====
+Please send the replacement to ⟦Flat 3, 27 Pellow Gardens, Bristol BS6 5QR⟧ — I moved last month.
+====
+My new address is ⟦1406 - 2280 Kessler Crescent, Burnaby, BC V5H 0C4⟧, please update the account.
+====
+We've moved! Our new office is at ⟦Keizersgracht 418-2, 1016 GC Amsterdam⟧.
+====
+Could you forward any post to ⟦PO Box 7712, Halifax NS B3K 5M2⟧ until June?
+====
+The tenant at ⟦Apartment 12, Corrib House, 3 Weir Lane, Galway, H91 X2T6⟧ reported a leak.
+====
+she lives at ⟦14 Rookery Lane⟧ in Harrogate now, with her sister
+====
+I'm staying at ⟦Calle de las Hiedras 27, 4º B, 28045 Madrid⟧ until the 20th.
+====
+Meet me outside ⟦212 Oyelaran Avenue⟧ at seven, it's the one with the green door.
+====
+He gave his address as ⟦Via dei Tessitori 9, 50122 Firenze (FI)⟧ when he registered.
+====
+Return address:
+⟦ul. Wrzosowa 18/4
+02-791 Warszawa⟧
+====
+Ship to:
+Priyanka Raghavan
+⟦Flat 702, Lakeshore Residency, 5th Cross Road
+Indiranagar
+Bengaluru, Karnataka 560038⟧
+====
+Deliver to: Wen Hsu, ⟦Blk 418 Tampines Street 41 #09-221, Singapore 520418⟧
+====
+Hi Corentin,
+
+Parcel is going to ⟦3277 Wexcombe Drive, Suite 882, Boise, ID 83702⟧ on Monday.
+
+Thanks,
+Maelle
+====
+{"id": 4471, "name": "Ottoline Varga", "notes": "lives at ⟦56 Thornbury Rise, Didsbury, Manchester M20 6LT⟧, prefers email"}
+====
+id,name,remark
+17,Ifeoma Castellane,"moved to ⟦9 Rookery Close, Newtown, Powys SY16 2HQ⟧ in May"
+====
+<note>Customer relocated to ⟦Brändströmsgatan 6, SE-582 23 Linköping⟧.</note>
+====
+2024-06-11T09:14:02Z INFO address changed user=8812 new="⟦4821 Juniper Hollow Rd, Tacoma, WA 98402⟧"
+====
+Dear Mr Halvorsen,
+
+Thank you for your letter. We will send the documents to your home address, ⟦Fjellveien 22B, 5019 Bergen⟧, by the end of the week.
+====
+⟦Avenida Pradomar 1180, Apto 54
+Moinhos de Vento
+Porto Alegre - RS, 90570-020⟧
+====
+Registered office: ⟦Second Floor, 9 Tallowmere Yard, Cardiff CF10 1EP⟧
+====
+Ana Quesnel
+⟦3-14-2 Ebisu-minami, Shibuya-ku
+Tokyo 150-0022⟧
+====
+Witness gave her address as ⟦Bramblecote Farm, Wexley Lane, Little Ousebridge, YO61 4RT⟧.
+====
+Our Dublin team sits at ⟦Unit 4, Harbourmaster Place, Dublin 1, D01 K2V3⟧.
+====
+Address on file: ⟦7 Okapi Terrace, Mount Lawley WA 6050⟧
+====
+Postal address:
+⟦Postfach 12 03 44
+53045 Bonn⟧
+====
+Witold's flat is ⟦Václavská 1207/12, 120 00 Praha 2⟧, third floor.
+====
+pls send the keys to ⟦23 Marlowe St, Fitzroy North VIC 3068⟧ thx
+====
+Sincerely,
+Dr. Kwabena Asante-Moreau
+Head of Research
+⟦Room 4.12, Harrowgate Building
+200 University Avenue West
+Waterloo, ON N2L 3G5
+Canada⟧
+====
+Return to sender: ⟦Rua Calçada do Mirante, 77 - Bela Vista, São Paulo - SP, 01310-930⟧
+====
+Our Paris office: ⟦12 rue des Ardoisiers, 75011 Paris, France⟧
+====
+The sale of ⟦19 Hennessey Road, Woolloongabba QLD 4102⟧ settled on Friday.
+====
+c/o Saoirse Ní Bhriain, ⟦Ard na Gréine, Ballyvourney, Co. Cork, P12 W2K4⟧
+====
+New tenant details – ⟦Flat 2/1, 48 Kelvinhaugh Street, Glasgow G3 8NU⟧, move-in 1 March.
+====
+Lieferadresse: ⟦Gartenweg 3, 8045 Zürich⟧
+====
+Pickup point: ⟦Sankt Annæ Gade 19, 1416 København K⟧
+====
+She grew up on ⟦71 Orchard Hollow Way⟧, just off the high street.
+====
+Venue: ⟦The Granary, 4 Mill Wharf, Totnes TQ9 5YH⟧
+====
+Kantoor: ⟦Lindengracht 92, 1015 KK Amsterdam⟧ — bel aan bij de tweede deur.
+====
+Faktura skickas till ⟦Box 3318, 103 66 Stockholm⟧.
+====
+Please mail the cheque to:
+Northwind Accounts Payable
+⟦P.O. Box 55219
+Phoenix, AZ 85078-5219⟧
+====
+Branches
+- ⟦18 Ferrier Street, Aberdeen AB24 1PD⟧
+- ⟦3 Quayside Walk, Newcastle upon Tyne NE1 3DE⟧
+====
+Hi Tomasz, the courier tried ⟦55 Ashgrove Terrace⟧ twice but no one was in.
+====
+Mi dirección nueva es ⟦Av. Insurgentes Sur 1602, Int. 8, Col. Crédito Constructor, 03940 Ciudad de México, CDMX⟧.
+====
+Kasia mieszka teraz przy ⟦ul. Kwiatowa 7 m. 12, 30-389 Kraków⟧.
+====
+Il pacco è stato lasciato in ⟦Piazza San Lorenzo 3, 40124 Bologna⟧.
+====
+Contact: Amaru Quispe, ⟦Torre Pellucid, Piso 14, Avenida Libertador 2100, C1425 Buenos Aires⟧
+====
+Address:
+⟦17 Oakridge Close
+Kingsbury
+Tamworth
+Staffordshire
+B78 2JX⟧
+====
+Their house at ⟦4 Halcyon Mews, Bath BA1 2QT⟧ is on the market.
+====
+Office: ⟦600 Harbourfront Drive, 12th Floor, Vancouver, British Columbia V6C 3L6⟧
+====
+v2.14.1 released on 12 March 2024 — see CHANGELOG for details.
+====
+re: order 77120
+Hi Saoirse,
+
+Your replacement card has shipped.
+====
+Ticket #55120 Priority High
+Assigned to: Platform Team
+====
+Invoice 4412 Due 30 April 2025 Total 1,280.00 EUR
+====
+Meeting moved to 14:30 in Room 4B, Building 2.
+====
+We ordered 12 Queen Beds and 40 King Size Pillows for the lodge.
+====
+Python 3.12.11 (main, Aug 18 2025, 19:02:39) [Clang 20.1.4]
+====
+for (int i = 0; i < 4096; i++) {
+    street[i] = parse_line(buf, 12);
+}
+====
+| Item        | Qty | Price  |
+| Main Course | 12  | 340.00 |
+| Park Pass   | 4   | 60.00  |
+====
+-n count
+        Stop after count packets. With -c 10 the program exits after ten replies.
+====
+Route 66 Highway 1 closed between exits 12 and 14 until Friday.
+====
+Arsenal 2 Chelsea 1 at the Emirates on Sunday 14 May.
+====
+Flight BA 117 to London departs from Gate B12 at 18:40.
+====
+See Chapter 12, Section 3 and Article 8 of the Convention.
+====
+Application no. 36110/97 was lodged on 4 May 1997.
+====
+Our Q3 2024 revenue grew 12% to 4.2 million across 31 markets.
+====
+The 2 Way Splitter and 3 Lane Highway models ship in May.
+====
+macOS 15.2 (Build 24C101) fixes 14 issues.
+====
+Platform 9, Gate 4 and Studio 54 are all on the list.
+====
+Hi team,
+
+Order 55120 shipped today; tracking AB1234567GB.
+
+Thanks,
+Rafael
+====
+PID 4412 USER root PR 20 NI 0 VIRT 812044 RES 25480
+====
+SELECT street, city, postcode FROM addresses WHERE id = 4471 LIMIT 10;
+====
+Seats 12A and 12B, Row 14, Stand C.
+====
+The patch moves 3 files and adds 214 lines (Main Street refactor, see #881).
+====
+Call +44 113 496 0821 or +1 (415) 555-0132 before 5 PM EST.
+====
+Population 812,000 (2021 Census); area 3,120 km².
+====
+docker run -p 8080:80 -v /srv/data:/data app:2.4
+====
+Card ending 4242 was charged 2 times on 3 March.
+====
+Bus 42 to Union Square leaves every 12 minutes.
+====
+Version 11.6 Street Edition supports 4 Players.
+====
+The 4 Park Rangers patrolled the north trail on Sunday.
+====
+Lat 51.5072, Lng -0.1276 (WGS84)
+====
+Sent: Friday, May 3, 2002 9:12 AM
+To: Brennan, Rhys
+Subject: Q3 numbers
+====
+Error 404 Not Found at /api/v2/orders/77120
+====
+Week 12: 4 Main Street Festival volunteers needed, sign up by Friday.
+====
+IBAN DE89 3704 0044 0532 0130 00
+====
+Model 3 Long Range and Model Y Performance both have 12 inch screens.

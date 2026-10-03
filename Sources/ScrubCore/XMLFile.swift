@@ -101,13 +101,8 @@ public enum XMLFile: FileFormat {
         progress(.finding, 0, leaves.count)
         let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
         progress(.finding, leaves.count, leaves.count)
+        // Element and attribute names first; then the values, written again whenever a review takes findings back.
         var markedValues: [(String, String)] = []
-        for (index, node) in nodes.enumerated() {
-            let value = values[valueIDs[index]]
-            if node.stringValue != value.text { node.stringValue = value.text }
-            for mark in value.marks { markedValues.append((TextRanges.substring(value.text, mark.range), mark.entity)) }
-        }
-        let unresolved = values.flatMap(\.unresolved)
         progress(.checking, 0, 1)
         let originalNames = Set(namedNodes.compactMap(\.name))
         var usedNames = originalNames
@@ -133,7 +128,9 @@ public enum XMLFile: FileFormat {
             var candidate = value.marks.isEmpty ? name : value.text
             let (numbered, _) = JSONFile.replaceDigits(candidate, job: job)
             candidate = numbered
-            for person in job.gazetteer["PERSON"] ?? [] {
+            // In a fixed order: a stand-in drawn here, or one name's replacement
+            // reaching into another's, must not follow a set's hash order.
+            for person in (job.gazetteer["PERSON"] ?? []).sorted() {
                 let parts = person.split(separator: " ")
                 guard parts.count == 2 else { continue }
                 let camel = String(parts[0]) + String(parts[1])
@@ -169,19 +166,33 @@ public enum XMLFile: FileFormat {
             renamedNames[name] = candidate
             if candidate != name { node.name = candidate; markedValues.append((candidate, "PERSON")) }
         }
-        var output = job.counts.isEmpty ? text : XMLSerialization.render(document)
-        output = output.replacingOccurrences(of: #"^<\?xml(?=\s)[\s\S]*?\?>\s*"#, with: "", options: .regularExpression)
-        if declarationEnd(in: source) != nil, let end = text.range(of: "?>") { output = String(text[..<end.upperBound]) + "\n" + output }
-        guard try parses(Data(output.utf8)) else { throw ScrubError.unsupported("internal") }
-        var marks: [Mark] = []
-        for (value, entity) in markedValues where !value.isEmpty {
-            for range in TextRanges.ranges(of: value, in: output, options: []) where !marks.contains(where: { $0.range.overlaps(range) }) { marks.append(Mark(range: range, entity: entity)) }
+        let nameMarks = markedValues
+        func render(_ values: [DocumentValue], counts: [String: Int]) throws -> ScrubResult {
+            var markedValues: [(String, String)] = []
+            for (index, node) in nodes.enumerated() {
+                let value = values[valueIDs[index]]
+                if node.stringValue != value.text { node.stringValue = value.text }
+                for mark in value.marks { markedValues.append((TextRanges.substring(value.text, mark.range), mark.entity)) }
+            }
+            markedValues += nameMarks
+            let unresolved = values.flatMap(\.unresolved)
+            var output = counts.isEmpty ? text : XMLSerialization.render(document)
+            output = output.replacingOccurrences(of: #"^<\?xml(?=\s)[\s\S]*?\?>\s*"#, with: "", options: .regularExpression)
+            if declarationEnd(in: source) != nil, let end = text.range(of: "?>") { output = String(text[..<end.upperBound]) + "\n" + output }
+            guard try parses(Data(output.utf8)) else { throw ScrubError.unsupported("internal") }
+            var marks: [Mark] = []
+            for (value, entity) in markedValues where !value.isEmpty {
+                for range in TextRanges.ranges(of: value, in: output, options: []) where !marks.contains(where: { $0.range.overlaps(range) }) { marks.append(Mark(range: range, entity: entity)) }
+            }
+            marks.sort { $0.range.lowerBound < $1.range.lowerBound }
+            let length = (output as NSString).length
+            let limit = min(length, 200_000)
+            return ScrubResult(format: "xml", output: Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: counts, unresolved: unresolved)
         }
-        marks.sort { $0.range.lowerBound < $1.range.lowerBound }
+        var result = try render(values, counts: job.counts)
+        result.review = Review(values: values, counts: job.counts, render: render)
         progress(.checking, 1, 1)
-        let length = (output as NSString).length
-        let limit = min(length, 200_000)
-        return ScrubResult(format: "xml", output: Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: job.counts, unresolved: unresolved)
+        return result
     }
     static func parses(_ data: Data) throws -> Bool {
         guard let source = try? decodeXML(data) else { return false }

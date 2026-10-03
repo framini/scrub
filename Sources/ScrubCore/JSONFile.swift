@@ -48,46 +48,59 @@ public enum JSONFile: FileFormat {
         progress(.finding, 0, leaves.count)
         let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
         progress(.finding, leaves.count, leaves.count)
-        var valueMarks: [String: [Mark]] = [:]
-        var keyMarks: [String: [Mark]] = [:]
-        let unresolved = values.flatMap(\.unresolved)
-        func process(_ value: JSONValue, key: String?, path: String) throws -> JSONValue {
-            switch value {
-            case .object(let pairs):
-                var output: [(String, JSONValue)] = []
-                for (index, pair) in pairs.enumerated() {
-                    let childPath = path + "/" + String(index)
-                    let child = try process(pair.1, key: pair.0, path: childPath)
-                    let scrubbed = keyIDs[childPath].map { values[$0] }
-                    let (numbered, digitMarks) = replaceDigits(scrubbed?.text ?? pair.0, job: job)
-                    keyMarks[childPath] = (scrubbed?.marks ?? []) + digitMarks
-                    var unique = numbered
-                    while output.contains(where: { $0.0 == unique }) { unique += "_" }
-                    output.append((unique, child))
-                }
-                return .object(output)
-            case .array(let children):
-                return .array(try children.enumerated().map { try process($0.element, key: key, path: path + "/" + String($0.offset)) })
-            case .string:
-                guard let id = valueIDs[path] else { return value }
-                valueMarks[path] = values[id].marks
-                return .string(values[id].text)
-            case .number:
-                guard let id = valueIDs[path] else { return value }
-                valueMarks[path] = values[id].marks
-                return .number(values[id].text)
-            default: return value
-            }
+        // A key's long digits get one stand-in, however often the file is written.
+        var keyDigits: [String: (String, [Mark])] = [:]
+        func digits(_ key: String) -> (String, [Mark]) {
+            if let known = keyDigits[key] { return known }
+            let replaced = replaceDigits(key, job: job)
+            keyDigits[key] = replaced
+            return replaced
         }
-        let scrubbed = try process(root, key: nil, path: "")
+        func render(_ values: [DocumentValue], counts: [String: Int]) throws -> ScrubResult {
+            var valueMarks: [String: [Mark]] = [:]
+            var keyMarks: [String: [Mark]] = [:]
+            let unresolved = values.flatMap(\.unresolved)
+            func process(_ value: JSONValue, key: String?, path: String) throws -> JSONValue {
+                switch value {
+                case .object(let pairs):
+                    var output: [(String, JSONValue)] = []
+                    for (index, pair) in pairs.enumerated() {
+                        let childPath = path + "/" + String(index)
+                        let child = try process(pair.1, key: pair.0, path: childPath)
+                        let scrubbed = keyIDs[childPath].map { values[$0] }
+                        let (numbered, digitMarks) = digits(scrubbed?.text ?? pair.0)
+                        keyMarks[childPath] = (scrubbed?.marks ?? []) + digitMarks
+                        var unique = numbered
+                        while output.contains(where: { $0.0 == unique }) { unique += "_" }
+                        output.append((unique, child))
+                    }
+                    return .object(output)
+                case .array(let children):
+                    return .array(try children.enumerated().map { try process($0.element, key: key, path: path + "/" + String($0.offset)) })
+                case .string:
+                    guard let id = valueIDs[path] else { return value }
+                    valueMarks[path] = values[id].marks
+                    return .string(values[id].text)
+                case .number:
+                    guard let id = valueIDs[path] else { return value }
+                    valueMarks[path] = values[id].marks
+                    return .number(values[id].text)
+                default: return value
+                }
+            }
+            let scrubbed = try process(root, key: nil, path: "")
+            let (rendered, marks) = OrderedJSON.render(scrubbed, valueMarks: valueMarks, keyMarks: keyMarks)
+            let output = marks.isEmpty ? text : rendered
+            let length = (output as NSString).length
+            let limit = min(length, 200_000)
+            // With nothing replaced, the input goes back byte for byte (BOM included) instead of re-indented.
+            return ScrubResult(format: "json", output: marks.isEmpty ? data : Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: counts, unresolved: unresolved)
+        }
         progress(.checking, 0, 1)
-        let (rendered, marks) = OrderedJSON.render(scrubbed, valueMarks: valueMarks, keyMarks: keyMarks)
-        let output = marks.isEmpty ? text : rendered
+        var result = try render(values, counts: job.counts)
+        result.review = Review(values: values, counts: job.counts, render: render)
         progress(.checking, 1, 1)
-        let length = (output as NSString).length
-        let limit = min(length, 200_000)
-        // With nothing replaced, the input goes back byte for byte (BOM included) instead of re-indented.
-        return ScrubResult(format: "json", output: marks.isEmpty ? data : Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: job.counts, unresolved: unresolved)
+        return result
     }
     static func replaceDigits(_ text: String, job: Job) -> (String, [Mark]) {
         var output = text

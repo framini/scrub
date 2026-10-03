@@ -1,5 +1,7 @@
 import Accelerate
+import CryptoKit
 import Foundation
+import os
 import Synchronization
 
 /// A small network that reads each word with the words around it and says
@@ -44,8 +46,25 @@ final class NameModel: Sendable {
     private let known = Mutex<[String: [Float]]>([:])
     private static let knownLimit = 100_000
 
+    /// The SHA-256 of the shipped weights. A file that differs is not loaded:
+    /// Scrub then runs without the model, and says why in the log.
+    static let checksum = "0a3ff56f26b61c0bc4f28ae8f1e93e0b499633768a4b29cd3013791e2b8293e9"
+    private static let log = Logger(subsystem: "Scrub", category: "NameModel")
+
     private static func load() -> NameModel? {
-        guard let url = ModelResources.bundle?.url(forResource: "NameModel", withExtension: "bin"), let data = try? Data(contentsOf: url) else { return nil }
+        guard let url = ModelResources.bundle?.url(forResource: "NameModel", withExtension: "bin"), let data = try? Data(contentsOf: url) else {
+            log.error("Name model not loaded: resource missing")
+            return nil
+        }
+        return verified(data)
+    }
+
+    /// The model in `data`, or nil when its bytes are not the ones `checksum` names.
+    static func verified(_ data: Data, checksum: String = checksum) -> NameModel? {
+        guard SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == checksum else {
+            log.error("Name model not loaded: its weights do not match the expected checksum")
+            return nil
+        }
         return NameModel(data)
     }
 
@@ -70,16 +89,50 @@ final class NameModel: Sendable {
         guard reader.isValid, reader.offset == data.count else { return nil }
     }
 
+    /// Each token of a text and how sure the model is that it names someone.
+    struct Reading {
+        let tokens: [Token]
+        let scores: [Float]
+
+        /// The model's surest score for a word inside `range`, or nil when no word is.
+        func score(in range: Range<Int>) -> Float? {
+            var low = 0, high = tokens.count
+            while low < high {
+                let middle = (low + high) / 2
+                if tokens[middle].range.upperBound <= range.lowerBound { low = middle + 1 } else { high = middle }
+            }
+            var best: Float?
+            var index = low
+            while index < tokens.count, tokens[index].range.lowerBound < range.upperBound {
+                if tokens[index].isWord { best = max(best ?? -.infinity, scores[index]) }
+                index += 1
+            }
+            return best
+        }
+    }
+
     /// Person names and handles in `text`, in UTF-16 offsets.
     func find(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
-        guard !isCancelled() else { return [] }
+        read(text, isCancelled: isCancelled).map { find(text, reading: $0) } ?? []
+    }
+
+    /// The model's score for every token of `text`, or nil when it has
+    /// too few words to read or the read was cancelled.
+    func read(_ text: String, isCancelled: () -> Bool = { false }) -> Reading? {
+        guard !isCancelled() else { return nil }
         let tokens = Self.tokens(text)
         // The model reads a name from the words around it. A value that is
         // nothing but one word ("Path", a key) gives it none, and the field's
         // key and the other rules judge it better.
-        guard tokens.filter(\.isWord).count >= 2 else { return [] }
+        guard tokens.filter(\.isWord).count >= 2 else { return nil }
         let scores = logits(tokens, isCancelled: isCancelled)
-        guard scores.count == tokens.count else { return [] }
+        guard scores.count == tokens.count else { return nil }
+        return Reading(tokens: tokens, scores: scores)
+    }
+
+    /// The names and handles a reading holds.
+    func find(_ text: String, reading: Reading) -> [Span] {
+        let tokens = reading.tokens, scores = reading.scores
         var spans: [Span] = []
         var index = 0
         while index < tokens.count {

@@ -273,7 +273,8 @@ enum Judge {
             // Short values that turn up anywhere by chance are judged where they sit.
             if [.lastDigits, .age, .initials, .unit].contains(kind) { return nil }
             if kind == .dobYear || kind == .ssnLast4 || kind == .zip {
-                return output.range(of: #"(?<!\d)"# + NSRegularExpression.escapedPattern(for: value) + #"(?!\d)"#, options: .regularExpression) != nil ? value : nil
+                // Every IPv6 stand-in starts "2001:db8:", the documentation prefix: no birth year of 2001.
+                return output.range(of: #"(?<!\d)"# + NSRegularExpression.escapedPattern(for: value) + #"(?!\d|:db8:)"#, options: .regularExpression) != nil ? value : nil
             }
             if kind.isName || kind == .city || kind == .region {
                 // Stand-ins come from the same lists; only a word no stand-in uses proves a leak.

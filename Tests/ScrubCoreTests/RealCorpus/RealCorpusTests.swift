@@ -17,6 +17,7 @@ import Testing
 /// SCRUB_REAL_CORPUS_GATE=on or off forces the context model's gate either
 /// way. SCRUB_REAL_CORPUS_SETS=a,b limits the sets, SCRUB_REAL_CORPUS_LIMIT the
 /// documents per set, and SCRUB_REAL_CORPUS_PATHS=text the input paths.
+/// SCRUB_REAL_CORPUS_REPORT=/file also writes the report to a file.
 /// SCRUB_REAL_CORPUS_DUMP=/file writes every miss and changed word, not
 /// only the first ten of each; SCRUB_REAL_CORPUS_SHOW=id,id prints those
 /// documents' text output.
@@ -80,7 +81,10 @@ struct RealCorpus {
                 try Self.score(document, paths: paths, seed: UInt64(index) &+ 1, into: &scores[document.set, default: SetScore()])
             }
         }
-        print(Self.report(scores, paths: paths))
+        let report = Self.report(scores, paths: paths)
+        print(report)
+        // A long report can miss the log; SCRUB_REAL_CORPUS_REPORT=/file keeps it whole.
+        if let file = environment["SCRUB_REAL_CORPUS_REPORT"] { try report.write(toFile: file, atomically: true, encoding: .utf8) }
         if let dump = environment["SCRUB_REAL_CORPUS_DUMP"] {
             let all = scores.sorted { $0.key < $1.key }.flatMap { set, score in score.misses.map { "MISS \(set) " + $0 } + score.falsePositives.map { "CHANGED \(set) " + $0 } }
             try all.joined(separator: "\n").write(toFile: dump, atomically: true, encoding: .utf8)
@@ -130,8 +134,10 @@ struct RealCorpus {
             if caughtOn.count == paths.count { score.labels[span.label]!.caught += 1 }
             if caughtOn.contains(.text) { score.labels[span.label]!.caughtAsText += 1 }
             if caughtOn.count < paths.count {
-                let missedOn = paths.filter { !caughtOn.contains($0) }.map(\.rawValue).joined(separator: ",")
-                score.misses.append("\(span.label) [\(missedOn)] \(document.id): " + context(span.start..<span.end))
+                let missedOn = paths.filter { !caughtOn.contains($0) }
+                // The words that stayed, on the first path that kept any.
+                let stayed = missedOn.first.map { path in inside.filter { !changedOn[path]!.contains($0) }.map { input[$0].word } } ?? []
+                score.misses.append("\(span.label) [\(missedOn.map(\.rawValue).joined(separator: ","))] \(document.id): " + context(span.start..<span.end) + " ‖kept: " + stayed.joined(separator: " "))
             }
         }
         let labelled = document.spans.map { $0.start..<$0.end }

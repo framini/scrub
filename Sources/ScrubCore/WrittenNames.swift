@@ -22,17 +22,27 @@ enum WrittenNames {
     /// A title, then initials and a surname or a full name. A surname in
     /// capitals is one only after initials ("Ms E. STRADLING").
     /// An apostrophe joins a name only before a capital ("O’Brien"), never a possessive "’s".
-    private static let titled = TextPattern(#"(?<![\p{L}\p{N}])(?:Mr|Mrs|Ms|Miss|Mx|Dr|Prof|Sir|Dame)\.?[ \t]+(?:(?:\p{Lu}\.[ \t]?){1,3}[ \t]*(?:\p{Lu}\p{Ll}+|\p{Lu}{2,}(?:-\p{Lu}{2,})?)|\p{Lu}\p{Ll}+)(?:['’]\p{Lu}\p{Ll}+)?(?:-\p{Lu}\p{Ll}+)?(?:[ \t]+(?:\p{Lu}\.[ \t]?)*\p{Lu}\p{Ll}+(?:['’]\p{Lu}\p{Ll}+)?(?:-\p{Lu}\p{Ll}+)?){0,3}(?![\p{L}\p{N}])"#)
+    private static let titled = TextPattern(#"(?<![\p{L}\p{N}])(?:Mr|Mrs|Ms|Miss|Mx|Dr|Prof|Sir|Dame|Corporal|Sergeant|Lieutenant|Captain|Colonel|Constable|Detective|Inspector|Superintendent|Trooper|Sheriff|Sgt|Cpl|Lt|Capt|Col|Pte|Pvt|Insp|Supt)\.?[ \t]+(?:(?:\p{Lu}\.[ \t]?){1,3}[ \t]*(?:\p{Lu}\p{Ll}+|\p{Lu}{2,}(?:-\p{Lu}{2,})?)|\p{Lu}\p{Ll}+)(?:['’]\p{Lu}\p{Ll}+)?(?:-\p{Lu}\p{Ll}+)?(?:[ \t]+(?:\p{Lu}\.[ \t]?)*\p{Lu}\p{Ll}+(?:['’]\p{Lu}\p{Ll}+)?(?:-\p{Lu}\p{Ll}+)?){0,3}(?![\p{L}\p{N}])"#)
     /// A name's own place or business ("Dr Lind’s Surgery") is named after someone, not someone.
     private static let possessiveName = TextPattern(#"^['’]s[ \t]+\p{Lu}"#)
-    private static let lastFirst = TextPattern(#"^(\p{Lu}[\p{L}'’-]+(?:[ \t]\p{Lu}[\p{L}'’-]+)?),[ \t]*\p{Lu}[\p{L}'’-]+(?:[ \t]+\p{Lu}\.?)?$"#)
+    /// "Okafor, Ama", "Okafor, Ama N.", "Bowen Jr., Raymond", "Leite, Francisco Pinto".
+    private static let lastFirst = TextPattern(#"^(\p{Lu}[\p{L}'’-]+(?:[ \t]\p{Lu}[\p{L}'’-]+)?(?:[ \t]+(?:Jr|Sr|II|III|IV)\.?)?),[ \t]*\p{Lu}[\p{L}'’-]+(?:[ \t]+\p{Lu}(?:[\p{L}'’-]+|\.)?){0,2}$"#)
     private static let firstLast = TextPattern(#"^\p{Lu}[\p{L}'’-]*\.?(?:[ \t]+\p{Lu}[\p{L}'’-]*\.?){1,3}$"#)
     /// Words a title or a header can stand before that name no one.
     private static let notNames: Set<String> = roles.union(["the", "and", "of", "in", "on", "at", "all", "everyone", "undisclosed", "recipients", "list", "users", "employees", "staff", "announcements", "distribution", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february", "march", "april", "june", "july", "august", "september", "october", "november", "december"])
 
     /// A word that names an office, not its holder ("Chair", "Justice").
     static func isRole(_ word: String) -> Bool { roles.contains(word.lowercased()) }
-    private static let roles: Set<String> = ["justice", "president", "speaker", "chairman", "chair", "chairwoman", "secretary", "deputy", "chief", "mayor", "governor", "commissioner", "registrar", "agent", "adviser", "advisor", "counsel", "solicitor", "barrister", "lawyer", "attorney", "judge", "qc", "kc", "director", "manager", "officer", "esq"]
+    /// Military and police ranks, and their short forms, that are no ordinary
+    /// word: a title before a name ("Corporal Haddleton", "Sgt. Pryce"), never part of it.
+    static let ranks: Set<String> = ["corporal", "sergeant", "lieutenant", "captain", "colonel", "commander", "admiral", "commodore", "brigadier",
+                                     "constable", "detective", "inspector", "superintendent", "trooper", "sheriff", "marshal", "cadet", "ensign",
+                                     "airman", "midshipman", "sgt", "cpl", "lcpl", "lt", "capt", "col", "cmdr", "cdr", "pte", "pvt", "insp", "supt", "det"]
+    /// Ranks that are also ordinary words ("a private matter", "a major issue",
+    /// "in general"): a rank only when written with a capital before a name.
+    static let wordRanks: Set<String> = ["private", "major", "general"]
+    private static let roles: Set<String> = Set(["justice", "president", "speaker", "chairman", "chair", "chairwoman", "secretary", "deputy", "chief", "mayor", "governor", "commissioner", "registrar", "agent", "adviser", "advisor", "counsel", "solicitor", "barrister", "lawyer", "attorney", "judge", "qc", "kc", "director", "manager", "officer", "esq",
+                                              "advocate", "ambassador", "juror", "minister", "consul", "envoy", "senator", "rapporteur", "notary"]).union(ranks)
 
     static func scan(_ text: String, isCancelled: () -> Bool = { false }) -> Found {
         var found = Found()
@@ -124,7 +134,7 @@ enum WrittenNames {
         guard !TextRanges.matches(lastFirst, in: single).isEmpty || !TextRanges.matches(firstLast, in: single).isEmpty else { return false }
         let words = single.split { $0 == " " || $0 == "," }.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".")) }
         guard !NameTagger.namesOrganisation(single), !words.contains(where: { notNames.contains($0.lowercased()) }) else { return false }
-        return words.allSatisfy { $0.count <= 2 || $0.contains(where: \.isLowercase) }
+        return words.allSatisfy { $0.count <= 2 || $0.contains(where: \.isLowercase) || People.isSuffix($0) }
     }
 
     /// The title and the name after it. A role after the title ("Mr Justice
@@ -134,6 +144,15 @@ enum WrittenNames {
     private static func titledName(_ ns: NSString, _ match: NSRange) -> Range<Int>? {
         let text = ns.substring(with: match) as NSString
         var words = (text as String).split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        // "Detective Inspector Quayle", "Lt. Col. Varga": the last of several titles and ranks starts the name.
+        var start = 0
+        while words.count > 2, People.isTitle(words[1]) {
+            let after = start + (words[0] as NSString).length
+            let next = text.range(of: words[1], options: [], range: NSRange(location: after, length: text.length - after))
+            guard next.location != NSNotFound else { break }
+            start = next.location
+            words.removeFirst()
+        }
         guard words.count >= 2, !notNames.contains(words[1].lowercased()) else { return nil }
         if words[0].hasPrefix("Dr") {
             var at = match.location
@@ -146,7 +165,7 @@ enum WrittenNames {
         if let role = words.indices.dropFirst().first(where: { notNames.contains(words[$0].lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) }) { words = Array(words[..<role]) }
         guard words.count >= 2, !NameTagger.namesOrganisation(words.dropFirst().joined(separator: " ")) else { return nil }
         let end = text.range(of: words[words.count - 1], options: .backwards)
-        let found = match.location..<(match.location + NSMaxRange(end))
+        let found = (match.location + start)..<(match.location + NSMaxRange(end))
         let after = ns.substring(with: NSRange(location: found.upperBound, length: min(8, ns.length - found.upperBound)))
         guard TextRanges.matches(possessiveName, in: after).isEmpty else { return nil }
         return NameTagger.partOfOrganisation(found, in: ns as String) ? nil : found

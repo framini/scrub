@@ -113,6 +113,105 @@ enum Places {
         }
     }
 
+    /// A city outside the four countries Scrub places addresses in, with one
+    /// of its postcodes, so an address there keeps a city of its own country:
+    /// "70178 Stuttgart" → "80331 München", never a US city.
+    struct Abroad: Sendable {
+        let country: String
+        let city: String
+        let postal: String
+        let region: String?
+
+        /// The city's postcode in the original's layout ("1012" → "1012 KX"
+        /// beside "1016 GC"), its last digits drawn fresh; where the shapes
+        /// differ, in its own layout, with what follows its area drawn fresh ("V94 T9PX" → "V94 K2RD").
+        func postal(like original: String, digit: () -> String, letter: () -> Character) -> String {
+            let digits = original.filter(\.isNumber), mine = postal.filter(\.isNumber)
+            guard digits.count == mine.count, original.filter(\.isLetter).count <= 2 else {
+                let area = postal.firstIndex { $0 == " " || $0 == "-" } ?? postal.index(postal.startIndex, offsetBy: min(3, postal.count))
+                return String(postal[..<area]) + String(postal[area...].map { $0.isNumber ? Character(digit()) : $0.isLetter ? letter() : $0 })
+            }
+            var source = Array(mine)
+            for index in source.indices.suffix(min(2, max(0, source.count - 3))) { source[index] = Character(digit()) }
+            var iterator = source.makeIterator()
+            return String(original.map { $0.isNumber ? iterator.next() ?? $0 : $0.isLetter ? letter() : $0 })
+        }
+    }
+    private static let abroadTable = """
+    DE|Berlin|10115|;DE|München|80331|;DE|Hamburg|20095|;DE|Köln|50667|;DE|Frankfurt am Main|60311|;DE|Leipzig|04109|;DE|Düsseldorf|40213|;DE|Stuttgart|70173|
+    FR|Paris|75002|;FR|Lyon|69002|;FR|Marseille|13001|;FR|Toulouse|31000|;FR|Nantes|44000|;FR|Bordeaux|33000|;FR|Lille|59000|;FR|Strasbourg|67000|
+    NL|Amsterdam|1012|;NL|Rotterdam|3011|;NL|Utrecht|3511|;NL|Den Haag|2511|;NL|Eindhoven|5611|;NL|Groningen|9711|
+    BE|Bruxelles|1000|;BE|Antwerpen|2000|;BE|Gent|9000|;BE|Liège|4000|;BE|Brugge|8000|
+    ES|Madrid|28013|;ES|Barcelona|08002|;ES|Valencia|46002|;ES|Sevilla|41001|;ES|Bilbao|48001|;ES|Zaragoza|50001|
+    IT|Roma|00184|RM;IT|Milano|20121|MI;IT|Torino|10121|TO;IT|Napoli|80133|NA;IT|Bologna|40121|BO;IT|Firenze|50123|FI
+    PT|Lisboa|1100-148|;PT|Porto|4000-322|;PT|Braga|4700-435|;PT|Coimbra|3000-140|;PT|Faro|8000-138|
+    AT|Wien|1010|;AT|Graz|8010|;AT|Linz|4020|;AT|Salzburg|5020|;AT|Innsbruck|6020|
+    CH|Zürich|8001|;CH|Genève|1201|;CH|Basel|4051|;CH|Bern|3011|;CH|Lausanne|1003|
+    SE|Stockholm|111 51|;SE|Göteborg|411 05|;SE|Malmö|211 22|;SE|Uppsala|753 20|;SE|Västerås|722 15|
+    DK|København K|1050|;DK|Aarhus C|8000|;DK|Odense C|5000|;DK|Aalborg|9000|
+    NO|Oslo|0150|;NO|Bergen|5003|;NO|Trondheim|7011|;NO|Stavanger|4006|
+    FI|Helsinki|00100|;FI|Espoo|02100|;FI|Tampere|33100|;FI|Turku|20100|;FI|Oulu|90100|
+    PL|Warszawa|00-001|;PL|Kraków|31-001|;PL|Wrocław|50-001|;PL|Gdańsk|80-001|;PL|Poznań|61-001|
+    CZ|Praha|110 00|;CZ|Brno|602 00|;CZ|Ostrava|702 00|;CZ|Plzeň|301 00|
+    IE|Dublin|D02 X285|;IE|Cork|T12 K8AF|;IE|Galway|H91 E2K3|;IE|Limerick|V94 T9PX|
+    NZ|Auckland|1010|;NZ|Wellington|6011|;NZ|Christchurch|8011|;NZ|Hamilton|3204|;NZ|Dunedin|9016|
+    ZA|Cape Town|8001|;ZA|Johannesburg|2001|;ZA|Durban|4001|;ZA|Pretoria|0002|
+    IN|Mumbai|400001|Maharashtra;IN|Bengaluru|560001|Karnataka;IN|Chennai|600001|Tamil Nadu;IN|Hyderabad|500001|Telangana;IN|Pune|411001|Maharashtra;IN|Kolkata|700001|West Bengal
+    SG|Singapore|018956|
+    MX|Ciudad de México|06000|CDMX;MX|Guadalajara|44100|Jalisco;MX|Monterrey|64000|Nuevo León;MX|Puebla|72000|Puebla
+    BR|São Paulo|01310-100|SP;BR|Rio de Janeiro|20040-020|RJ;BR|Belo Horizonte|30130-010|MG;BR|Curitiba|80010-000|PR;BR|Porto Alegre|90010-000|RS
+    JP|Tokyo|100-0001|;JP|Osaka|530-0001|;JP|Kyoto|600-8216|;JP|Nagoya|450-0002|;JP|Sapporo|060-0001|;JP|Fukuoka|810-0001|
+    """
+    static let abroad: [Abroad] = abroadTable.split(whereSeparator: { $0 == ";" || $0 == "\n" }).compactMap { entry in
+        let fields = entry.trimmingCharacters(in: .whitespaces).split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        guard fields.count == 4 else { return nil }
+        return Abroad(country: fields[0], city: fields[1], postal: fields[2], region: fields[3].isEmpty ? nil : fields[3])
+    }
+
+    /// Ordinary words streets and districts are named with, by country, for
+    /// a stand-in that reads like the original's ("Ahornstraße", "rue des Lilas").
+    static let streetWords: [String: [String]] = {
+        let table = """
+        DE:Linden,Ahorn,Birken,Eichen,Buchen,Rosen,Mühlen,Wiesen,Garten,Berg,Wald,Sonnen,Kirch,Schul,Bahnhof,Markt,Brunnen,Hafen,Tannen,Erlen
+        AT:Linden,Ahorn,Birken,Eichen,Rosen,Mühl,Wiesen,Garten,Berg,Wald,Sonnen,Kirchen,Schul,Bahnhof,Markt,Brunnen,Kastanien,Erlen
+        CH:Linden,Ahorn,Birken,Eichen,Rosen,Mühle,Wiesen,Garten,Berg,Wald,Sonnen,Kirch,Schul,Bahnhof,Markt,Brunnen,Seefeld,Rebberg
+        FR:Lilas,Tilleuls,Peupliers,Acacias,Prés,Vignes,Pins,Roses,Chênes,Platanes,Jardins,Écoles,Saules,Ormes,Glycines,Marronniers
+        BE:Lilas,Tilleuls,Acacias,Peupliers,Roses,Linden,Eiken,Beuken,Rozen,Molen,Kerk,School,Dorps,Haven,Wilgen
+        NL:Linden,Eiken,Beuken,Berken,Wilgen,Rozen,Tulpen,Molen,Kerk,School,Dorps,Haven,Duin,Beek,Esdoorn,Kastanje,Lijsterbes
+        ES:Rosales,Olivos,Pinos,Jazmines,Almendros,Naranjos,Acacias,Robles,Encinas,Lirios,Cipreses,Magnolias,Geranios,Tilos
+        MX:Rosales,Olivos,Pinos,Jazmines,Fresnos,Naranjos,Robles,Encinos,Cedros,Laureles,Magnolias,Sauces
+        IT:Rose,Pini,Tigli,Ulivi,Giardini,Querce,Glicini,Castagni,Gelsi,Platani,Cipressi,Oleandri,Mandorli,Ciliegi
+        PT:Flores,Rosas,Oliveiras,Pinheiros,Palmeiras,Laranjeiras,Acácias,Amoreiras,Castanheiros,Camélias,Violetas,Magnólias
+        BR:Flores,Rosas,Oliveiras,Pinheiros,Palmeiras,Laranjeiras,Acácias,Ipês,Jacarandás,Mangueiras,Hortênsias,Orquídeas
+        SE:Björk,Ek,Lind,Gran,Tall,Rosen,Sjö,Berg,Dal,Sol,Kvarn,Strand,Hamn,Skog,Äng,Lärk
+        DK:Bøge,Elme,Linde,Rose,Skov,Strand,Mølle,Kirke,Skole,Enge,Hasle,Birke,Ege,Kastanie
+        NO:Bjørk,Furu,Lind,Skog,Sjø,Berg,Dal,Strand,Kirke,Skole,Eike,Rogn,Hassel,Lønne
+        FI:Koivu,Kuusi,Mänty,Pihlaja,Tammi,Vaahtera,Kivi,Ranta,Järvi,Mäki,Puisto,Lehmus,Haapa,Kallio
+        PL:Kwiatowa,Lipowa,Brzozowa,Słoneczna,Polna,Leśna,Ogrodowa,Spacerowa,Zielona,Szkolna,Klonowa,Jesionowa,Różana,Wierzbowa
+        CZ:Lipová,Zahradní,Polní,Lesní,Krátká,Dlouhá,Školní,Nová,Luční,Sadová,Javorová,Březová,Jasmínová,Růžová
+        JP:Higashi,Nishi,Minami,Kita,Naka,Sakura,Matsu,Kawa,Hon,Shin,Midori,Aoba
+        """
+        var result: [String: [String]] = [:]
+        for line in table.split(separator: "\n") {
+            let halves = line.trimmingCharacters(in: .whitespaces).split(separator: ":")
+            result[String(halves[0])] = halves[1].split(separator: ",").map(String.init)
+        }
+        return result
+    }()
+
+    /// The country a region of a country Scrub has no places in names: an
+    /// Indian or Mexican state, a Brazilian one's code.
+    static func regionAbroad(_ value: String) -> String? {
+        abroadRegionCountry[value.trimmingCharacters(in: .whitespaces).lowercased()]
+    }
+    private static let abroadRegionCountry: [String: String] = {
+        var result: [String: String] = [:]
+        for name in "Andhra Pradesh,Assam,Bihar,Delhi,Goa,Gujarat,Haryana,Karnataka,Kerala,Madhya Pradesh,Maharashtra,Odisha,Punjab,Rajasthan,Tamil Nadu,Telangana,Uttar Pradesh,West Bengal".split(separator: ",") { result[name.lowercased()] = "IN" }
+        for name in "CDMX,Jalisco,Nuevo León,Puebla,Yucatán,Oaxaca,Chiapas,Veracruz,Guanajuato,Querétaro,Sonora,Chihuahua,Sinaloa,Coahuila".split(separator: ",") { result[name.lowercased()] = "MX" }
+        for code in "SP,RJ,MG,RS,BA,PE,CE,DF,GO,AM".split(separator: ",") { result[code.lowercased()] = "BR" }
+        return result
+    }()
+
     /// Every region Scrub can write: its code, name and country.
     struct Region: Sendable { let code: String; let name: String; let country: String }
     private static let regionTable: [(String, String)] = [

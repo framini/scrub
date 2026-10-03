@@ -26,13 +26,25 @@ struct PIIGaps {
     }
 
     @Test func piiGaps() throws {
+        // SCRUB_PII_GAPS_ADDRESS=off measures Scrub without the address model.
+        // SCRUB_PII_GAPS_SCORER=off measures the hand rules in place of the person scorer.
+        try PersonScorer.$learned.withValue(ProcessInfo.processInfo.environment["SCRUB_PII_GAPS_SCORER"] != "off") {
+            if ProcessInfo.processInfo.environment["SCRUB_PII_GAPS_ADDRESS"] == "off" {
+                try AddressModel.$active.withValue(false) { try measure() }
+            } else {
+                try measure()
+            }
+        }
+    }
+
+    private func measure() throws {
         let environment = ProcessInfo.processInfo.environment
         let seed = environment["SCRUB_PII_GAPS_SEED"].flatMap(UInt64.init) ?? Self.defaultSeed
         let count = environment["SCRUB_PII_GAPS_CASES"].flatMap(Int.init) ?? Self.defaultCases
         // SCRUB_PII_GAPS_CONTEXT=off measures Scrub without the context model.
         if environment["SCRUB_PII_GAPS_CONTEXT"] == "off" { ContextStage.enabled.store(false, ordering: .relaxed) }
         defer { ContextStage.enabled.store(true, ordering: .relaxed) }
-        let isDefault = seed == Self.defaultSeed && count == Self.defaultCases && environment["SCRUB_PII_GAPS_CONTEXT"] == nil
+        let isDefault = seed == Self.defaultSeed && count == Self.defaultCases && environment["SCRUB_PII_GAPS_CONTEXT"] == nil && environment["SCRUB_PII_GAPS_ADDRESS"] == nil && environment["SCRUB_PII_GAPS_SCORER"] == nil
         var scores: [PIIGapCategory: Score] = [:]
         var misses: [PIIGapCategory: [String]] = [:]
         for (position, category) in PIIGapCategory.allCases.enumerated() {

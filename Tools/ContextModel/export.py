@@ -1,6 +1,6 @@
 """Writes the context model's weight file from a trained checkpoint.
 
-    python export.py --model checkpoint/ --out ../../Sources/ScrubCore/Resources
+    python export.py --model checkpoint/ --out ../../Sources/ScrubCore/Resources [--name ContextModelBase]
 
 The file holds the tokenizer (pieces, scores, the normalisation table), the
 gate's word lists and the network: piece embeddings as int8 rows with one
@@ -83,15 +83,19 @@ def quantized(weights):
 
 
 def stored(model_dir):
-    """The tensors exactly as the file stores them, keyed as in the checkpoint."""
+    """The tensors exactly as the file stores them, keyed as in the checkpoint.
+    Works for a BERT body (the small model) and a RoBERTa one (the base model):
+    RoBERTa counts positions from after its padding id, so its table starts there."""
     w = load_file(os.path.join(model_dir, "model.safetensors"))
     config = json.load(open(os.path.join(model_dir, "config.json")))
-    rows, scale = quantized(w["bert.embeddings.word_embeddings.weight"])
+    prefix = "roberta." if "roberta.embeddings.word_embeddings.weight" in w else "bert."
+    first = config["pad_token_id"] + 1 if prefix == "roberta." else 0
+    rows, scale = quantized(w[prefix + "embeddings.word_embeddings.weight"])
     out = {"word_rows": rows, "word_scale": scale,
-           "position": (w["bert.embeddings.position_embeddings.weight"] + w["bert.embeddings.token_type_embeddings.weight"][0]).astype(np.float32),
-           "embed_norm": (w["bert.embeddings.LayerNorm.weight"], w["bert.embeddings.LayerNorm.bias"]), "layers": []}
+           "position": (w[prefix + "embeddings.position_embeddings.weight"][first:] + w[prefix + "embeddings.token_type_embeddings.weight"][0]).astype(np.float32),
+           "embed_norm": (w[prefix + "embeddings.LayerNorm.weight"], w[prefix + "embeddings.LayerNorm.bias"]), "layers": [], "prefix": prefix}
     for i in range(config["num_hidden_layers"]):
-        g = lambda k: w[f"bert.encoder.layer.{i}.{k}"]
+        g = lambda k: w[f"{prefix}encoder.layer.{i}.{k}"]
         out["layers"].append({
             "qkv": np.concatenate([g("attention.self.query.weight"), g("attention.self.key.weight"), g("attention.self.value.weight")]).T.astype(np.float16),
             "qkv_bias": np.concatenate([g("attention.self.query.bias"), g("attention.self.key.bias"), g("attention.self.value.bias")]),
@@ -111,6 +115,7 @@ def main():
     parser.add_argument("--common", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "common-words.txt"))
     parser.add_argument("--words", default="/usr/share/dict/words")
     parser.add_argument("--out", required=True)
+    parser.add_argument("--name", default="ContextModel", help="the parts' file name: ContextModel (small) or ContextModelBase (base)")
     args = parser.parse_args()
 
     tokenizer = json.load(open(os.path.join(args.model, "tokenizer.json")))
@@ -124,7 +129,7 @@ def main():
     out = Writer()
     out.raw(b"SCM1")
     out.u32(config["num_hidden_layers"], hidden, config["num_attention_heads"], config["intermediate_size"],
-            config["max_position_embeddings"], len(pieces), len(LABELS))
+            len(tensors["position"]), len(pieces), len(LABELS))
     out.f32(np.array([config["layer_norm_eps"]]))
     out.i32(tokenizer["model"]["unk_id"], config["pad_token_id"], 0, 2)
     out.strings([p for p, _ in pieces])
@@ -150,12 +155,12 @@ def main():
     data = out.bytes()
 
     for name in os.listdir(args.out):
-        if re.fullmatch(r"ContextModel\.\d+\.bin", name):
+        if re.fullmatch(re.escape(args.name) + r"\.\d+\.bin", name):
             os.remove(os.path.join(args.out, name))
     count = (len(data) + PART_LIMIT - 1) // PART_LIMIT
     size = (len(data) + count - 1) // count
     for index in range(count):
-        with open(os.path.join(args.out, f"ContextModel.{index + 1}.bin"), "wb") as f:
+        with open(os.path.join(args.out, f"{args.name}.{index + 1}.bin"), "wb") as f:
             f.write(data[index * size:(index + 1) * size])
     print(json.dumps({"bytes": len(data), "parts": count, "sha256": hashlib.sha256(data).hexdigest(),
                       "pieces": len(pieces)}))

@@ -20,10 +20,24 @@ private final class LinearPeople {
     var entries: [Entry] = []
     private let locale = Locale(identifier: "en_US_POSIX")
     private func fold(_ value: String) -> String { value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: locale).trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// A name taken for someone once is that person for good.
+    private var resolved: [String: Entry] = [:]
     func register(_ first: String?, _ last: String?) -> Entry {
         let f = first.map(fold), l = last.map(fold)
+        let key = (f ?? "\u{0}") + "\u{1}" + (l ?? "\u{0}")
+        if let found = resolved[key] { return found }
+        let entry = resolve(f, l)
+        resolved[key] = entry
+        return entry
+    }
+    private func resolve(_ f: String?, _ l: String?) -> Entry {
         if let exact = entries.first(where: { $0.first == f && $0.last == l }) { return exact }
-        let candidates = entries.filter { (f == nil || $0.first == nil || $0.first == f) && (l == nil || $0.last == nil || $0.last == l) }
+        var candidates = entries.filter { (f == nil || $0.first == nil || $0.first == f) && (l == nil || $0.last == nil || $0.last == l) }
+        // One part alone is someone who has it, before anyone who lacks it.
+        if f == nil || l == nil, (f != nil || l != nil) {
+            let having = candidates.filter { f != nil ? $0.first == f : $0.last == l }
+            if !having.isEmpty { candidates = having }
+        }
         if candidates.count == 1, let found = candidates.first {
             found.first = found.first ?? f; found.last = found.last ?? l
             return found
@@ -235,6 +249,17 @@ private func expectPrompt(_ measure: () async throws -> (stopped: Duration, refe
     try await expectPrompt {
         try await timeToStop(text, name: "notes.txt") { stage, done, _, cancel in
             if stage == .reading, done > 0 { cancel() }
+        }
+    }
+}
+
+/// Cancelled as the context model finishes, while its findings join the
+/// others' in one long text.
+@Test func cancellingAfterReadingStopsPromptly() async throws {
+    let text = Data((0..<3000).map { "Kofi Mensah moved to Tromsø in \(2001 + $0 % 12) and works at Orrinvale Freight." }.joined(separator: "\n").utf8)
+    try await expectPrompt {
+        try await timeToStop(text, name: "notes.txt") { stage, done, total, cancel in
+            if stage == .reading, done == total, total > 0 { cancel() }
         }
     }
 }

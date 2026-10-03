@@ -84,12 +84,13 @@ def model_cases(model_dir, tok, valid, prose):
     """Windows as the stage reads them: whole 128-piece windows of prose and
     short ones of generated documents and non-Latin text."""
     tensors, _ = stored(model_dir)
+    prefix = tensors["prefix"]
     model = AutoModelForTokenClassification.from_pretrained(model_dir).eval()
     state = model.state_dict()
     with torch.no_grad():
-        state["bert.embeddings.word_embeddings.weight"].copy_(torch.from_numpy(tensors["word_rows"].astype(np.float32) * tensors["word_scale"][:, None]))
+        state[prefix + "embeddings.word_embeddings.weight"].copy_(torch.from_numpy(tensors["word_rows"].astype(np.float32) * tensors["word_scale"][:, None]))
         for i, layer in enumerate(tensors["layers"]):
-            p = f"bert.encoder.layer.{i}."
+            p = f"{prefix}encoder.layer.{i}."
             q, k, v = np.split(layer["qkv"].astype(np.float32).T, 3)
             for name, value in (("attention.self.query.weight", q), ("attention.self.key.weight", k), ("attention.self.value.weight", v),
                                 ("attention.output.dense.weight", layer["out"].astype(np.float32).T),

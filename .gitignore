@@ -15,3 +15,10 @@ Tools/ContextModel/*.jsonl
 Tools/ContextModel/prose.txt
 Tools/ContextModel/pruned/
 Tools/ContextModel/checkpoint/
+
+# Address model training scratch
+Tools/AddressModel/.venv/
+Tools/AddressModel/raw/
+Tools/AddressModel/data/
+Tools/AddressModel/__pycache__/
+Sources/ScrubCore/Resources/AddressModel.bin.pt

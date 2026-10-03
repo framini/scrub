@@ -18,6 +18,10 @@ struct ResultView: View {
         }
         .background(Color.snow, in: .rect(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.rule))
+        .sheet(isPresented: Binding(get: { model.reviewing }, set: { if !$0 { model.cancelReview() } })) {
+            ReviewView(findings: finished.result.uncertain, skipped: finished.skipped, onDone: { model.finishReview(skipping: $0) }, onCancel: { model.cancelReview() })
+                .preferredColorScheme(.light)
+        }
     }
 
     private var header: some View {
@@ -54,7 +58,9 @@ struct ResultView: View {
     }
 
     @ViewBuilder private var status: some View {
-        if model.failedSave {
+        if model.applyingReview {
+            ProgressView().controlSize(.small)
+        } else if model.failedSave {
             Text("Not saved").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.ember)
         } else if let saved = finished.savedAs {
             Text("Saved as \(saved)").font(.system(size: 12)).foregroundStyle(Color.slate)
@@ -97,8 +103,19 @@ struct ResultView: View {
                     Text("\(group.count)").fontWeight(.semibold)
                 }
             }
-            if !finished.result.unresolved.isEmpty {
+            if !finished.result.unresolved.isEmpty && !finished.reviewed {
                 Text("\(finished.result.unresolved.count) left to review").fontWeight(.semibold).foregroundStyle(Color.ember)
+            }
+            let uncertain = finished.result.uncertain.count
+            if uncertain > 0 {
+                Button { model.review() } label: {
+                    Text(finished.reviewed ? Copy.checked(leaving: finished.skipped.count) : Copy.toCheck(uncertain))
+                        .fontWeight(.semibold)
+                        .foregroundStyle(finished.reviewed ? Color.slate : Color.ember)
+                        .underline(!finished.reviewed)
+                }
+                .buttonStyle(.plain)
+                .help("See the replacements Scrub is least sure of, and leave any that aren’t personal")
             }
             if finished.result.neutralized > 0 {
                 Text("\(finished.result.neutralized) \(finished.result.neutralized == 1 ? "formula" : "formulas") made inert")

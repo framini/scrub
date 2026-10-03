@@ -43,3 +43,18 @@ private struct ParityCase: Decodable {
     #expect(found.contains { $0 == ("maria.gonzalez", "USERNAME") })
     #expect(found.contains { $0 == ("Tariq", "PERSON") })
 }
+
+/// The weights load only as shipped: a file whose bytes differ from the
+/// checksum in code is refused, even one that still parses as a model, and
+/// Scrub then runs without it, as it does without the context model or the name lists.
+@Test func nameModelLoadsOnlyWithItsChecksum() throws {
+    #expect(NameModel.shared != nil)
+    let url = try #require(ModelResources.bundle?.url(forResource: "NameModel", withExtension: "bin"))
+    var data = try Data(contentsOf: url)
+    #expect(NameModel.verified(data) != nil)
+    // One weight changed: still a well-formed model, but not the shipped one.
+    data[data.count - 8] ^= 0x01
+    #expect(NameModel(data) != nil)
+    #expect(NameModel.verified(data) == nil, "an altered file is refused")
+    #expect(NameModel.verified(try Data(contentsOf: url), checksum: String(repeating: "0", count: 64)) == nil)
+}

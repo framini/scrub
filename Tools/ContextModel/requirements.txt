@@ -34,3 +34,5 @@ mdurl==0.1.2
 Pygments==2.21.0
 annotated-doc==0.0.5
 setuptools==84.0.0
+# Reads Few-NERD and WikiANN (real_data.py --share-alike), for the comparison builds; the shipped recipe does not need it.
+pyarrow==25.0.1

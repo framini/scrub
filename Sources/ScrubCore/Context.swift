@@ -163,10 +163,17 @@ public enum KeyHints {
     /// The field a record's value-holding key stands for, from its naming sibling.
     static func namedField(_ key: String, siblings: [(String, String)]) -> String? {
         guard fieldValueKeys.contains(words(key).joined()), hint(key) == nil else { return nil }
-        for (name, value) in siblings where name != key && fieldNameKeys.contains(words(name).joined()) && value.utf16.count <= 80 {
+        for (name, value) in siblings where name != key && fieldNameKeys.contains(words(name).joined()) && value.utf16.count <= 80 && !isToken(value) {
             if let field = header(value) { return field }
         }
         return nil
+    }
+    private static let tokenPart = TextPattern(#"\d[A-Za-z]"#)
+    /// A record's own ID ("evt_xNptjX29KGaePinQ"), not a field's name: a digit
+    /// runs into letters, as no field name writes it ("address1" and "us-ssn"
+    /// do not). Read as words, an ID can spell anything ("Pin").
+    static func isToken(_ value: String) -> Bool {
+        value.split(whereSeparator: { "_-.:/ ".contains($0) }).contains { !TextRanges.matches(tokenPart, in: String($0)).isEmpty }
     }
     /// The key a flattened or spoken field name stands for, as CSV headers and
     /// form fields write them: "billing_details.address.city", "Applicant Name

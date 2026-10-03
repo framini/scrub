@@ -1,3 +1,4 @@
+import Accelerate
 import Foundation
 @testable import ScrubCore
 import Testing
@@ -18,6 +19,11 @@ private func fixture(_ name: String) -> URL {
     URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/\(name)")
 }
 
+/// The parity fixture Tools/ContextModel/parity.py wrote for the shipped weights.
+private func parityFixture(_ kind: String) -> URL {
+    fixture("context-\(kind)-parity.json")
+}
+
 @Test func contextModelLoads() throws {
     #expect(ContextModel.shared != nil)
 }
@@ -25,9 +31,9 @@ private func fixture(_ name: String) -> URL {
 /// The weights are used only as shipped: a part altered, missing, out of
 /// order or extra leaves Scrub without the model rather than with a damaged one.
 @Test func contextModelChecksWeights() throws {
-    let bundle = try #require(ModelResources.bundle)
-    let parts = try (1...ContextModel.partCount).map { index in
-        try Data(contentsOf: try #require(bundle.url(forResource: "ContextModel.\(index)", withExtension: "bin")))
+    let weights = ContextWeights.shipped
+    let parts = try (1...weights.parts).map { index in
+        try Data(contentsOf: try #require(weights.url(part: index)))
     }
     #expect(ContextModel.verified(parts) != nil)
     var altered = parts
@@ -37,6 +43,9 @@ private func fixture(_ name: String) -> URL {
     #expect(ContextModel.verified(parts.reversed()) == nil)
     #expect(ContextModel.verified(parts + [Data()]) == nil)
     #expect(ContextModel.verified(parts, checksum: String(repeating: "0", count: 64)) == nil)
+    // Weights that claim a different part count are refused too.
+    let other = ContextWeights(name: weights.name, parts: weights.parts + 1, checksum: weights.checksum, nonLatinDoubt: weights.nonLatinDoubt)
+    #expect(ContextModel.verified(parts, weights: other) == nil)
     #expect(ContextModel(Data("SCM1".utf8)) == nil)
     #expect(ContextModel(Data()) == nil)
 }
@@ -46,7 +55,7 @@ private func fixture(_ name: String) -> URL {
 /// and random runs of characters from many scripts.
 @Test func contextTokenizerMatchesTraining() throws {
     let model = try #require(ContextModel.shared)
-    let cases = try JSONDecoder().decode([TokenCase].self, from: Data(contentsOf: fixture("context-tokenizer-parity.json")))
+    let cases = try JSONDecoder().decode([TokenCase].self, from: Data(contentsOf: parityFixture("tokenizer")))
     #expect(cases.count > 400)
     var failures = 0
     for sample in cases {
@@ -66,7 +75,7 @@ private func fixture(_ name: String) -> URL {
 /// as stored, with logits within rounding.
 @Test func contextModelMatchesTraining() throws {
     let model = try #require(ContextModel.shared)
-    let cases = try JSONDecoder().decode([WindowCase].self, from: Data(contentsOf: fixture("context-model-parity.json")))
+    let cases = try JSONDecoder().decode([WindowCase].self, from: Data(contentsOf: parityFixture("model")))
     let width = model.labels.count
     var worst: Float = 0
     for sample in cases {
@@ -125,5 +134,88 @@ private func fixture(_ name: String) -> URL {
         let first = try #require(output.firstMatch(of: /works at (.+?) as a driver/)?.1)
         let second = try #require(output.firstMatch(of: /manager at (.+?) signed/)?.1)
         #expect(!output.contains("Orrinvale") && first == second && result.counts["EMPLOYER"] == 2, "[\(path)] \(output)")
+    }
+}
+
+/// A country, a continent or a nationality the model reads as a place is no
+/// one's place; a town is.
+@Test func nationsAreNoOnesPlace() throws {
+    let text = "Ingrid Halvorsen, a Danish citizen, moved from the United Kingdom's north to Ålesund, then to Norway."
+    let ns = text as NSString
+    func place(_ value: String) -> Span? {
+        let range = ns.range(of: value)
+        return ContextStage.span(ContextModel.Found(range: range.location..<NSMaxRange(range), kind: "LOCATION", doubt: 0.01), in: text)
+    }
+    for nation in ["Danish", "United Kingdom's", "Norway"] { #expect(place(nation) == nil, "\(nation)") }
+    #expect(place("Ålesund")?.entity == "LOCATION")
+    #expect(ContextStage.normalPlace("the United Kingdom’s") == "united kingdom")
+    // A holiday is a day, not a place; a calendar date is a date, not an ID.
+    let note = "We visit at Easter. Last backup 2022-11-28, case reference 4471-9902-18."
+    let notes = note as NSString
+    func found(_ value: String, _ kind: String) -> Span? {
+        let range = notes.range(of: value)
+        return ContextStage.span(ContextModel.Found(range: range.location..<NSMaxRange(range), kind: kind, doubt: 0.01), in: note)
+    }
+    #expect(found("Easter", "LOCATION") == nil)
+    #expect(found("2022-11-28", "ID") == nil)
+    #expect(found("4471-9902-18", "ID")?.entity == "ID_NUMBER")
+
+    let prose = "The tenant, a Swedish national, now lives in Kalmar with her sister."
+    for path in PIIGaps.InputPath.allCases {
+        let (data, name) = PIIGaps.wrap(prose, path)
+        let result = try Scrubber.scrub(data, name: name, forceFullDetection: false, seed: 5)
+        let output = PIIGaps.readable(result.output, path)
+        #expect(output.contains("a Swedish national") && !output.contains("Kalmar") && result.counts["LOCATION"] == 1, "[\(path)] \(output)")
+    }
+}
+
+/// The activation, run a block at a time without allocating, gives every value
+/// bit for bit what one pass of whole-array operations gave, for each length a
+/// window's layer produces: pieces × 1536 for the shipped model, and × 3072,
+/// the width of the base-size encoder Tools/ContextModel can also train.
+@Test func geluMatchesWholeArrayOperations() {
+    func reference(_ values: [Float]) -> [Float] {
+        let count = vDSP_Length(values.count)
+        var count32 = Int32(values.count), x = values, result = values
+        var scale: Float = 1 / Float(2).squareRoot(), p: Float = 0.3275911, one: Float = 1, minusOne: Float = -1, half: Float = 0.5
+        vDSP_vsmul(x, 1, &scale, &x, 1, count)
+        var magnitude = [Float](repeating: 0, count: values.count), t = magnitude, negative = magnitude, sign = magnitude
+        vDSP_vabs(x, 1, &magnitude, 1, count)
+        vDSP_vsmsa(magnitude, 1, &p, &one, &t, 1, count)
+        vvrecf(&t, t, &count32)
+        var poly = [Float](repeating: 1.061405429, count: values.count)
+        for coefficient: Float in [-1.453152027, 1.421413741, -0.284496736, 0.254829592] {
+            var c = coefficient
+            vDSP_vmsa(poly, 1, t, 1, &c, &poly, 1, count)
+        }
+        vDSP_vmul(poly, 1, t, 1, &poly, 1, count)
+        vDSP_vmul(magnitude, 1, magnitude, 1, &negative, 1, count)
+        vDSP_vneg(negative, 1, &negative, 1, count)
+        vvexpf(&negative, negative, &count32)
+        vDSP_vmul(poly, 1, negative, 1, &poly, 1, count)
+        vDSP_vsmsa(poly, 1, &minusOne, &one, &poly, 1, count)
+        vvcopysignf(&sign, [Float](repeating: 1, count: values.count), x, &count32)
+        vDSP_vmul(poly, 1, sign, 1, &poly, 1, count)
+        vDSP_vsmsa(poly, 1, &half, &half, &poly, 1, count)
+        vDSP_vmul(result, 1, poly, 1, &result, 1, count)
+        return result
+    }
+    var gen = SeededGenerator(seed: 1_536)
+    var scratch = ContextModel.Scratch()
+    for inner in [1536, 3072] {
+        for rows in 1...128 {
+            var values = (0..<(rows * inner)).map { index -> Float in
+                switch index % 97 {
+                case 0: return 0
+                case 1: return -0.0
+                case 2: return Float.leastNormalMagnitude
+                case 3: return -40
+                default: return Float(Int64(bitPattern: gen.next()) % 2_000_000) / 100_000
+                }
+            }
+            let expected = reference(values)
+            ContextModel.gelu(&values, scratch: &scratch)
+            #expect(values.elementsEqual(expected) { $0.bitPattern == $1.bitPattern }, "\(rows) pieces × \(inner)")
+        }
     }
 }
