@@ -107,10 +107,42 @@ AFTER = ["", "", "", " Thanks!", " Let me know if that works.", " The code for t
          " It should arrive by Friday.", " Ref: INV-20931.", " See you then.", " Order 55120 is on hold until then."]
 
 
+LEADS_ABROAD = ["bitte an", "bitte schicken an", "wohne jetzt in der", "wir wohnen in der", "Lieferadresse:", "neue Anschrift:", "die Rechnung geht an",
+                "envoyez-le au", "j'habite au", "livraison au", "notre adresse :", "le colis est au", "vivo en", "envíalo a", "la entrega es en",
+                "nuestra dirección:", "abito in", "spedire a", "consegna in", "il nuovo indirizzo è", "ik woon op", "stuur het naar", "bezorgen op",
+                "ons adres:", "moro na", "enviar para", "a entrega é na", "jag bor på", "skicka till", "leverans till", "jeg bor på", "send til",
+                "levering til", "asun osoitteessa", "toimitus osoitteeseen", "mieszkam na", "proszę wysłać na", "bydlím na", "ship it to", "my address is now"]
+TAILS_ABROAD = [" danke!", " seit März.", " ab nächster Woche.", " im Hinterhaus.", " svp.", " la semaine dernière.", " depuis janvier.", " gracias.",
+                " desde enero.", " la próxima semana.", " grazie.", " da lunedì.", " dopo le 18.", " bedankt.", " vanaf volgende week.", " obrigado.",
+                " desde janeiro.", " tack!", " från och med nästa vecka.", " tak.", " fra mandag.", " kiitos.", " od przyszłego tygodnia.", " díky."]
+
+
+def quoted(doc):
+    """The document with "> " before every line, its addresses moved with their text."""
+    text = doc.text
+    def moved(offset):
+        return offset + 2 * (text.count("\n", 0, offset) + 1)
+    out = Doc()
+    out.add("> " + text.replace("\n", "\n> "))
+    out.spans = [[moved(a), moved(b - 1) + 1] for a, b in doc.spans]
+    return out
+
+
+def lowered(text):
+    """The text in lowercase, character for character, so offsets stay put."""
+    return "".join(ch.lower() if len(ch.lower()) == 1 else ch for ch in text)
+
+
 class Generator:
-    def __init__(self, seed, holdout=False):
+    def __init__(self, seed, holdout=False, lowercase=0.0, numberless=0.0, extra=True):
         self.rng = random.Random(seed)
-        self.a = Addresses(self.rng, holdout)
+        self.a = Addresses(self.rng, holdout, extra=extra == "v6", firms=not extra)
+        # The share of documents written all in lowercase, and of addresses typed so in otherwise cased text.
+        self.lowercase = lowercase
+        # The share of addresses written with no number.
+        self.numberless = numberless
+        # The new multilingual lead-ins and hard negatives.
+        self.extra = extra
         self.man = [p for p in open(MAN, encoding="utf-8").read().split("\n\n") if p.strip()] if os.path.exists(MAN) else []
 
     def pick(self, seq):
@@ -149,11 +181,15 @@ class Generator:
 
     def address_text(self, kind=None, one=None):
         for _ in range(20):
-            address = self.a.make()
+            address = self.a.make(numberless=self.numberless if kind is None or "nonum" in kind else 0.0)
             if kind is None or address.kind in kind:
                 break
         one = self.chance(0.45) if one is None else one
-        return (address.one(self.rng) if one else address.multi(self.rng)), address
+        text = address.one(self.rng) if one else address.multi(self.rng)
+        # An address typed in lowercase in otherwise cased text ("ship to 14 rookery lane, leeds ls6 2ab").
+        if self.lowercase and self.chance(self.lowercase / 2):
+            text = lowered(text)
+        return text, address
 
     # -- documents with addresses
     def signature(self, doc):
@@ -211,10 +247,10 @@ class Generator:
         if self.chance(0.35):
             # A lead-in and a tail of ordinary words, so the address ends where the words do.
             text, _ = self.address_text(kind=None if self.chance(0.6) else ("street",), one=True)
-            lead = self.pick(LEADS)
+            lead = self.pick(LEADS + LEADS_ABROAD) if self.extra and self.chance(0.35) else self.pick(LEADS)
             if self.chance(0.5):
                 lead = lead[0].upper() + lead[1:]
-            doc.add(lead + " ").address(text).add(self.pick(TAILS))
+            doc.add(lead + " ").address(text).add(self.pick(TAILS + TAILS_ABROAD) if self.extra else self.pick(TAILS))
         elif self.chance(0.3):
             text, address = self.address_text(kind=("street",), one=True)
             city = self.pick(self.a.loc[address.country]).place
@@ -408,8 +444,92 @@ class Generator:
                                    f"{self.rng.randint(1, 20)} {self.pick(COMPANIES)} {self.rng.randint(10, 38)} {self.rng.randint(0, 30)} {self.rng.randint(0, 90)}"]))
         return "\n".join(rows)
 
+    def lookalike(self):
+        """Text that names streets, buildings or places but holds no address:
+        directions, board games, titles, citations, firms, news and manuals."""
+        n = lambda a=1, b=99: self.rng.randint(a, b)
+        word = lambda: self.pick(GB_WORDS)
+        day = self.pick(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
+        town = self.pick(self.a.loc[self.pick(self.a.countries)]).place
+        de = self.pick(["Bahnhof", "Schul", "Kirch", "Markt", "Garten", "Linden", "Berg", "Mühlen"])
+        kind = self.rng.random()
+        if kind < 0.2:
+            return self.pick([
+                f"take the {self.pick(['main', 'old', 'coast', 'ring', 'back', 'top'])} road for {self.pick(['about ', '', 'roughly '])}{n(2, 40)} {self.pick(['miles', 'km', 'minutes'])} and you'll see the sign",
+                f"turn {self.pick(['left', 'right'])} {self.pick(['at', 'after'])} the {self.pick(['first', 'second', 'third', '2nd', '3rd'])} {self.pick(['roundabout', 'lights', 'junction', 'set of lights'])} onto the {self.pick(['high street', 'main street', 'ring road', 'bypass', f'a{n(1, 999)}', f'b{n(1000, 9999)}'])}",
+                f"head {self.pick(['north', 'south', 'east', 'west'])} on the {self.pick([f'm{n(1, 60)}', f'a{n(1, 99)}', f'i-{n(5, 95)}', f'route {n(1, 99)}', f'highway {n(1, 401)}'])} for {n(3, 80)} {self.pick(['miles', 'km'])}, then follow signs for {town}",
+                f"the {self.pick(['high', 'main'])} street {self.pick(['is busy', 'was closed', 'gets flooded', 'is quiet'])} on {day.lower()}s, park on a side road",
+                f"we walked down the {self.pick(['avenue', 'boulevard', 'lane', 'promenade'])} for {n(5, 45)} minutes before it rained",
+                f"keep {self.pick(['left', 'right'])} at the fork, the road narrows after {n(1, 9)} bends",
+                f"{self.pick(['rue de la paix', 'avenue des champs-élysées', 'schlossallee', 'parkstraße', 'mayfair', 'old kent road', 'whitechapel road', 'boardwalk', 'baltic avenue', 'kalverstraat', 'paseo del prado'])} is the {self.pick(['priciest', 'cheapest', 'dark blue', 'brown', 'purple'])} square on the {self.pick(['french', 'german', 'british', 'american', 'dutch', 'spanish'])} board, {n(60, 400)} to buy",
+                f"die {de.lower()}straße ist ab {n(6, 22)} uhr gesperrt",
+                f"la rue principale est fermée jusqu'au {n(1, 28)} {self.pick(['mai', 'juin', 'juillet'])}",
+                f"la calle {self.pick(['mayor', 'real', 'nueva'])} estará cortada {n(2, 9)} días por obras",
+                f"la via {self.pick(['principale', 'centrale'])} resta chiusa per {n(2, 9)} giorni",
+                f"de {self.pick(['dorpsstraat', 'kerkstraat', 'hoofdweg'])} is {n(2, 9)} weken afgesloten",
+                f"the street was {self.pick(['quiet', 'packed', 'dark', 'flooded'])} after {n(7, 11)} pm",
+                f"our street gets {self.pick(['bins', 'recycling', 'post'])} on {day.lower()}s around {n(6, 11)}am",
+            ])
+        if kind < 0.35:
+            return self.pick([
+                f"Street Fighter {n(2, 6)} {self.pick(['tournament', 'patch notes', 'tier list'])}", f"Sesame Street season {n(1, 54)} episode {n(1, 26)}",
+                f"Wall Street Journal, p. {n(1, 40)}", f"Abbey Road ({self.pick(['50th Anniversary Edition', 'Remastered', 'Super Deluxe'])})",
+                f"Coronation Street episode {n(1000, 11999)}", f"Lindenstraße Folge {n(100, 1758)}", f"Melrose Place season {n(1, 7)}",
+                f"Mulholland Drive ({n(1990, 2010)}) {self.pick(['4K', 'Blu-ray', 'review'])}", f"Sunset Boulevard, {n(2, 9)}K restoration",
+                f"Penny Lane / Strawberry Fields {n(7, 12)}\" single", f"Electric Avenue ({n(1982, 2024)} remix)", f"{n(21, 23)} Jump Street cast",
+                f"Miracle on {n(30, 40)}th Street ({n(1947, 1994)})", f"A Nightmare on Elm Street {n(2, 7)}", f"Rue Morgue issue {n(1, 220)}",
+                f"Via Dolorosa, chapter {n(1, 14)}", f"Avenue Q tickets, row {self.pick('ABCDEFGH')}, seat {n(1, 30)}",
+                f"Calle {n(20, 99)} {self.pick(['documental', 'película', 'disco'])}", f"Rua {n(1, 99)} de {self.pick(['Maio', 'Junho', 'Abril'])} (novela, {n(1999, 2024)})",
+                f"Hauptstraße {n(2, 5)}: {self.pick(['Das Spiel', 'Der Film', 'Staffel'])} {n(1, 9)}", f"Downton Abbey series {n(1, 6)}",
+                f"Version {n(1, 12)}.{n(0, 9)} {self.pick(['Street', 'Boulevard', 'Avenue'])} Edition", f"{self.pick(['Park', 'Bridge', 'Harbour'])} Lane {self.pick(['Pro', 'Max', 'Lite'])} {n(2, 9)}",
+            ])
+        if kind < 0.5:
+            return self.pick([
+                f"§ {n(1, 2385)} Abs. {n(1, 6)} {self.pick(['BGB', 'StGB', 'ZPO', 'HGB', 'StPO', 'BauGB'])}", f"Art. {n(1, 99)} Abs. {n(1, 4)} DSGVO",
+                f"artículo {n(1, 1976)} del Código {self.pick(['Civil', 'Penal'])}", f"art. {n(1, 2969)} del Codice {self.pick(['Civile', 'Penale'])}",
+                f"Article L{n(1000, 9999)}-{n(1, 30)} du Code du {self.pick(['travail', 'commerce'])}", f"{n(1, 50)} U.S.C. § {n(1, 9999)}",
+                f"Section {n(1, 300)} of the {self.pick(['Highways', 'Companies', 'Housing', 'Road Traffic', 'Data Protection'])} Act {n(1960, 2023)}",
+                f"[{n(1990, 2024)}] {self.pick(['EWCA Civ', 'EWHC', 'UKSC', 'EWCA Crim'])} {n(1, 3000)}", f"Case C-{n(1, 999)}/{n(10, 24)}",
+                f"artikel {n(1, 700)} van Boek {n(1, 8)} BW", f"artigo {n(1, 2000)}.º do Código Civil", f"Rule {n(1, 99)}({self.pick('abcd')}) of the {self.pick(['Civil Procedure', 'Court'])} Rules",
+                f"Regulation (EU) {n(2010, 2024)}/{n(100, 2000)}, Article {n(1, 99)}", f"Gemäß § {n(1, 900)} {self.pick(['BGB', 'HGB'])} ist der Vertrag wirksam.",
+            ])
+        if kind < 0.65:
+            company = self.pick([f"{word()} Street {self.pick(['Capital', 'Partners', 'Advisors', 'Bank', 'Holdings', 'Dental', 'Kitchen'])} {self.pick(['LLC', 'Ltd', 'Inc.', 'plc', ''])}",
+                                 f"{de}strasse {self.pick(['AG', 'GmbH', 'Holding AG'])}", f"{de}straße Immobilien GmbH", f"Rue {self.pick(['Lafayette', 'du Commerce', 'Royale'])} SAS",
+                                 f"Via {self.pick(['Veneto', 'Nova', 'Appia'])} S.r.l.", f"{word()} Lane Consulting", f"{word()} Road Dental", f"{word()} Avenue Media",
+                                 f"{word()} Court Hotel", f"{word()} House Café", f"{word()} Cottage Tea Room", f"{word()} Square Ventures", f"Calle {self.pick(['Ocho', 'Real'])} Foods"]).strip()
+            return self.pick([f"{company} raised {n(2, 40)}% in {n(2015, 2025)}", f"{company} hired {n(2, 90)} people", f"{company} filed its accounts {n(2, 9)} weeks late",
+                              f"{company} opens at {n(7, 10)} every day", f"She works for {company} as an analyst", f"{company} won the tender", f"{company} announced a new office",
+                              f"Invoice from {company}: {n(100, 9999)}.{n(10, 99)} EUR", f"{company}"])
+        if kind < 0.8:
+            return self.pick([
+                f"Downing Street {self.pick(['said', 'confirmed', 'denied'])} the {self.pick(['report', 'plan', 'review'])} would be {self.pick(['published', 'delayed', 'shelved'])}.",
+                f"Wall Street {self.pick(['fell', 'rose', 'slipped', 'rallied'])} {n(1, 4)}.{n(0, 9)}% on {day}.", f"{self.pick(['Bond', 'Bay', 'Main', 'Market', 'Collins'])} Street {self.pick(['is closed for', 'hosts'])} the {self.pick(['parade', 'marathon', 'night market'])} on {day}.",
+                f"The Supreme Court {self.pick(['ruled', 'heard', 'rejected'])} the {self.pick(['appeal', 'case', 'petition'])}.", f"The {word()} House {self.pick(['Hotel', 'Restaurant', 'Café'])} has a lovely garden.",
+                f"We met on {self.pick(['Bond', 'Bay', 'Main', 'Queen', 'King', 'Collins'])} Street for {self.pick(['lunch', 'coffee', 'drinks'])}.", f"Abbey Road Studios {self.pick(['reopened', 'released the remaster', 'hosted the session'])}.",
+                f"Die {de}straße ist wegen {self.pick(['Bauarbeiten', 'des Marktes', 'eines Festes'])} gesperrt.", f"Le marché de la {self.pick(['place', 'rue'])} {self.pick(['Saint-Michel', 'du Château', 'Centrale'])} a lieu le samedi.",
+                f"La {self.pick(['Gran Vía', 'Calle Mayor', 'Rambla'])} estaba llena de turistas.", f"Via {self.pick(['Veneto', 'Condotti', 'del Corso'])} è famosa per i negozi.",
+                f"The {self.pick(['Town', 'City', 'Village'])} Hall {self.pick(['meeting', 'concert', 'fair'])} is on {day}.", f"{self.pick(['Coronation', 'Electric', 'Penny'])} Lane fans queued for hours.",
+                f"Hauptstraße, Kirchgasse und Marktplatz bilden die Altstadt.", f"I grew up near {self.pick(['the high street', 'the main road', 'the old mill'])} in a small town.",
+            ])
+        return self.pick([
+            f"see man {n(1, 8)} {self.pick(['crontab', 'ssh_config', 'launchd.plist', 'sudoers', 'hosts', 'resolv.conf'])} for the file format",
+            f"see {self.pick(['printf', 'getaddrinfo', 'open', 'stat', 'mmap', 'regex'])}({n(2, 3)}) and section {n(1, 9)} of the manual",
+            f"git-{self.pick(['config', 'rebase', 'worktree', 'log'])}({n(1, 7)}) describes the {self.pick(['path', 'street', 'road'])} option",
+            f"RFC {n(700, 9999)} section {n(1, 12)}.{n(1, 9)}", f"Version {n(1, 9)}.{n(0, 9)} der Software erscheint am {n(1, 28)}. {self.pick(['Mai', 'Juni', 'Juli'])}.",
+            f"versión {n(1, 9)}.{n(0, 9)}.{n(0, 20)} publicada", f"ICE {n(100, 999)} nach {self.pick(['Hamburg', 'München', 'Köln'])} fährt von Gleis {n(1, 20)}.",
+            f"Le TGV {n(5000, 9999)} part du quai {n(1, 20)} à {n(6, 22)}h{n(10, 59)}.", f"Vuelo {self.pick(['IB', 'VY', 'UX'])} {n(1000, 9999)} a {self.pick(['Bilbao', 'Sevilla', 'Lisboa'])}, puerta {self.pick('ABCDE')}{n(1, 40)}.",
+            f"Tåget avgår {n(6, 22)}:{n(10, 59)} från spår {n(1, 12)}.", f"Il volo per {self.pick(['Palermo', 'Bari', 'Cagliari'])} parte dal gate {self.pick('ABC')}{n(1, 30)}.",
+            f"Bestellung {n(100000, 999999)}: {n(2, 12)} Stück, Lieferung in {n(2, 9)} Tagen.", f"Het pakket met {n(2, 24)} flessen komt op {n(1, 28)} {self.pick(['mei', 'juni'])}.",
+            f"Straßenbahn Linie {n(1, 20)} Richtung {self.pick(['Hauptbahnhof', 'Messe', 'Zentrum'])} fällt aus.",
+            f"Unit {n(1, 12)} covers {self.pick(['postal addresses', 'street names', 'map reading'])} in {n(2, 30)} countries.",
+        ])
+
     def negative(self, doc):
         r = self.rng.random()
+        if self.extra and self.chance(0.3):
+            doc.add(self.lookalike())
+            return
         if r < 0.3 and self.man:
             doc.add(self.pick(self.man))
         elif r < 0.45:
@@ -428,6 +548,16 @@ class Generator:
             doc.add(self.pick(["\n", ". ", "; ", "\n- "]).join(lines))
 
     def document(self):
+        doc = self.draft()
+        # Some people write everything in lowercase: chat, notes, quick mails.
+        if self.lowercase and self.chance(self.lowercase):
+            doc.parts = [lowered("".join(doc.parts))]
+        # A mail quoted in a reply: every line after "> ".
+        if self.extra == "v6" and self.chance(0.05):
+            doc = quoted(doc)
+        return doc
+
+    def draft(self):
         doc = Doc()
         r = self.rng.random()
         if r < 0.4:
@@ -452,11 +582,15 @@ def main():
     parser.add_argument("--count", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--holdout", action="store_true", help="only the held-out localities, streets and names")
+    parser.add_argument("--lowercase", type=float, default=0.0, help="share of documents written in lowercase")
+    parser.add_argument("--numberless", type=float, default=0.0, help="share of addresses written with no number")
+    parser.add_argument("--no-extra", action="store_true", help="without the multilingual lead-ins and the newer look-alikes")
+    parser.add_argument("--v6", action="store_true", help="also quoted signatures, buildings named by number words and more country lines")
     args = parser.parse_args()
     sys.path.insert(0, HERE)
     from eval_lines import eval_grams, grams
     held = eval_grams()
-    generator = Generator(args.seed, args.holdout)
+    generator = Generator(args.seed, args.holdout, lowercase=args.lowercase, numberless=args.numberless, extra=False if args.no_extra else ("v6" if args.v6 else True))
     written = dropped = 0
     while written < args.count:
         doc = generator.document()

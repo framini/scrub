@@ -10,7 +10,7 @@ import random
 
 import torch
 
-from model import AddressModel
+from model import WIDE, AddressModel
 from train import batch_tensors, decode, encode, quantized
 
 TEXTS = [
@@ -29,6 +29,11 @@ TEXTS = [
     "",
     "   ",
     "\n\n\n",
+    "Please send the keys to Flat B, The Old Rectory, Little Hadham by Friday.",
+    "Unsere neue Adresse: Hauptstraße, Berlin-Mitte\nTel. 030 555 0199",
+    "bitte schick das paket an lindenhofer straße 48a, 70178 stuttgart, danke!",
+    "can you forward my post to 14 rookery lane, leeds ls6 2ab",
+    "take the coast road for about 12 miles and turn left at the second roundabout",
 ]
 
 
@@ -57,7 +62,7 @@ def main():
                 out, mask = model(ids, offsets, shapes, lengths)
                 rows = out[mask]
                 logits = [[round(v, 5) for v in row] for row in rows.tolist()]
-                spans = decode(text, tokens, torch.softmax(rows, dim=-1).tolist())
+                spans = decode(text, tokens, torch.softmax(rows, dim=-1).tolist(), numberless=WIDE)
             cases.append({"text": text, "tokens": [[utf16(text, s), utf16(text, e)] for s, e in tokens], "logits": logits,
                           "addresses": [[utf16(text, s), utf16(text, e)] for s, e in spans]})
     print(json.dumps(cases, ensure_ascii=False))

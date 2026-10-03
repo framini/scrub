@@ -10,8 +10,9 @@ public enum Scrubber {
         let format = try classify(data, name: name)
         progress(.starting, 1, 1)
         try checkCancellation()
+        let coverage = Coverage.current()
         let job = seed.map { Job(seed: $0) } ?? Job()
-        let result: ScrubResult
+        var result: ScrubResult
         switch format {
         case "json": result = try JSONFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
         case "xml": result = try XMLFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
@@ -20,6 +21,7 @@ public enum Scrubber {
         }
         // Cancelling stops a scrub; it never hands back one that stopped looking partway.
         try checkCancellation()
+        result.coverage = coverage
         return result
     }
     public static func classify(_ data: Data, name: String) throws -> String {

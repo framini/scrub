@@ -32,7 +32,10 @@ COUNTRIES = ["US", "CA", "GB", "AU", "NZ", "IE", "DE", "FR", "NL", "BE", "ES", "
              "IN", "SG", "ZA", "MX", "BR", "JP"]
 
 
-def load_localities(holdout):
+def load_localities(holdout, firms=False):
+    """Real localities by country. Germany's file also names firms and offices
+    with a postcode of their own; they are left out unless `firms` (the first
+    model's data kept them)."""
     found = {}
     for country in COUNTRIES:
         rows = []
@@ -44,6 +47,12 @@ def load_localities(holdout):
             if not place or re.search(r"(?i)gericht|postfach|cedex|\bbox\b|\bbag\b|\(|\d", place) or len(place) > 32:
                 continue
             if "CEDEX" in postal:
+                continue
+            # Germany's file also names the firms and offices with a postcode of their own
+            # ("… Versicherung AG", "Stadtverwaltung"); those rows have no accuracy.
+            if country == "DE" and not firms and (len(f) < 12 or not f[11].strip()):
+                continue
+            if country == "DE" and not firms and re.search(r"(?i)\b(?:gmbh|mbh|ag|kg|se|e\.\s?v|co|services?|insurance|versicherung\w*|bank|verlag|vertrieb\w*|werk\w*|presse|stiftung|bundes\w*|amt|zentrale|deutsche|universität|klinik\w*)\b|\.\s|\bder\b|\bdes\b|\bund\b", place):
                 continue
             if held_out(place) != holdout:
                 continue
@@ -155,3 +164,20 @@ MX_WORDS = """Reforma|Insurgentes Sur|Juárez|Hidalgo|Morelos|Madero|5 de Mayo|1
 MX_COLONIAS = ["Centro", "Roma Norte", "Condesa", "Juárez", "Del Valle", "Polanco", "Narvarte", "Doctores", "Obrera", "Escandón", "Moderna",
                "Las Águilas", "Jardines del Sur", "Lomas Verdes", "San Rafael", "Santa María la Ribera", "Americana", "Providencia"]
 ZA_TYPES = ["Street", "Road", "Avenue", "Drive", "Crescent", "Lane", "Close", "Way"]
+
+# Numberless addresses: house names, counties and the ways a street is named
+# without a number ("Hauptstraße, Berlin-Mitte", "rue des Lilas, Nantes").
+HOUSE_NAMES = ["The Old Rectory", "The Old Vicarage", "The Old School House", "The Old Forge", "The Coach House", "The Granary", "The Barn", "The Stables",
+               "The Old Post Office", "The Old Bakery", "The Mill House", "The Lodge", "The Cottage", "The Manse", "The Old Chapel", "The Malthouse",
+               "Orchard House", "Meadow View", "Hill Top", "Brook Cottage", "Ivy Cottage", "Holly Lodge", "Beech House", "Yew Tree Cottage", "Pear Tree House",
+               "Wren Cottage", "Larch Lodge", "Glebe House", "Primrose Cottage", "Ashdown", "Fernlea", "Rosebank", "Woodside", "Hillcrest", "Briar Cottage"]
+HOUSE_KINDS = ["Cottage", "House", "Lodge", "Farm", "Barn", "Manor", "Grange", "Mill", "Hall", "Croft", "End", "View", "Court", "Mews", "Place"]
+GB_COUNTIES = ["Oxfordshire", "Warwickshire", "Gloucestershire", "Hertfordshire", "Buckinghamshire", "Wiltshire", "Somerset", "Dorset", "Devon", "Cornwall",
+               "Cumbria", "Essex", "Kent", "Surrey", "Suffolk", "Norfolk", "Shropshire", "Herefordshire", "Worcestershire", "Lincolnshire", "North Yorkshire",
+               "East Sussex", "West Sussex", "Hampshire", "Cambridgeshire", "Northumberland", "Derbyshire", "Powys", "Gwynedd", "Aberdeenshire", "Perthshire",
+               "Fife", "Argyll", "County Durham", "Lancashire", "Cheshire", "Staffordshire", "Leicestershire", "Rutland", "Berkshire"]
+IE_COUNTIES = ["Cork", "Kerry", "Galway", "Mayo", "Clare", "Wicklow", "Kildare", "Meath", "Donegal", "Sligo", "Tipperary", "Limerick", "Wexford", "Leitrim",
+               "Roscommon", "Offaly", "Laois", "Cavan", "Monaghan", "Waterford", "Kilkenny", "Carlow", "Longford", "Westmeath", "Louth"]
+DISTRICTS = {"DE": ["Mitte", "Nord", "Süd", "Ost", "West", "Altstadt", "Neustadt", "Innenstadt"], "AT": ["Innere Stadt", "Landstraße", "Favoriten"],
+             "CH": ["Altstadt", "Oerlikon", "Wiedikon"], "FR": ["Centre", "Vieux Port"], "IT": ["Centro", "Centro Storico"], "ES": ["Centro"],
+             "PT": ["Baixa", "Centro"], "NL": ["Centrum", "Oost", "West", "Noord", "Zuid"], "SE": ["Centrum", "Södermalm"]}

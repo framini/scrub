@@ -47,6 +47,7 @@ public enum JSONFile: FileFormat {
         collect(root, key: nil, path: "", records: [], keys: [])
         progress(.finding, 0, leaves.count)
         let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
+        let records = leaves.map(\.lastRecord)
         progress(.finding, leaves.count, leaves.count)
         // A key's long digits get one stand-in, however often the file is written.
         var keyDigits: [String: (String, [Mark])] = [:]
@@ -98,7 +99,7 @@ public enum JSONFile: FileFormat {
         }
         progress(.checking, 0, 1)
         var result = try render(values, counts: job.counts)
-        result.review = Review(values: values, counts: job.counts, render: render)
+        result.review = Review(values: values, counts: job.counts, records: records, render: render)
         progress(.checking, 1, 1)
         return result
     }
@@ -126,6 +127,8 @@ public enum JSONFile: FileFormat {
         return latitudeFirst ? ["latitude", "longitude"] : ["longitude", "latitude"]
     }
     static func numericEntity(key: String?, number: String) -> String? {
+        // A customer or patient number names them as an ID string would.
+        if KeyHints.hint(key) == nil, RecordIDs.identifying(key: key, value: number), number.allSatisfy({ $0.isASCII && $0.isNumber }) { return "RECORD_ID" }
         if let hint = KeyHints.hint(key), ["AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE"].contains(hint) { return KeyHints.fits(key, number) ? hint : nil }
         if let hint = KeyHints.hint(key), !numericEntities.contains(hint) { return nil }
         guard let value = Double(number), value.isFinite else { return KeyHints.hint(key) }

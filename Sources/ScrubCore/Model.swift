@@ -10,10 +10,12 @@ public struct Mark: Sendable, Equatable {
     /// `Finding.confidence`); nil on marks that only show where a stand-in is.
     public let original: String?
     public let confidence: Double?
-    public init(range: Range<Int>, entity: String, original: String? = nil, confidence: Double? = nil) {
-        self.range = range; self.entity = entity; self.original = original; self.confidence = confidence
+    /// Why this place is worth a person's look beyond how sure the detector was.
+    public let doubt: Doubt?
+    public init(range: Range<Int>, entity: String, original: String? = nil, confidence: Double? = nil, doubt: Doubt? = nil) {
+        self.range = range; self.entity = entity; self.original = original; self.confidence = confidence; self.doubt = doubt
     }
-    func moved(to range: Range<Int>) -> Mark { Mark(range: range, entity: entity, original: original, confidence: confidence) }
+    func moved(to range: Range<Int>) -> Mark { Mark(range: range, entity: entity, original: original, confidence: confidence, doubt: doubt) }
 }
 public struct TableMark: Sendable, Equatable {
     public static let header = -1
@@ -36,10 +38,13 @@ public struct ScrubResult: Sendable {
     public let counts: [String: Int]
     public let unresolved: [Mark]
     public let neutralized: Int
+    /// Which of Scrub's own detectors this scrub ran without, because their
+    /// files were missing or altered (see `Coverage`).
+    public internal(set) var coverage = Coverage.full
     /// What a person may take back before saving (see `findings` and `skipping`).
     var review: Review?
-    /// The findings this result leaves as written, when a review chose them; nil for the scrub as made.
-    var left: Set<Int>?
+    /// The choices this result was written with, when a review made them; nil for the scrub as made.
+    var made: Choices?
     public init(format: String, output: Data, preview: Preview, counts: [String: Int], unresolved: [Mark], neutralized: Int = 0) {
         self.format = format; self.output = output; self.preview = preview; self.counts = counts; self.unresolved = unresolved; self.neutralized = neutralized
     }
@@ -50,7 +55,10 @@ public struct Span: Sendable, Equatable {
     public let range: Range<Int>
     public let entity: String
     public let score: Double
-    public init(range: Range<Int>, entity: String, score: Double) { self.range = range; self.entity = entity; self.score = score }
+    /// Where in a link the value sits, when it does: it is read decoded and
+    /// its stand-in written encoded the same way (see `URLs`).
+    public let url: URLPart?
+    public init(range: Range<Int>, entity: String, score: Double, url: URLPart? = nil) { self.range = range; self.entity = entity; self.score = score; self.url = url }
 }
 
 // Compiling a pattern costs far more than matching it, so patterns are
@@ -100,6 +108,39 @@ enum TextRanges {
     }
     static func replace(_ text: String, _ range: Range<Int>, with value: String) -> String {
         (text as NSString).replacingCharacters(in: NSRange(location: range.lowerBound, length: range.count), with: value)
+    }
+    /// The matches a scan of the whole text finds, read only in windows around
+    /// `anchors`: every match must contain one, starting at most `before` units
+    /// ahead of it and ending at most `after` units past its start. Overlapping
+    /// windows are read as one, left to right, and look-arounds see the text around each.
+    static func matches(_ pattern: TextPattern, in text: String, around anchors: [Int], before: Int, after: Int, isCancelled: () -> Bool = { false }) -> [NSTextCheckingResult] {
+        guard let regex = pattern.regex, !anchors.isEmpty else { return [] }
+        let length = (text as NSString).length
+        var windows: [NSRange] = []
+        for anchor in anchors.sorted() {
+            let window = NSRange(location: max(0, anchor - before), length: min(length, anchor + after) - max(0, anchor - before))
+            if let last = windows.last, NSMaxRange(last) >= window.location { windows[windows.count - 1] = NSUnionRange(last, window) } else { windows.append(window) }
+        }
+        var found: [NSTextCheckingResult] = []
+        for window in windows {
+            if isCancelled() { return found }
+            for match in regex.matches(in: text, options: [.withTransparentBounds], range: window) where found.last.map({ NSMaxRange($0.range) <= match.range.location }) ?? true {
+                found.append(match)
+            }
+        }
+        return found
+    }
+    /// Where `literal` starts in `text`, in any case.
+    static func occurrences(of literal: String, in ns: NSString) -> [Int] {
+        var found: [Int] = []
+        var start = 0
+        while start < ns.length {
+            let match = ns.range(of: literal, options: .caseInsensitive, range: NSRange(location: start, length: ns.length - start))
+            if match.location == NSNotFound { break }
+            found.append(match.location)
+            start = NSMaxRange(match)
+        }
+        return found
     }
     static func matches(_ pattern: TextPattern, in text: String, isCancelled: () -> Bool = { false }) -> [NSTextCheckingResult] {
         guard let regex = pattern.regex else { return [] }

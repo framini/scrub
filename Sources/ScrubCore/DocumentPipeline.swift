@@ -17,8 +17,15 @@ struct DocumentLeaf: Sendable {
     /// The key of a value no hint covers ("country", "gender", "timezone"),
     /// kept because it tells what the personal values beside it should fit.
     let rawKey: String?
+    /// The text as a reader sees it, when hidden characters or in-word markup
+    /// make it differ from the text as written (see `Visible`). Detection reads this.
+    let view: Visible?
+    var seen: String { view?.clean ?? text }
+    /// The object a flattened header names within its record ("applicant" of "applicant.first_name").
+    let objectPath: String
 
-    init(_ text: String, key: String? = nil, records: [Int] = [], contextWords: Set<String> = [], numericEntity: String? = nil, fieldName: Bool = false) {
+    init(_ text: String, key: String? = nil, records: [Int] = [], contextWords: Set<String> = [], numericEntity: String? = nil, fieldName: Bool = false, objectPath: String = "") {
+        self.objectPath = objectPath
         self.text = text
         self.key = numericEntity != nil || KeyHints.fits(key, text) ? key : nil
         self.rawKey = KeyHints.hint(key) == nil ? key : nil
@@ -26,6 +33,7 @@ struct DocumentLeaf: Sendable {
         self.contextWords = contextWords
         self.numericEntity = numericEntity
         self.fieldName = fieldName
+        view = numericEntity == nil ? Visible(text) : nil
     }
 }
 
@@ -76,11 +84,15 @@ struct DocumentValue {
     /// range in `text`, and with `proposals`, the stand-in each would take.
     let unresolved: [Mark]
     let proposals: [String]
+    /// People only a model read and doubted, left as written (`Doubt.unconfirmed`):
+    /// carried through every round, and joined to `unresolved` at the end.
+    let held: [Mark]
 
-    init(text: String, marks: [Mark], unresolved: [Mark], proposals: [String] = []) {
+    init(text: String, marks: [Mark], unresolved: [Mark], proposals: [String] = [], held: [Mark] = []) {
         self.text = text
         self.unresolved = unresolved
         self.proposals = proposals
+        self.held = held
         if marks.count == 1, marks[0].range == 0..<(text as NSString).length {
             storedMarks = []
             full = marks[0]
@@ -125,6 +137,7 @@ enum DocumentPipeline {
 
     static func run(_ leaves: [DocumentLeaf], job: Job, forceFullDetection: Bool = false, progress: (Stage, Int, Int) -> Void = { _, _, _ in }) throws -> [DocumentValue] {
         var (gazetteer, values, emptyBases) = try detectAndPrepare(leaves, job: job, progress: progress)
+        try Scrubber.checkCancellation()
         var active = Array(repeating: true, count: values.count)
         var originals = OriginalMatcher(job)
         // What every value's stand-ins replaced, for the leak gate to find written another way.
@@ -139,9 +152,11 @@ enum DocumentPipeline {
                 let previous = values[index]
                 if previous.fullyMarked { continue }
                 let reusable = !forceFullDetection && emptyBases[index] && previous.text == leaves[index].text
-                let (text, marks, unresolved) = try Correction.run(previous.text, marks: previous.marks, job: job, matcher: originals, gazetteer: gazetteer, gate: gate, passes: 1, base: reusable ? [] : nil)
+                job.enter(value: index, records: leaves[index].enclosing)
+                var held = previous.held
+                let (text, marks, unresolved) = try Correction.run(previous.text, marks: previous.marks, job: job, matcher: originals, gazetteer: gazetteer, gate: gate, passes: 1, base: reusable ? [] : nil, held: &held)
                 if text != previous.text { changed = true; changedIndices.append(index) }
-                values[index] = DocumentValue(text: text, marks: marks, unresolved: unresolved)
+                values[index] = DocumentValue(text: text, marks: marks, unresolved: unresolved, held: held)
             }
             if !changed { break }
             let newReplacements = job.replacements[beforeReplacements...]
@@ -166,11 +181,16 @@ enum DocumentPipeline {
         }
         // What is left as written gets the stand-in it would take, drawn in
         // document order once the rounds are done, so review can offer it.
-        for index in values.indices where !values[index].unresolved.isEmpty {
+        for index in values.indices where !values[index].unresolved.isEmpty || !values[index].held.isEmpty {
             try Scrubber.checkCancellation()
             let value = values[index]
+            job.enter(value: index, records: leaves[index].enclosing)
             var kept: [Mark] = [], proposals: [String] = []
-            for mark in value.unresolved {
+            // A doubted person the final check also suspects is its suspect.
+            var suspected = IndexSet()
+            for mark in value.unresolved where !mark.range.isEmpty { suspected.insert(integersIn: mark.range) }
+            let doubted = value.held.filter { !$0.range.isEmpty && !suspected.intersects(integersIn: $0.range) }
+            for mark in (value.unresolved + doubted).sorted(by: { $0.range.lowerBound < $1.range.lowerBound }) {
                 guard let original = mark.original, let fake = job.proposal(for: mark.entity, original: original) else { continue }
                 kept.append(mark)
                 proposals.append(fake)
@@ -183,14 +203,22 @@ enum DocumentPipeline {
         return values
     }
     private static func detectAndPrepare(_ leaves: [DocumentLeaf], job: Job, progress: (Stage, Int, Int) -> Void) throws -> (GazetteerMatcher, [DocumentValue], [Bool]) {
-        let bases = try detectBases(leaves, progress: progress)
-        let prepared = try prepare(leaves, bases: bases, job: job)
+        let (bases, doubts) = try detectBases(leaves, progress: progress)
+        let prepared = try prepare(leaves, bases: bases, doubts: doubts, job: job)
         return (prepared.0, prepared.1, bases.map { $0?.isEmpty == true })
     }
 
-    private static func prepare(_ leaves: [DocumentLeaf], bases: [[Span]?], job: Job) throws -> (GazetteerMatcher, [DocumentValue]) {
+    private static func prepare(_ leaves: [DocumentLeaf], bases: [[Span]?], doubts: [[Span]], job: Job) throws -> (GazetteerMatcher, [DocumentValue]) {
         job.reserveNames(zip(leaves, bases).flatMap { leaf, stored in
-            base(leaf, stored: stored).filter { nameEntities.contains($0.entity) }.map { TextRanges.substring(leaf.text, $0.range) }
+            base(leaf, stored: stored).compactMap { span -> String? in
+                if nameEntities.contains(span.entity) { return TextRanges.substring(leaf.seen, span.range) }
+                // A name in an email's local part ("mateo.nguyen@") is someone's: no stand-in reuses it.
+                // Ordinary words ("info", "the", "sales") name no one, and would block half the names to draw from.
+                guard span.entity == "EMAIL_ADDRESS" else { return nil }
+                let words = TextRanges.substring(leaf.seen, span.range).prefix { $0 != "@" }.split(whereSeparator: { !$0.isLetter }).map(String.init)
+                let names = words.filter { $0.count >= 3 && !NameLists.isOrdinary($0.lowercased()) }
+                return names.isEmpty ? nil : names.joined(separator: " ")
+            }
         })
         for leaf in leaves {
             if let entity = leaf.numericEntity { job.reserveNumeric(leaf.text, entity: entity) }
@@ -208,6 +236,44 @@ enum DocumentPipeline {
         job.setReplacementRecording(false)
         defer { job.setReplacementRecording(true) }
         var values = [DocumentValue?](repeating: nil, count: leaves.count)
+        // What a record's identifier may spell out: the names, email local parts and phone numbers found.
+        let spelled = RecordIDs.Known(job.gazetteer)
+        // Objects that hold a person's name or email themselves, or say they are a
+        // person ("resourceType": "Patient"), whose "id" is that person's. A flattened
+        // header's path counts as its object: "applicant.name" is not "id"'s.
+        func object(_ leaf: DocumentLeaf) -> String? {
+            guard let record = leaf.lastRecord else { return nil }
+            return "\(record)\u{0}" + leaf.objectPath
+        }
+        let people: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS"]
+        // Keys repeat in every record: what each says is read once.
+        var hints: [String: String] = [:], typeKeys: [String: Bool] = [:], naming: [String: Bool] = [:]
+        func hint(_ key: String?) -> String? {
+            guard let key else { return nil }
+            if let known = hints[key] { return known.isEmpty ? nil : known }
+            let found = KeyHints.hint(key)
+            hints[key] = found ?? ""
+            return found
+        }
+        func typeKey(_ key: String?) -> Bool {
+            guard let key else { return false }
+            if let known = typeKeys[key] { return known }
+            let found = RecordIDs.typeKeys.contains(KeyHints.words(key).joined())
+            typeKeys[key] = found
+            return found
+        }
+        func mayName(_ key: String?) -> Bool {
+            guard let key else { return false }
+            if let known = naming[key] { return known }
+            let found = RecordIDs.keyMayName(key)
+            naming[key] = found
+            return found
+        }
+        var personal: Set<String> = []
+        for (index, leaf) in leaves.enumerated() {
+            if index.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
+            if people.contains(hint(leaf.key) ?? "") || typeKey(leaf.rawKey) && RecordIDs.namesPersonType(key: leaf.rawKey, value: leaf.text), let object = object(leaf) { personal.insert(object) }
+        }
         // An age or last four digits is read off the stand-ins it belongs with, so those come first.
         let later = { (index: Int) in StandIns.derived.contains(leaves[index].numericEntity ?? KeyHints.hint(leaves[index].key) ?? "") || KeyHints.hint(leaves[index].key) != nil && StandIns.isMasked(leaves[index].text) }
         var order: [Int] = [], derived: [Int] = []
@@ -219,22 +285,36 @@ enum DocumentPipeline {
         for index in order {
             try Scrubber.checkCancellation()
             let (leaf, stored) = (leaves[index], bases[index])
-            let found = detected(leaf, base: base(leaf, stored: stored), gazetteer: gazetteer, detector: job.detector)
-            job.recordOriginals([(leaf.text, found)])
+            job.enter(value: index, records: leaf.enclosing)
+            var found = detected(leaf, base: base(leaf, stored: stored), gazetteer: gazetteer, detector: job.detector)
+            if found.isEmpty, leaf.numericEntity == nil, hint(leaf.key) == nil, mayName(leaf.rawKey ?? leaf.key), RecordIDs.isPersonal(leaf, spelled: spelled, ownRecord: object(leaf).map(personal.contains) ?? false) {
+                found = [Span(range: 0..<(leaf.seen as NSString).length, entity: "RECORD_ID", score: 1)]
+            } else if leaf.numericEntity == nil, !leaf.fieldName, hint(leaf.key) == nil, case let ids = RecordIDs.spelled(in: leaf.seen, known: spelled), !ids.isEmpty {
+                // An ID in running text that spells someone out ("cus_odalys_ferriter") is theirs too.
+                found = Detector.resolve(found + ids)
+            }
+            job.recordOriginals([(leaf.seen, found)])
+            // Read in the text as seen, replaced in the text as written.
+            if let view = leaf.view { found = found.map(view.raw) }
             let owner = identityHints.contains(KeyHints.hint(leaf.key) ?? "") ? leaf.owner(in: owners) : nil
             var (text, marks): (String, [Mark])
+            var held: [Mark] = []
             if let entity = leaf.numericEntity {
                 text = job.numericLexeme(leaf.text, entity: entity, address: addresses[index])
-                marks = [Mark(range: 0..<(text as NSString).length, entity: entity, original: leaf.text, confidence: 1)]
+                marks = [job.lastUnclear ? Mark(range: 0..<(text as NSString).length, entity: entity, original: leaf.text, confidence: Doubt.unclearOwner.confidence, doubt: .unclearOwner)
+                         : Mark(range: 0..<(text as NSString).length, entity: entity, original: leaf.text, confidence: 1)]
             } else if found.isEmpty, let address = addresses[index], isTimeZone(leaf) {
                 text = job.replacement(for: "TIME_ZONE", original: leaf.text, persona: nil, address: address)
                 marks = [Mark(range: 0..<(text as NSString).length, entity: "TIME_ZONE", original: leaf.text, confidence: 1)]
             } else {
-                (text, marks) = try job.apply(leaf.text, spans: found, owner: owner, address: addresses[index])
+                held = doubts.indices.contains(index) ? doubts[index].map { doubt in
+                    Mark(range: leaf.view?.raw(doubt.range) ?? doubt.range, entity: "PERSON", original: TextRanges.substring(leaf.seen, doubt.range), confidence: min(doubt.score, Doubt.unconfirmed.confidence), doubt: .unconfirmed)
+                } : []
+                (text, marks) = try job.apply(leaf.text, spans: found, owner: owner, address: addresses[index], held: &held)
             }
             // An age with no birth date to follow stays as it was.
             if text == leaf.text, marks.count == 1, StandIns.derived.contains(marks[0].entity) || marks[0].entity == "TIME_ZONE" { marks = [] }
-            values[index] = DocumentValue(text: text, marks: marks, unresolved: [])
+            values[index] = DocumentValue(text: text, marks: marks, unresolved: [], held: held)
         }
         return (gazetteer, values.map { $0! })
     }
@@ -252,7 +332,7 @@ enum DocumentPipeline {
             }
             guard let record = leaf.lastRecord, let hint = KeyHints.hint(leaf.key), identityHints.contains(hint), !leaf.text.isEmpty else { continue }
             if recordFields[record] == nil { recordFields[record] = IdentityFields() }
-            recordFields[record]?.set(leaf.text, for: hint)
+            recordFields[record]?.set(leaf.seen, for: hint)
         }
         // A gender beside a name object ("gender" next to "name": {"first": …}) is that person's.
         for (index, leaf) in leaves.enumerated() {
@@ -280,7 +360,7 @@ enum DocumentPipeline {
         if Task.isCancelled { return [] }
         for leaf in leaves where KeyHints.hint(leaf.key) == "EMAIL_ADDRESS" && !leaf.text.isEmpty {
             if let record = leaf.owner(in: identities), recordFields[record]?.email == nil {
-                recordFields[record]?.email = leaf.text
+                recordFields[record]?.email = leaf.seen
             }
         }
         var owners = Array<Persona?>(repeating: nil, count: maxRecord + 1)
@@ -324,12 +404,12 @@ enum DocumentPipeline {
             member[index] = group
             var parts = groups[group] ?? AddressParts()
             switch hint {
-            case "LOCATION": if parts.city == nil { parts.city = leaf.text }
-            case "REGION": if parts.region == nil { parts.region = leaf.text }
-            case "POSTAL_CODE": if parts.postal == nil { parts.postal = leaf.text }
-            case "LATITUDE", "COORDINATES": if parts.coordinates == nil || hint == "LATITUDE" { parts.coordinates = leaf.text }
-            case "LONGITUDE": if parts.coordinates == nil { parts.coordinates = leaf.text }
-            case _ where country: if parts.country == nil { parts.country = leaf.text }
+            case "LOCATION": if parts.city == nil { parts.city = leaf.seen }
+            case "REGION": if parts.region == nil { parts.region = leaf.seen }
+            case "POSTAL_CODE": if parts.postal == nil { parts.postal = leaf.seen }
+            case "LATITUDE", "COORDINATES": if parts.coordinates == nil || hint == "LATITUDE" { parts.coordinates = leaf.seen }
+            case "LONGITUDE": if parts.coordinates == nil { parts.coordinates = leaf.seen }
+            case _ where country: if parts.country == nil { parts.country = leaf.seen }
             default: break
             }
             groups[group] = parts
@@ -390,53 +470,61 @@ enum DocumentPipeline {
             if index.isMultiple(of: 1024) && Task.isCancelled { return }
             let found = leaf.numericEntity.map { [Span(range: 0..<(leaf.text as NSString).length, entity: $0, score: 1)] }
                 ?? Detector.resolve(base(leaf, stored: stored))
-            job.observeSpans([(leaf.text, found)])
+            job.observeSpans([(leaf.seen, found)])
         }
     }
 
     private static func detected(_ leaf: DocumentLeaf, base: [Span], gazetteer: GazetteerMatcher, detector: Detector) -> [Span] {
         leaf.numericEntity.map { [Span(range: 0..<(leaf.text as NSString).length, entity: $0, score: 1)] }
-            ?? detector.combined(base, text: leaf.text, matcher: gazetteer)
+            ?? detector.combined(base, text: leaf.seen, matcher: gazetteer)
     }
 
+    /// Spans in the text as seen (`DocumentLeaf.seen`).
     private static func base(_ leaf: DocumentLeaf, stored: [Span]?) -> [Span] {
         if let stored { return stored }
         guard let entity = KeyHints.hint(leaf.key), !leaf.text.isEmpty else { return [] }
-        return [Span(range: 0..<(leaf.text as NSString).length, entity: entity, score: 1)]
+        return [Span(range: 0..<(leaf.seen as NSString).length, entity: entity, score: 1)]
     }
 
-    private static func detectBases(_ leaves: [DocumentLeaf], progress: (Stage, Int, Int) -> Void) throws -> [[Span]?] {
+    private static func detectBases(_ leaves: [DocumentLeaf], progress: (Stage, Int, Int) -> Void) throws -> ([[Span]?], [[Span]]) {
         let count = leaves.count
-        guard count > 0 else { return [] }
+        guard count > 0 else { return ([], []) }
         // The context model first: its findings fill only what every other detector leaves.
         let context = try ContextStage.find(leaves.map { leaf in
-            leaf.numericEntity != nil || leaf.fieldName || KeyHints.hint(leaf.key) != nil || KeyHints.isStructural(leaf.key) ? nil : leaf.text
+            leaf.numericEntity != nil || leaf.fieldName || KeyHints.hint(leaf.key) != nil || KeyHints.isStructural(leaf.key) ? nil : leaf.seen
         }, progress: progress, cancelled: CancellationFlag())
         let chunkSize = max(128, (count + max(1, ProcessInfo.processInfo.activeProcessorCount) * 4 - 1) / (max(1, ProcessInfo.processInfo.activeProcessorCount) * 4))
         let chunkCount = (count + chunkSize - 1) / chunkSize
         let results = Mutex(Array<[Span]?>(repeating: nil, count: count))
+        let doubted = Mutex(Array<[Span]>(repeating: [], count: count))
         // Worker threads are outside the task, so Task.isCancelled is always false
         // there; the calling thread watches it and raises a flag they can see.
         let cancelled = CancellationFlag()
         // Read here, in the scrub's task: the worker threads below see no task-local values.
-        let addresses = AddressModel.active, learned = PersonScorer.learned
+        let addresses = AddressModel.active && !Coverage.withheld.contains(.addressModel), learned = PersonScorer.learned
+        let names = !Coverage.withheld.contains(.nameModel)
         let done = DispatchGroup()
         done.enter()
-        DispatchQueue.global(qos: .userInitiated).async {
+        Work.queue.async {
             DispatchQueue.concurrentPerform(iterations: chunkCount) { chunk in
-                let detector = Detector(isCancelled: { cancelled.isSet }, addresses: addresses, learned: learned)
+                let detector = Detector(isCancelled: { cancelled.isSet }, addresses: addresses, learned: learned, names: names)
                 let start = chunk * chunkSize
                 let end = min(count, start + chunkSize)
-                var local: [[Span]?] = []
+                var local: [[Span]?] = [], doubts: [(Int, [Span])] = []
                 local.reserveCapacity(end - start)
                 for index in start..<end {
                     if cancelled.isSet { return }
                     let leaf = leaves[index]
                     if leaf.numericEntity != nil || KeyHints.hint(leaf.key) != nil && !leaf.text.isEmpty { local.append(nil) }
-                    else if leaf.fieldName { local.append(Patterns.find(leaf.text, isCancelled: { cancelled.isSet })) }
-                    else { local.append(detector.base(leaf.text, key: leaf.key, contextWords: leaf.contextWords, context: context[index])) }
+                    else if leaf.fieldName { local.append(Patterns.find(leaf.seen, isCancelled: { cancelled.isSet })) }
+                    else {
+                        let read = detector.read(leaf.seen, key: leaf.key, contextWords: leaf.contextWords, context: context[index])
+                        local.append(read.spans)
+                        if !read.doubts.isEmpty { doubts.append((index, read.doubts)) }
+                    }
                 }
                 results.withLock { $0.replaceSubrange(start..<end, with: local) }
+                if !doubts.isEmpty { doubted.withLock { all in for (index, found) in doubts { all[index] = found } } }
             }
             done.leave()
         }
@@ -444,7 +532,7 @@ enum DocumentPipeline {
             if Task.isCancelled { cancelled.set() }
         }
         try Scrubber.checkCancellation()
-        return results.withLock { $0 }
+        return (results.withLock { $0 }, doubted.withLock { $0 })
     }
 }
 

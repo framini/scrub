@@ -111,6 +111,35 @@ Some weights are negative for signals that mark a name (`nameModelFound`,
 `title`), and the regression splits their weight between them. Read the
 signals together, not one weight at a time.
 
+## The review threshold
+
+A guess the hand rules or the scorer turn down is not dropped when it is
+likely enough: from `reviewFrom` (0.1) it is left as written and put to a
+person in review, starting on "Leave", with its reason ("Looks like a name,
+but nothing else in the text agrees"). A guess turned down because something
+says it is no one (a company, a town, a word after "the", before a version
+number or where a place goes, a lone word in capitals) is never asked about.
+
+`calibrate.py` sets both thresholds from the same rows `fit.py` reads, on the
+held-out part only (the same 30% of generated documents, and all the real
+text), with the standard library:
+
+```sh
+python3 calibrate.py $D/sig-gen-41.tsv=$D/gen-41.jsonl $D/sig-gen-valid-final.tsv=$D/gen-valid-final.jsonl \
+  $D/sig-realt-valid.tsv=$D/realt-valid.jsonl $D/sig-gaps-9001.tsv=$D/gaps-9001.jsonl $D/sig-gaps-9002.tsv=$D/gaps-9002.jsonl
+```
+
+For each pair of thresholds it counts the labelled people no detector
+replaced on its own, how many of those a review finding covers, and the
+review's workload in findings per 1,000 words. On the shipped weights,
+`keepFrom` 0.08 and 0.15 miss the same people and 0.25 misses more, so it
+stays at 0.08. Below a `reviewFrom` of 0.1 the workload grows and no person is
+gained; at 0.1 the NameGaps and PIIGaps cases have 26 of 96 missed people put
+to review at 4.2 findings per 1,000 words (53% of them people), against 21 at
+3.8 from 0.2 up; generated prose has 206 of 1,131 at 4.1 (all people) at any
+threshold; real tweets and court text have almost no findings at any
+threshold, so the workload on casual writing stays well under one name a page.
+
 ## Limits
 
 - The generated text is easy: almost every guess there is a person, and the

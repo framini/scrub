@@ -95,7 +95,7 @@ extension PayloadGen {
     mutating func signup(_ p: Person) -> PNode {
         let place = addressLink()
         var pairs: [(String, PNode)] = [
-            (key(["id"]), keep(id("usr"))),
+            (key(["id"]), personID("usr")),
             field(Self.firstKeys, linked(leaf(p.first, .pii(.firstName)), p.link("name"))),
             field(Self.lastKeys, linked(leaf(p.last, .pii(.lastName)), p.link("name"))),
             field(Self.emailKeys, linked(leaf(p.email, .pii(.email)), p.link("name")), plural: true),
@@ -160,7 +160,7 @@ extension PayloadGen {
             ? (key(["identifiers"]), .array([.object([(key(["type"]), keep(gen.choose(["ssn", "SSN", "us_ssn"]))), (key(["value"]), ssn(p))])], item: "identifier"))
             : (key(["national", "id"]), .object([(key(["type"]), keep("SSN")), (key(["value"]), ssn(p))]))
         let body: PNode = .object([
-            (key(["id"]), keep(id("app"))),
+            (key(["id"]), personID("app")),
             (key(["name"]), name),
             (key(["dob"]), birth),
             (key(["address"]), address(p, link: addressLink())),
@@ -216,7 +216,7 @@ extension PayloadGen {
             ("amount", keep(String(gen.int(500...250_000)), number: true)), ("currency", keep("usd")),
             ("status", keep(gen.choose(["succeeded", "requires_payment_method", "processing"]))),
             ("state", keep(gen.choose(["open", "paid", "void", "draft"]))),
-            ("customer", keep(id("cus"))),
+            ("customer", personID("cus")),
             ("description", keep("Invoice INV-\(gen.int(2022...2026))-\(String(format: "%04d", gen.int(1...9999)))")),
             ("payment_method", .object([("id", keep(id("pm"))), ("type", keep("card")), ("billing_details", billing), ("card", .object(card))])),
             ("metadata", .object([("order_id", leaf(String(gen.int(1_000_000_000...1_999_999_999)), .keepSoft)), ("channel", keep("web"))])),
@@ -234,7 +234,7 @@ extension PayloadGen {
             let p = person()
             let place = addressLink()
             records.append(.object([
-                (key(["id"]), keep(id("cus"))),
+                (key(["id"]), personID("cus")),
                 (key(keys.first), linked(leaf(p.first, .pii(.firstName)), p.link("name"))),
                 (key(keys.last), linked(leaf(p.last, .pii(.lastName)), p.link("name"))),
                 (key(keys.email), linked(leaf(p.email, .pii(.email)), p.link("name"))),
@@ -291,7 +291,7 @@ extension PayloadGen {
         return .object([
             (key(["timestamp"]), timestamp()),
             (key(["action"]), keep(gen.choose(["user.login", "user.password_reset", "api_key.created", "export.downloaded"]))),
-            (key(["actor"]), .object([(key(["id"]), keep(id("usr"))), (key(["email"]), leaf(p.email, .pii(.email))), (key(["name"]), leaf(p.full, .pii(.fullName)))])),
+            (key(["actor"]), .object([(key(["id"]), personID("usr")), (key(["email"]), leaf(p.email, .pii(.email))), (key(["name"]), leaf(p.full, .pii(.fullName)))])),
             field(Self.ipKeys, leaf(p.ip, .pii(.ip))),
             (key(["user", "agent"]), keep(gen.choose(Self.userAgents))),
             (key(["location"]), linked(.object([(key(["city"]), leaf(p.city, .pii(.city))), (key(["region"]), region(p)), (key(["country"]), country(p))]
@@ -300,7 +300,8 @@ extension PayloadGen {
             (key(["region"]), keep(gen.choose(["us-east-1", "eu-west-2", "ap-southeast-2"]))),
             (key(["cache"]), .object([(key(["max", "age"]), keep("3600", number: true)), (key(["age"]), keep(String(gen.int(10...600)), number: true))])),
             (key(["request", "id"]), keep(id("req"))),
-            (key(["path"]), keep("/v1/users/\(id("usr"))/sessions")),
+            // A user's ID in a path under "users" is theirs (see URLs); it is judged by URLTests, not here.
+            (key(["path"]), leaf("/v1/users/\(id("usr"))/sessions", .ignore)),
             (key(["status", "code"]), keep(String(gen.choose([200, 201, 401, 403])), number: true)),
         ])
     }
@@ -308,7 +309,7 @@ extension PayloadGen {
     mutating func employee() -> PNode {
         let p = person(), manager = person(), contact = person()
         return .object([(key(["employee"]), .object([
-            (key(["employee", "id"]), keep("E-\(gen.int(10000...99999))")),
+            (key(["employee", "id"]), leaf("E-\(gen.int(10000...99999))", .pii(.recordID))),
             field([["legal", "name"], ["full", "name"], ["name"]], leaf(p.full, .pii(.fullName))),
             (key(["preferred", "name"]), leaf(p.first, .pii(.firstName))),
             (key(["work", "email"]), leaf(p.email, .pii(.email))),
@@ -328,7 +329,7 @@ extension PayloadGen {
         let p = person()
         let born = PayloadGen.formatDate(p.dob, "yyyy-MM-dd")
         return .object([
-            ("resourceType", keep("Patient")), ("id", keep(id("pat"))),
+            ("resourceType", keep("Patient")), ("id", personID("pat")),
             ("identifier", .array([.object([("system", keep("http://hl7.org/fhir/sid/us-ssn")), ("value", leaf(p.ssn.filter(\.isNumber), .pii(.ssn)))])], item: "identifier")),
             ("name", .array([.object([("use", keep("official")), ("family", leaf(p.last, .pii(.lastName))), ("given", .array([leaf(p.first, .pii(.firstName)), leaf(p.middle, .pii(.middleName))], item: "given"))])], item: "name")),
             ("telecom", .array([
@@ -345,7 +346,7 @@ extension PayloadGen {
         let p = person()
         return .object([
             (key(["account"]), .object([
-                (key(["id"]), keep(id("acct"))),
+                (key(["id"]), personID("acct")),
                 field([["account", "holder", "name"], ["account", "holder"], ["owner", "name"], ["name", "on", "account"]], leaf(p.full, .pii(.fullName))),
                 field([["account", "number"], ["account", "no"], ["acct", "num"]], leaf(p.account, .pii(.account))),
                 (key(["routing", "number"]), leaf(gen.choose(["021000021", "026009593", "121000358"]), .ignore)),

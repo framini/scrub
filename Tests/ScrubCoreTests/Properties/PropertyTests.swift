@@ -1,4 +1,5 @@
 import Foundation
+import ScrubTestSupport
 @testable import ScrubCore
 import Testing
 
@@ -22,6 +23,9 @@ struct ScrubberProperties {
             let output = try doc.scrub(seed: seed).output
             let leaked = try doc.leaks(in: output)
             #expect(leaked.isEmpty, "Leaked \(leaked). \(diagnostic)")
+            // No part of a planted value either, judged without ScrubCore (see ComponentLeaks).
+            let parts = ComponentLeaks.leaks(doc.planted.map { ComponentLeaks.Planted($0.original) }, input: doc.text, output: String(decoding: output, as: UTF8.self))
+            #expect(parts.isEmpty, "Leaked parts \(parts). \(diagnostic)")
         }
     }
 

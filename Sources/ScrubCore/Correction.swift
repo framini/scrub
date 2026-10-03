@@ -23,37 +23,62 @@ enum Correction {
     /// marks over text left as written, with the original and a confidence
     /// below `Finding.reviewBelow`, so review asks about each one.
     static func run(_ initial: String, marks initialMarks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, gate: LeakGate, passes: Int = 3, base: [Span]? = nil) throws -> (String, [Mark], [Mark]) {
+        var held: [Mark] = []
+        return try run(initial, marks: initialMarks, job: job, matcher: matcher, gazetteer: gazetteer, gate: gate, passes: passes, base: base, held: &held)
+    }
+    /// `held` marks places left as written (people the detectors doubted);
+    /// they come back where they stand in the output, without any a replacement covers.
+    static func run(_ initial: String, marks initialMarks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, gate: LeakGate, passes: Int = 3, base: [Span]? = nil, held: inout [Mark]) throws -> (String, [Mark], [Mark]) {
         var output = initial
         var marks = initialMarks
         for pass in 0..<passes {
             try Scrubber.checkCancellation()
-            let found = leftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer, gate: gate, base: pass == 0 ? base : nil)
+            let found = visibleLeftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer, gate: gate, base: pass == 0 ? base : nil)
             let spans = Detector.resolve(found.spans)
             if spans.isEmpty { return (output, marks, unresolved(found.suspects, in: output)) }
             var fakes = Array(repeating: "", count: spans.count)
             var sources = [String?](repeating: nil, count: spans.count)
+            var unclear: Set<Int> = []
+            // Numbers, birth dates and what is read off them note where they sit (see `Spots`).
+            let spots = spans.contains { StandIns.anchored($0.entity) } ? job.spots(output) : nil
             for (count, index) in spans.indices.reversed().enumerated() {
                 if count.isMultiple(of: 64) { try Scrubber.checkCancellation() }
                 let span = spans[index], original = TextRanges.substring(output, span.range)
                 // A variant of a replaced value takes the stand-in its original got, written the same way.
+                // What it reads as: a link's part decoded, hidden characters and in-word markup gone (see `Visible`).
+                let shown = Visible.plain(span.url.map { URLs.decode(original, $0) } ?? original)
+                func written(_ fake: String) -> String { span.url.map { URLs.encode(fake, like: original, $0) } ?? Visible.rewrite(original, with: fake) }
                 if let leak = found.leaks[span.range], leak.entity == span.entity {
                     sources[index] = leak.source
-                    if let fake = leak.fake { fakes[index] = job.variant(original, fake: fake, entity: leak.entity); continue }
+                    if let fake = leak.fake {
+                        fakes[index] = written(job.variant(shown, fake: fake, entity: leak.entity))
+                        continue
+                    }
                 }
-                fakes[index] = job.replacement(for: span.entity, original: original)
+                let local = StandIns.anchored(span.entity) ? spots?.scopes(at: span.range.lowerBound) ?? [] : []
+                fakes[index] = written(job.replacement(for: span.entity, original: shown, persona: nil, local: local))
+                if job.lastUnclear { unclear.insert(index) }
             }
-            let edits = zip(spans, fakes).map { (range: $0.range, value: $1) }
+            // An age with no birth date to follow stays as it was, unmarked, as in `Job.apply`.
+            let changes = spans.indices.filter { index in
+                !(fakes[index] == TextRanges.substring(output, spans[index].range) && (StandIns.derived.contains(spans[index].entity) || spans[index].entity == "TIME_ZONE"))
+            }
+            if changes.isEmpty { return (output, marks, unresolved(found.suspects, in: output)) }
+            let edits = changes.map { (range: spans[$0].range, value: fakes[$0]) }
             let (edited, placed) = TextRanges.apply(edits, to: output)
-            marks = TextRanges.shift(marks, by: edits) + zip(placed, spans.indices).map { range, index in
+            if !held.isEmpty { held = TextRanges.shift(held, by: edits) }
+            marks = TextRanges.shift(marks, by: edits) + zip(placed, changes).map { range, index in
                 let span = spans[index], original = TextRanges.substring(output, span.range)
                 // As sure as the value it varies: a name only a model read stays one to ask about.
-                let confidence = sources[index].flatMap { job.confidence(of: $0) } ?? job.confidence(of: original) ?? span.score
-                return Mark(range: range, entity: sources[index] == nil ? job.kind(of: original, read: span.entity) : span.entity, original: original, confidence: min(confidence, 1))
+                let confidence = sources[index].flatMap { job.confidence(of: $0) } ?? job.here(span, original)
+                let entity = sources[index] == nil ? job.kind(of: original, read: span.entity) : span.entity
+                return unclear.contains(index) ? Mark(range: range, entity: entity, original: original, confidence: min(confidence, Doubt.unclearOwner.confidence), doubt: .unclearOwner)
+                    : Mark(range: range, entity: entity, original: original, confidence: min(confidence, 1))
             }
             marks.sort { $0.range.lowerBound < $1.range.lowerBound }
             output = edited
         }
-        let found = leftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer, gate: gate)
+        let found = visibleLeftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer, gate: gate)
         // Still there after the last pass: left as written, and asked about.
         let left = Detector.resolve(found.spans).map { Span(range: $0.range, entity: $0.entity, score: LeakGate.suspectConfidence) }
         return (output, marks, unresolved(left + found.suspects, in: output))
@@ -65,6 +90,17 @@ enum Correction {
         return suspects.sorted { $0.range.lowerBound != $1.range.lowerBound ? $0.range.lowerBound < $1.range.lowerBound : $0.range.upperBound < $1.range.upperBound }
             .filter { seen.insert("\($0.range.lowerBound):\($0.range.upperBound):\($0.entity)").inserted }
             .map { Mark(range: $0.range, entity: $0.entity, original: TextRanges.substring(output, $0.range), confidence: min($0.score, LeakGate.suspectConfidence)) }
+    }
+
+    /// `leftovers` read in the text as a reader sees it, mapped back onto the text as written.
+    private static func visibleLeftovers(in output: String, marks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, gate: LeakGate, base: [Span]? = nil) -> Leftovers {
+        guard let view = Visible(output) else { return leftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer, gate: gate, base: base) }
+        let seen = leftovers(in: view.clean, marks: marks.map(view.clean), job: job, matcher: matcher, gazetteer: gazetteer, gate: gate, base: base.map { _ in [] })
+        var found = Leftovers()
+        found.spans = seen.spans.map(view.raw)
+        found.suspects = seen.suspects.map(view.raw)
+        for (range, leak) in seen.leaks { found.leaks[view.raw(range)] = LeakGate.Leak(range: view.raw(range), entity: leak.entity, fake: leak.fake, source: leak.source) }
+        return found
     }
 
     private struct Leftovers {
@@ -123,11 +159,19 @@ enum Correction {
         // a bounded number of variants, in proportion to the text; the rest are suspects.
         let gated = gate.scan(output, budget: max(256, (output as NSString).length / 8))
         let length = (output as NSString).length
-        // A name inside a link is left to review rather than breaking the link.
+        // A name that is a whole part of a link (a path segment, a query value,
+        // its user) is replaced in place, encoded as the link writes it; one
+        // inside a part (a host name, half a segment) is left to review rather than breaking the link.
         let linked = gated.leaks.isEmpty ? [] : Links.ranges(in: output)
+        let parts = linked.isEmpty ? [] : URLs.components(in: output)
         for leak in gated.leaks where !ours(leak.range, "PERSON") {
             if Links.named.contains(leak.entity), linked.contains(where: { $0.overlaps(leak.range) }) {
-                found.suspects.append(Span(range: leak.range, entity: leak.entity, score: LeakGate.suspectConfidence))
+                if let part = parts.first(where: { $0.range == leak.range }) {
+                    found.spans.append(Span(range: leak.range, entity: leak.entity, score: 1.1, url: part.part))
+                    found.leaks[leak.range] = leak
+                } else {
+                    found.suspects.append(Span(range: leak.range, entity: leak.entity, score: LeakGate.suspectConfidence))
+                }
                 continue
             }
             found.spans.append(Span(range: leak.range, entity: leak.entity, score: 1.1))

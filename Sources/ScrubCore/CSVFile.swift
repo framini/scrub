@@ -40,7 +40,8 @@ public enum CSVFile: FileFormat {
                     let texts = siblings.compactMap { $0 < rows[row].count ? (KeyHints.words(columns[$0]).last!, rows[row][$0]) : nil }
                     key = KeyHints.namedField("value", siblings: texts) ?? key
                 }
-                leaves.append(DocumentLeaf(rows[row][column], key: key, records: [row]))
+                let header = column < columns.count ? columns[column] : ""
+                leaves.append(DocumentLeaf(rows[row][column], key: key, records: [row], objectPath: header.contains(".") ? String(header[..<header.lastIndex(of: ".")!]).lowercased() : ""))
             }
         }
         var headerIDs: [Int] = []
@@ -52,6 +53,7 @@ public enum CSVFile: FileFormat {
         }
         progress(.finding, 0, leaves.count)
         let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
+        let records = leaves.map(\.lastRecord)
         let found = leaves.count
         leaves.removeAll(keepingCapacity: false)
         progress(.finding, found, found)
@@ -124,7 +126,7 @@ public enum CSVFile: FileFormat {
         }
         progress(.checking, 0, 1)
         var result = try render(values, counts: job.counts)
-        result.review = Review(values: values, counts: job.counts, render: render)
+        result.review = Review(values: values, counts: job.counts, records: records, render: render)
         progress(.checking, 1, 1)
         return result
     }

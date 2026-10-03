@@ -79,7 +79,7 @@ struct DeterminismTests {
     }
 
     @Test func sameInputSameOutputUnderLoadAndConcurrency() throws {
-        #expect(ContextModel.shared != nil && NameModel.shared != nil && AddressModel.shared != nil, "every model must be active for this test to mean anything")
+        #expect(ContextModel.shared != nil && NameModel.shared != nil && AddressModel.shared != nil && AddressModel.wide != nil, "every model must be active for this test to mean anything")
         let contextOn = ContextStage.enabled.load(ordering: .relaxed)
         #expect(contextOn)
         let documents = Self.documents()
@@ -107,12 +107,14 @@ struct DeterminismTests {
         let context = try #require(ContextModel.shared)
         let names = try #require(NameModel.shared)
         let addresses = try #require(AddressModel.shared)
+        let wide = try #require(AddressModel.wide)
         let text = (0..<12).map { "Mr Corentin Vasquelle of 14 Pellow Street, Wexcombe, told the clinic on 3 May 2004 that claim no. 55123/04 was filed by Ifeoma Castellane, who works at Lowmarch Supply (\($0))." }.joined(separator: " ")
         let windows = context.windows(context.tokenizer.pieces(text, isCancelled: { false }))
         let tokens = NameModel.tokens(text)
         let reference = windows.map { context.logits($0.ids).map(\.bitPattern) }
         let nameReference = names.logits(tokens).map(\.bitPattern)
         let addressReference = addresses.logits(tokens).flatMap { $0.map(\.bitPattern) }
+        let wideReference = wide.logits(tokens).flatMap { $0.map(\.bitPattern) }
         let load = Load()
         defer { load.stop() }
         let differing = Atomic(0)
@@ -120,6 +122,7 @@ struct DeterminismTests {
             if context.logits(windows[run % windows.count].ids).map(\.bitPattern) != reference[run % windows.count] { differing.add(1, ordering: .relaxed) }
             if run.isMultiple(of: 4), names.logits(tokens).map(\.bitPattern) != nameReference { differing.add(1, ordering: .relaxed) }
             if run.isMultiple(of: 4), addresses.logits(tokens).flatMap({ $0.map(\.bitPattern) }) != addressReference { differing.add(1, ordering: .relaxed) }
+            if run.isMultiple(of: 4), wide.logits(tokens).flatMap({ $0.map(\.bitPattern) }) != wideReference { differing.add(1, ordering: .relaxed) }
         }
         #expect(differing.load(ordering: .relaxed) == 0)
     }
@@ -153,7 +156,8 @@ struct DeterminismTests {
         }
     }
 
-    /// An age as close to two birth years goes by the first met, in every run.
+    /// An age as close to two birth years goes by the one in its own record, and
+    /// one as close to two in the document by the first met, in every run.
     /// The two were held in a dictionary, whose order changes from one run to the next.
     @Test func anAgeBetweenTwoBirthYearsIsReadTheSameEachRun() throws {
         let now = Calendar(identifier: .gregorian).component(.year, from: Date())
@@ -169,10 +173,10 @@ struct DeterminismTests {
                 let result = try Scrubber.scrub(Data(text.utf8), name: name, forceFullDetection: false, seed: 9)
                 let output = String(decoding: result.output, as: UTF8.self)
                 outputs.insert(output)
-                // Type oracle: the age is still a whole number, moved as far as the first birth year moved.
+                // Type oracle: the age is still a whole number, moved as far as the birth year in its own record moved.
                 let years = output.matches(of: /(\d{4})-\d\d-\d\d/).map { Int($0.output.1)! }
                 let age = try #require(output.matches(of: /(?:"age": |,|<age>)(\d{1,3})(?:<|\n|\}|$)/).last.map { Int($0.output.1)! }, "\(name): \(output)")
-                #expect(years.count == 2 && years[0] != older && age == 40 + older - years[0], "\(name): \(output)")
+                #expect(years.count == 2 && years[1] != younger && age == 40 + younger - years[1], "\(name): \(output)")
             }
             #expect(outputs.count == 1, "\(name): \(outputs.count) different outputs")
         }

@@ -37,7 +37,7 @@ enum ContextStage {
 
     /// The model's findings for each text, nil where it read nothing.
     static func find(_ texts: [String?], progress: (Stage, Int, Int) -> Void, cancelled: CancellationFlag) throws -> [Reading?] {
-        guard enabled.load(ordering: .relaxed), let model = ContextModel.shared else { return texts.map { _ in nil } }
+        guard enabled.load(ordering: .relaxed), !Coverage.withheld.contains(.contextModel), let model = ContextModel.shared else { return texts.map { _ in nil } }
         let readable = texts.indices.filter { texts[$0].map(isFreeText) == true }
         guard !readable.isEmpty else { return texts.map { _ in nil } }
         let gated = readable.reduce(0) { $0 + (texts[$1]! as NSString).length } >= gateFrom.load(ordering: .relaxed)
@@ -429,7 +429,7 @@ enum ContextStage {
         guard count > 0 else { return }
         let finished = DispatchGroup()
         finished.enter()
-        DispatchQueue.global(qos: .userInitiated).async {
+        Work.queue.async {
             DispatchQueue.concurrentPerform(iterations: count) { index in
                 if !cancelled.isSet { body(index) }
             }
@@ -615,4 +615,13 @@ enum ContextGate {
         if let quote = core.firstIndex(where: { $0 == "'" || $0 == "’" }) { core = String(core[..<quote]) }
         return core.count >= 3 && matches(nameShape, core) && !core.split(separator: "-").allSatisfy { known(String($0), model: model) }
     }
+}
+
+/// Where a scrub's parallel work starts. The calling thread waits for it, and
+/// that thread may be one of Swift concurrency's, which share the global
+/// concurrent queues' few threads (one per core): with as many scrubs at once
+/// as cores, work sent there would never start. A serial queue of its own
+/// gets a thread of its own, and `concurrentPerform` runs on it whatever else is busy.
+enum Work {
+    static var queue: DispatchQueue { DispatchQueue(label: "Scrub.work", qos: .userInitiated) }
 }

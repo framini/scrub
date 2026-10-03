@@ -12,11 +12,14 @@ struct Finished {
     var result: ScrubResult
     var savedAs: String?
     var copied = false
-    /// Uncertain findings to leave as written, and whether the person has looked
-    /// at them. A suspect the final check found starts left as written.
-    var skipped: Set<Finding.ID> = []
+    /// What to leave as written, everywhere or place by place, and whether the
+    /// person has looked. A value Scrub left as written starts so.
+    var choices = Choices()
     var reviewed = false
     var needsReview: Bool { !reviewed && !result.uncertain.isEmpty }
+    /// Whether anything of the result may leave the app yet: whole, as a
+    /// selection, or saved. Every way out asks this one question (see `AppModel.cleared`).
+    var mayExport: Bool { !needsReview }
 }
 
 enum Shortcut { case copy, save }
@@ -54,8 +57,13 @@ final class AppModel {
     private var copiedChangeCount: Int?
     private var copyResets = 0
     private let board: NSPasteboard
+    typealias Scrub = @Sendable (Data, String, @escaping (Stage, Int, Int) -> Void) throws -> ScrubResult
+    private let scrub: Scrub
 
-    init(board: NSPasteboard = .general) { self.board = board }
+    init(board: NSPasteboard = .general, scrub: @escaping Scrub = { data, name, progress in try Scrubber.scrub(data, name: name, progress: progress) }) {
+        self.board = board
+        self.scrub = scrub
+    }
 
     func ticket() -> Int { generation }
 
@@ -114,10 +122,24 @@ final class AppModel {
         }
     }
 
+    /// The one gate every way out of the app passes: Copy, ⌘C on a selection
+    /// or on the whole result, and Save. While uncertain findings wait to be
+    /// checked, it opens the review instead, and `then` runs once it is done.
+    /// The preview can only be selected, and so dragged, shared or sent to a
+    /// service, once this gate is clear (`Finished.mayExport`).
+    private func cleared(then shortcut: Shortcut) -> Bool {
+        guard case .finished(let done) = state else { return false }
+        if done.mayExport { return true }
+        if !reviewing { review(then: shortcut) }
+        return false
+    }
+
     /// ⌘C copies a selection when the focused view has one, and otherwise the
     /// whole result. A responder with nothing selected leaves the pasteboard
-    /// untouched, which is how the two cases are told apart.
+    /// untouched, which is how the two cases are told apart. While the result
+    /// waits for review nothing can be selected, and ⌘C asks first.
     func copyCommand(sendCopy: () -> Bool = { NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) }) {
+        if case .finished = state, !cleared(then: .copy) { return }
         let before = board.changeCount
         if sendCopy(), board.changeCount != before {
             copiedChangeCount = board.changeCount
@@ -138,9 +160,9 @@ final class AppModel {
         reviewing = false
     }
 
-    /// Writes the result again with `skipped` left as written everywhere,
-    /// always from the scrub as first made, then copies or saves if asked.
-    func finishReview(skipping skipped: Set<Finding.ID>) {
+    /// Writes the result again as `choices` say, always from the scrub as
+    /// first made, then copies or saves if asked.
+    func finishReview(_ choices: Choices) {
         guard case .finished(let done) = state else { return }
         reviewing = false
         let next = afterReview
@@ -149,14 +171,14 @@ final class AppModel {
         let result = done.result
         applyingReview = true
         work = Task.detached(priority: .userInitiated) { [weak self] in
-            let outcome = Result { try result.skipping(skipped) }
+            let outcome = Result { try result.applying(choices) }
             await MainActor.run {
                 guard let self, self.generation == ticket, case .finished(var current) = self.state else { return }
                 self.applyingReview = false
                 switch outcome {
                 case .success(let revised):
                     current.result = revised
-                    current.skipped = skipped
+                    current.choices = choices
                     current.reviewed = true
                     current.copied = false
                     self.state = .finished(current)
@@ -173,8 +195,7 @@ final class AppModel {
     }
 
     func copy() {
-        guard case .finished(var done) = state else { return }
-        if done.needsReview { return review(then: .copy) }
+        guard cleared(then: .copy), case .finished(var done) = state else { return }
         guard let text = String(data: done.result.output, encoding: .utf8) else { return }
         board.clearContents()
         board.setString(text, forType: .string)
@@ -193,8 +214,7 @@ final class AppModel {
     }
 
     func save() {
-        guard case .finished(var done) = state else { return }
-        if done.needsReview { return review(then: .save) }
+        guard cleared(then: .save), case .finished(var done) = state else { return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "scrubbed.\(Self.fileExtension(done.result.format))"
         panel.canCreateDirectories = true
@@ -236,9 +256,10 @@ final class AppModel {
         guard data.count <= Self.maxBytes else { return fail(name, source, "too_large") }
         let ticket = generation
         state = .processing(name: name, source: source, stage: .starting, done: 0, total: 0)
+        let scrub = self.scrub
         work = Task.detached(priority: .userInitiated) { [weak self] in
             let outcome = Result {
-                try Scrubber.scrub(data, name: name) { stage, done, total in
+                try scrub(data, name) { stage, done, total in
                     Task { @MainActor in
                         guard let self, self.generation == ticket, case .processing = self.state else { return }
                         self.state = .processing(name: name, source: source, stage: stage, done: done, total: total)
@@ -248,7 +269,7 @@ final class AppModel {
             await MainActor.run {
                 guard let self, self.generation == ticket else { return }
                 switch outcome {
-                case .success(let result): self.state = .finished(Finished(name: name, source: source, result: result, skipped: result.leftAsWritten))
+                case .success(let result): self.state = .finished(Finished(name: name, source: source, result: result, choices: result.choices))
                 case .failure(let error): self.state = .failed(name: name, source: source, code: Self.code(for: error))
                 }
             }

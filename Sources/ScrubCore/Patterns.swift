@@ -64,6 +64,7 @@ enum Patterns {
                     let tail = TextRanges.substring(text, range.upperBound..<min(length, range.upperBound + 2))
                     if tail.range(of: #"^\.[0-9]|^:[0-9A-Fa-f]"#, options: .regularExpression) != nil { return }
                 }
+                if entity == "SECRET", let cut = URLs.queryValueEnd(ns, range) { range = range.lowerBound..<cut }
                 let value = TextRanges.substring(text, range)
                 if entity == "PERSON" && NameTagger.namesOrganisation(value) { return }
                 // "https://deploy:hunter2@git.example.test" holds a password and a host, no address.

@@ -75,13 +75,14 @@ def rows_of(docs):
     return [encode(text, spans)[:2] for text, spans in docs]
 
 
-def decode(text, tokens, probs, threshold=THRESHOLD):
+def decode(text, tokens, probs, threshold=THRESHOLD, numberless=False):
     """Address spans from per-token [O, B, I] probabilities, in code points.
 
     A token is inside an address when B + I reaches the threshold; a run of
     such tokens is one address, split where a token is more likely to begin
     one than to continue it. Punctuation and line breaks at either end are
-    dropped, and an address must hold a digit and two words."""
+    dropped, and an address must hold two words and a digit; with
+    `numberless`, two pieces (parted by a comma, semicolon or line break) do instead of the digit."""
     spans, current = [], None
     for index, (o, b, i) in enumerate(probs):
         inside = b + i >= threshold
@@ -109,7 +110,9 @@ def decode(text, tokens, probs, threshold=THRESHOLD):
             continue
         pieces = [text[tokens[k][0]:tokens[k][1]] for k in range(first, last + 1)]
         words = [p for p in pieces if any(is_letter(ch) for ch in p)]
-        if len(words) < 2 or not any(any(is_digit(ch) for ch in p) for p in pieces):
+        digit = any(any(is_digit(ch) for ch in p) for p in pieces)
+        parted = numberless and any(p in (",", ";", "\n") for p in pieces)
+        if len(words) < 2 or not (digit or parted):
             continue
         result.append((tokens[first][0], tokens[last][1]))
     return result
@@ -151,7 +154,7 @@ def span_scores(model, docs, device, threshold=THRESHOLD, show=0):
     gold_total = pred_total = exact = covered = false_docs = negatives = 0
     shown = 0
     for doc, (tokens, probs) in zip(docs, predicted):
-        found = decode(doc["text"], tokens, probs, threshold)
+        found = decode(doc["text"], tokens, probs, threshold, numberless=True)
         # A full stop or "#" at an address's edge is read with the text around it.
         gold = [normal(doc["text"], s) for s in doc["spans"]]
         found = [normal(doc["text"], s) for s in found]
@@ -214,6 +217,8 @@ def main():
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--load", help="skip training and score a saved checkpoint")
+    parser.add_argument("--init", help="start from a saved checkpoint (a line flag it lacks starts at zero)")
+    parser.add_argument("--lr", type=float, default=3e-3)
     args = parser.parse_args()
     torch.manual_seed(args.seed)
     random.seed(args.seed)
@@ -226,10 +231,17 @@ def main():
     if args.load:
         model.load_state_dict(torch.load(args.load, map_location=device))
         args.epochs = 0
+    if args.init:
+        state = torch.load(args.init, map_location="cpu")
+        weight = state["project.weight"]
+        if weight.shape[1] < EMBED + SHAPES:
+            state["project.weight"] = torch.cat([weight, weight.new_zeros(weight.shape[0], EMBED + SHAPES - weight.shape[1])], dim=1)
+        model.load_state_dict(state)
+        model.to(device)
     print(f"parameters={sum(p.numel() for p in model.parameters()):,}")
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3, weight_decay=1e-5)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
     steps = max(args.epochs * (len(train) // 128 + 1), 1)
-    schedule = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=3e-3, total_steps=steps)
+    schedule = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr, total_steps=steps)
     loss_fn = torch.nn.CrossEntropyLoss()
     for epoch in range(args.epochs):
         model.train()

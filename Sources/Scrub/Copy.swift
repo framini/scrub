@@ -1,4 +1,5 @@
 import Foundation
+import ScrubCore
 
 enum Copy {
     static let howItWorksSteps = [
@@ -27,6 +28,7 @@ enum Copy {
         case "SECRET": "Secrets"
         case "USERNAME": "Usernames"
         case "EMPLOYER": "Employers"
+        case "RECORD_ID": "Record IDs"
         default: "IDs"
         }
     }
@@ -43,6 +45,7 @@ enum Copy {
         case "SECRET": "Secret"
         case "USERNAME": "Username"
         case "EMPLOYER": "Employer"
+        case "RECORD_ID": "Record ID"
         default: "ID"
         }
     }
@@ -50,14 +53,41 @@ enum Copy {
     static func reviewTitle(_ count: Int) -> String {
         count == 1 ? "Check 1 replacement before sharing" : "Check \(count) replacements before sharing"
     }
-    static let reviewBody = "Scrub isn’t sure these are personal. Leave any that aren’t, and replace any its last check found but left as written. A choice covers every place the value appears, and every other stand-in stays as it is."
+    static let reviewBody = "Scrub isn’t sure about these. Leave any that aren’t personal, and replace any it left as written but you want gone. A choice covers every place the value appears unless you choose place by place, and every other stand-in stays as it is."
     static let replaceHelp = "Replace it everywhere it appears"
     static func leaveHelp(_ original: String) -> String { "Leave “\(original)” as written everywhere it appears" }
     static func reviewTally(leaving: Int, of total: Int) -> String {
         leaving == 0 ? "Replacing all \(total)" : "Leaving \(leaving) of \(total)"
     }
+    /// Why Scrub asks about a finding, in a few words; nil when its kind and confidence say enough.
+    static func reason(_ finding: Finding) -> String? {
+        switch finding.doubt {
+        case .unconfirmed: "Looks like a name, but nothing else in the text agrees"
+        case .unclearOwner: "More than one person nearby could own this; it follows the first"
+        case nil: finding.suspected ? "Written like a value Scrub replaced, but not surely it" : nil
+        }
+    }
+    static func places(_ count: Int) -> String { "Choose for each of \(count) places" }
+    static let leaveHere = "Leave here"
     static func toCheck(_ count: Int) -> String { count == 1 ? "1 to check" : "\(count) to check" }
     static func checked(leaving: Int) -> String { leaving == 0 ? "Checked" : "Checked · \(leaving) left as written" }
+
+    static let reducedCoverageTitle = "Reduced coverage"
+    /// Which of Scrub's own detectors didn't load, and what that costs.
+    static func reducedCoverage(_ missing: [Coverage.Part]) -> String {
+        let names = missing.map { part -> String in
+            switch part {
+            case .nameModel: "the name model"
+            case .addressModel: "an address model"
+            case .contextModel: "the context model"
+            case .nameLists: "the name lists"
+            }
+        }
+        let list = names.count <= 1 ? names.joined() : names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
+        let plural = names.count > 1 || missing == [.nameLists]
+        let (verb, them) = plural ? ("are", "them") : ("is", "it")
+        return "\(list.prefix(1).uppercased() + list.dropFirst()) \(verb) missing or damaged, so this scrub ran without \(them) and may have missed names, places or IDs. Reinstall Scrub to restore \(them)."
+    }
 
     static func grouped(_ counts: [String: Int]) -> [(label: String, count: Int)] {
         var totals: [String: Int] = [:]

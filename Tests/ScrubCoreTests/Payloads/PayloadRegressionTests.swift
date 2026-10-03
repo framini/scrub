@@ -105,7 +105,9 @@ func unixTimesAreNoPhoneNumbers(_ name: String, _ text: String) throws {
     """
     let output = try scrub(yaml, as: "config.txt")
     for value in ["Oluwaseun", "Montgomery", "o.reyes@proton.me", "Tacoma", "Siobhan"] { #expect(!output.contains(value), "\(value) in \(output)") }
-    for kept in ["id: cus_8f3k2", "status: ACTIVE"] { #expect(output.contains(kept), "\(kept) in \(output)") }
+    for kept in ["status: ACTIVE"] { #expect(output.contains(kept), "\(kept) in \(output)") }
+    // A customer's ID names them: a stand-in of its shape.
+    #expect(!output.contains("cus_8f3k2") && output.range(of: #"id: cus_[a-z0-9]{5}\n"#, options: .regularExpression) != nil, "\(output)")
     // The time zone moves with the city beside it.
     let zone = output.components(separatedBy: "timezone: ").last?.split(separator: "\n").first.map(String.init) ?? ""
     #expect(TimeZone(identifier: zone) != nil, "\(output)")

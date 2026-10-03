@@ -50,7 +50,7 @@ public enum KeyHints {
         ("phone phonenumber mobile cell telephone tel fax mobilenumber mobilephone cellphone cellnumber phoneno telno telephonenumber contactnumber msisdn", "PHONE_NUMBER"),
         ("ssn socialsecuritynumber socialsecurity ssnnumber", "US_SSN"),
         ("address streetaddress street addressline1 addressline2 addressline line1 line2 addr address1 street1 addr1 streetline1 street2 address2 addr2 streetline2 addressline3 line3 aptsuite apartmentnumber aptnumber suitenumber unitnumber unit apt apartment formattedaddress fulladdress physicaladdress mailingaddress homeaddress residentialaddress billingaddress shippingaddress", "ADDRESS"),
-        ("dob dateofbirth birthdate birthday birthyear yearofbirth yob", "DATE_OF_BIRTH"),
+        ("dob dateofbirth birthdate birthday birthyear yearofbirth yob birthmonth monthofbirth dobmonth dobday dayofbirth dobyear", "DATE_OF_BIRTH"),
         ("age ageyears currentage", "AGE"),
         ("initials nameinitials monogram", "INITIALS"),
         ("latitude lat geolat", "LATITUDE"),
@@ -84,6 +84,8 @@ public enum KeyHints {
         let parts = words(key)
         guard let last = parts.last else { return nil }
         if secretLast.contains(last) || parts.count >= 2 && secretPairs.contains(parts[parts.count - 2] + last) { return "SECRET" }
+        // A field written for display holds the field: "dob_display", "phone_formatted".
+        if parts.count >= 2, displayWords.contains(last), let field = hint(parts.dropLast().joined(separator: "_")) { return field }
         return qualified(parts)
     }
     /// A field named with a qualifier in front ("billing_email", "home_phone",
@@ -111,6 +113,7 @@ public enum KeyHints {
         }
         return nil
     }
+    private static let displayWords: Set<String> = ["display", "displayed", "formatted", "pretty", "readable", "text", "string", "str", "iso"]
     private static let phoneQualifiers: Set<String> = ["secondary", "alternate", "alt", "other", "personal", "private", "business", "emergency", "direct", "day", "evening", "night"]
     private static let countWords: Set<String> = ["num", "number", "count", "counts", "total", "has", "is", "max", "min", "avg", "sum", "qty", "len", "length", "size", "match", "matches", "score", "verified", "valid", "exists", "present", "changed", "updated", "type", "status", "source", "flag", "enabled", "required", "last4", "hash", "hashed", "format", "domain", "risk"]
     static let addressQualifiers: Set<String> = ["home", "mailing", "billing", "shipping", "residential", "street", "physical", "postal", "current", "previous", "permanent", "primary", "customer", "user", "applicant", "contact", "work", "residence", "legal", "delivery", "registered"]
@@ -293,13 +296,16 @@ public enum KeyHints {
     /// Whether a bare "name" holds a person: its record also holds personal details,
     /// its parent is about people ("customers", "manager"), or the value uses a known
     /// first or last name. Otherwise, as for "Everyday Checking", detection decides.
-    static func bareNameIsPerson(_ value: String, siblings: [String], parent: String?) -> Bool {
+    /// `inObject`: the siblings are one object's, not every key in loose text.
+    static func bareNameIsPerson(_ value: String, siblings: [String], parent: String?, inObject: Bool = true) -> Bool {
         let parts = value.split(whereSeparator: { !$0.isLetter })
         let known = parts.contains { Names.firstFolded.contains($0.lowercased()) || Names.lastFolded.contains($0.lowercased()) }
         // One unknown word ("NORTHWIND") names a business or product more often than a person.
         if parts.count < 2 && !known { return false }
         if let parent, notPeople.contains(words(parent).last.map { singular($0) ?? $0 } ?? "") { return false }
         if siblings.contains(where: { !isBareName($0) && hint($0).map(personalSiblings.contains) == true }) { return true }
+        // A person's own ID beside it ("customer_id", "patient_id") says the record is theirs.
+        if inObject, siblings.contains(where: { hint($0) == nil && RecordIDs.isPersonKey($0) }) { return true }
         if let parent {
             let compact = parent.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
             let last = words(parent).last ?? ""

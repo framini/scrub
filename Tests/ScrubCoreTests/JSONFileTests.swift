@@ -162,7 +162,8 @@ func orderedJSONFixtureOutput(_ name: String) throws {
     let data = try Data(contentsOf: #require(Bundle.module.url(forResource: "customers", withExtension: "json")))
     let result = try Scrubber.scrub(data, name: "customers.json")
     let rows = try #require(JSONSerialization.jsonObject(with: result.output) as? [[String: Any]])
-    #expect(rows[0]["id"] as? String == "cus_1")
+    // A customer's ID names them: a stand-in of its shape ("cus_" and one digit).
+    #expect((rows[0]["id"] as? String).map { $0 != "cus_1" && $0.range(of: #"^cus_\d$"#, options: .regularExpression) != nil } == true, "\(rows[0])")
     #expect(rows[0]["plan"] as? String == "enterprise")
     #expect(!String(decoding: result.output, as: UTF8.self).contains("robert.mitchell@acme-corp.com"))
     #expect(result.counts.values.reduce(0, +) > 0)

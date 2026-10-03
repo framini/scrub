@@ -92,6 +92,22 @@ enum PersonScorer {
     /// The least probability a guess is kept at: on the fitting part, the
     /// threshold that keeps every person the hand rules keep with the fewest other words.
     static let keepFrom = 0.08
+    /// The least probability a guess the hand rules or the scorer turned down
+    /// is still put to a person in review, left as written. Set by
+    /// Tools/PersonScorer/calibrate.py on held-out generated and permissive
+    /// text, never the evaluation sets: below 0.1 the review grows with no
+    /// person gained; at 0.1 it asks about about four names per 1,000 words of
+    /// name-dense generated text and almost none in real tweets and court text.
+    static let reviewFrom = 0.1
+
+    /// Whether a guess not kept is still likely enough to ask about: above
+    /// `reviewFrom`, and turned down for lack of agreement or surety, not
+    /// because something says it is no one (a company, a town, a word after
+    /// "the", before a version number or where a place goes, a lone word in capitals).
+    static func doubtful(_ signals: Signals, _ probability: Double) -> Bool {
+        probability >= reviewFrom && !signals.organisation && !signals.place && !signals.determiner && !signals.version && !signals.placeCue
+            && !(signals.allCaps && signals.words == 1)
+    }
 
     /// The probability that the guess names someone.
     static func probability(_ signals: Signals) -> Double {

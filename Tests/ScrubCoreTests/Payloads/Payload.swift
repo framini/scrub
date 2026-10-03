@@ -7,6 +7,8 @@ enum Kind: String {
     case fullName, firstName, lastName, middleName, email, phone, ssn, ssnLast4, taxID, dob, dobYear
     case street, city, zip, ip, card, account, license, passport, username
     case region, unit, addressLine, latitude, longitude, lastDigits, age, initials
+    /// A person's or account's record ID ("customer_id"), replaced in its own shape (see README).
+    case recordID
     var isName: Bool { [.fullName, .firstName, .lastName, .middleName].contains(self) }
 }
 
@@ -239,6 +241,12 @@ struct PayloadGen {
         let alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
         return gen.int(0...3) == 0 ? UUID(uuid: (0..<16).reduce(into: [UInt8]()) { a, _ in a.append(UInt8(gen.int(0...255))) }.withUnsafeBytes { $0.load(as: uuid_t.self) }).uuidString.lowercased()
             : prefix + "_" + gen.string(alphabet, count: gen.int(12...20))
+    }
+    /// A person's or account's own ID. With its type prefix it names them; a
+    /// bare UUID names them only where a key around it says so, so either reading is defensible.
+    mutating func personID(_ prefix: String) -> PNode {
+        let value = id(prefix)
+        return leaf(value, value.hasPrefix(prefix + "_") ? .pii(.recordID) : .keepSoft)
     }
     mutating func timestamp() -> PNode {
         let date = String(format: "%04d-%02d-%02d", gen.int(2022...2026), gen.int(1...12), gen.int(1...28))

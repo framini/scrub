@@ -12,6 +12,10 @@ struct ResultView: View {
         VStack(spacing: 0) {
             header
             Divider().overlay(Color.line)
+            if finished.result.coverage.isReduced {
+                coverageNote
+                Divider().overlay(Color.line)
+            }
             preview
             Divider().overlay(Color.line)
             footer
@@ -19,7 +23,7 @@ struct ResultView: View {
         .background(Color.snow, in: .rect(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.rule))
         .sheet(isPresented: Binding(get: { model.reviewing }, set: { if !$0 { model.cancelReview() } })) {
-            ReviewView(findings: finished.result.uncertain, skipped: finished.skipped, onDone: { model.finishReview(skipping: $0) }, onCancel: { model.cancelReview() })
+            ReviewView(findings: finished.result.uncertain, choices: finished.choices, onDone: { model.finishReview($0) }, onCancel: { model.cancelReview() })
                 .preferredColorScheme(.light)
         }
     }
@@ -67,6 +71,22 @@ struct ResultView: View {
         }
     }
 
+    /// Some of Scrub's own detectors didn't load, so this scrub found less than it could.
+    private var coverageNote: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.ember)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Copy.reducedCoverageTitle).fontWeight(.semibold)
+                Text(Copy.reducedCoverage(finished.result.coverage.missing)).foregroundStyle(Color.slate).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(Color.emberWash)
+    }
+
     @ViewBuilder private var preview: some View {
         switch finished.result.preview {
         case .text(let text, let marks, let truncated):
@@ -75,7 +95,7 @@ struct ResultView: View {
                     Text(Self.highlighted(text, marks))
                         .font(.system(size: 13, design: .monospaced))
                         .lineSpacing(6)
-                        .textSelection(.enabled)
+                        .modifier(Selectable(enabled: finished.mayExport))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20)
                         .padding(.vertical, 16)
@@ -109,7 +129,7 @@ struct ResultView: View {
             let uncertain = finished.result.uncertain.count
             if uncertain > 0 {
                 Button { model.review() } label: {
-                    Text(finished.reviewed ? Copy.checked(leaving: finished.skipped.count) : Copy.toCheck(uncertain))
+                    Text(finished.reviewed ? Copy.checked(leaving: finished.choices.leftCount(of: finished.result.uncertain)) : Copy.toCheck(uncertain))
                         .fontWeight(.semibold)
                         .foregroundStyle(finished.reviewed ? Color.slate : Color.ember)
                         .underline(!finished.reviewed)
@@ -138,6 +158,15 @@ struct ResultView: View {
             styled.addAttributes([.backgroundColor: NSColor(Color.lichen), .foregroundColor: NSColor(Color.evergreen)], range: range)
         }
         return (try? AttributedString(styled, including: \.appKit)) ?? AttributedString(text)
+    }
+}
+
+/// Text that can be selected, and so copied, dragged, shared or sent to a
+/// service, only once the result may leave the app (`Finished.mayExport`).
+private struct Selectable: ViewModifier {
+    let enabled: Bool
+    func body(content: Content) -> some View {
+        if enabled { content.textSelection(.enabled) } else { content.textSelection(.disabled) }
     }
 }
 
