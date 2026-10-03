@@ -15,7 +15,8 @@ public enum XMLFile: FileFormat {
         guard document.dtd == nil else { throw ScrubError.unsupported("xml_doctype") }
         guard document.rootElement() != nil else { throw ScrubError.unsupported("invalid_xml") }
         var leaves: [DocumentLeaf] = []
-        var nodes: [XMLNode] = []
+        // Each value's nodes: one, or the text nodes of an element with inline elements, read as one (see `inline`).
+        var nodes: [[XMLNode]] = []
         var valueIDs: [Int] = []
         var namedNodes: [XMLNode] = []
         var nameIDs: [Int] = []
@@ -23,9 +24,18 @@ public enum XMLFile: FileFormat {
         func local(_ name: String?) -> String? { name?.split(separator: ":").last.map(String.init) }
         func add(_ node: XMLNode, key: String?, records: [Int], words: Set<String>) {
             guard let value = node.stringValue, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-            nodes.append(node)
+            nodes.append([node])
             valueIDs.append(leaves.count)
             leaves.append(DocumentLeaf(value, key: key, records: records, contextWords: words))
+        }
+        /// Text split by inline elements ("<i>Odal</i>ys Ferriter wrote…") read as one value: its
+        /// pieces joined by `Visible.joint`, which detection reads through and stand-ins keep.
+        func addJoined(_ texts: [XMLNode], key: String?, records: [Int], words: Set<String>) {
+            let values = texts.map { $0.stringValue ?? "" }
+            guard values.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return }
+            nodes.append(texts)
+            valueIDs.append(leaves.count)
+            leaves.append(DocumentLeaf(values.joined(separator: Visible.joint), key: key, records: records, contextWords: words))
         }
         func addName(_ node: XMLNode, records: [Int]) {
             guard let name = node.name else { return }
@@ -81,6 +91,33 @@ public enum XMLFile: FileFormat {
                     let attributeTexts = (element.attributes ?? []).compactMap { a in local(a.name).map { ($0, a.stringValue ?? "") } }
                     let resolved = local(attribute.name).flatMap { KeyHints.namedField($0, siblings: attributeTexts) } ?? KeyHints.resolve(local(attribute.name), parent: elementKey)
                     add(attribute, key: key(local(attribute.name), resolved: resolved, parent: local(element.name), value: attribute.stringValue, siblings: names(element)), records: ancestry, words: words)
+                }
+                if let texts = Self.inline(element) {
+                    // The inline elements' names and attributes are read as any; their text with the element's.
+                    func readNames(within node: XMLNode) {
+                        for child in node.children ?? [] {
+                            guard let inner = child as? XMLElement else {
+                                if child.kind == .comment || child.kind == .processingInstruction {
+                                    if child.kind == .processingInstruction { addName(child, records: ancestry) }
+                                    add(child, key: nil, records: ancestry, words: words)
+                                }
+                                continue
+                            }
+                            addName(inner, records: ancestry)
+                            for attribute in inner.attributes ?? [] {
+                                addName(attribute, records: ancestry)
+                                add(attribute, key: KeyHints.resolve(local(attribute.name), parent: elementKey), records: ancestry, words: words)
+                            }
+                            readNames(within: inner)
+                        }
+                    }
+                    readNames(within: element)
+                    let attributeTexts = (element.attributes ?? []).compactMap { a in local(a.name).map { ($0, a.stringValue ?? "") } }
+                    let named = attributeTexts.first { KeyHints.fieldNameKeys.contains(KeyHints.words($0.0).joined()) }.flatMap { KeyHints.header($0.1) }
+                    let joined = texts.map { $0.stringValue ?? "" }.joined()
+                    addJoined(texts, key: key(local(element.name), resolved: KeyHints.hint(elementKey) == nil ? named ?? elementKey : elementKey, parent: keys.last, value: joined, siblings: names(element.parent as? XMLElement)),
+                              records: records.isEmpty ? ancestry : records, words: words)
+                    return
                 }
                 for child in element.children ?? [] {
                     if child is XMLElement { try walk(child, records: ancestry, keys: currentKeys, parentKey: elementKey) }
@@ -170,10 +207,17 @@ public enum XMLFile: FileFormat {
         let nameMarks = markedValues
         func render(_ values: [DocumentValue], counts: [String: Int]) throws -> ScrubResult {
             var markedValues: [(String, String)] = []
-            for (index, node) in nodes.enumerated() {
+            for (index, group) in nodes.enumerated() {
                 let value = values[valueIDs[index]]
-                if node.stringValue != value.text { node.stringValue = value.text }
-                for mark in value.marks { markedValues.append((TextRanges.substring(value.text, mark.range), mark.entity)) }
+                if group.count == 1 {
+                    if group[0].stringValue != value.text { group[0].stringValue = value.text }
+                } else {
+                    // Parted where they were joined; were a joint ever lost, the text goes whole into the first piece.
+                    let pieces = value.text.components(separatedBy: Visible.joint)
+                    let written = pieces.count == group.count ? pieces : [pieces.joined()] + Array(repeating: "", count: group.count - 1)
+                    for (node, piece) in zip(group, written) where node.stringValue != piece { node.stringValue = piece }
+                }
+                for mark in value.marks { markedValues.append((TextRanges.substring(value.text, mark.range).replacingOccurrences(of: Visible.joint, with: ""), mark.entity)) }
             }
             markedValues += nameMarks
             let unresolved = values.flatMap(\.unresolved)
@@ -194,6 +238,33 @@ public enum XMLFile: FileFormat {
         result.review = Review(values: values, counts: job.counts, records: records, render: render)
         progress(.checking, 1, 1)
         return result
+    }
+    /// The text nodes of an element whose text runs around inline elements
+    /// ("<note><i>Oda</i>lys Ferriter wrote…</note>", "<name><b>Odal</b>ys</name>"),
+    /// in document order; nil for any other element. It holds text of its own
+    /// beside its elements, and those hold only text and such elements, a few
+    /// levels deep, so a record's fields (<first>, <last> under <person>) are
+    /// each still read under their own name.
+    static func inline(_ element: XMLElement) -> [XMLNode]? {
+        let children = element.children ?? []
+        guard children.contains(where: { $0 is XMLElement }),
+              children.contains(where: { $0.kind == .text && !($0.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return nil }
+        var texts: [XMLNode] = []
+        func collect(_ node: XMLNode, depth: Int) -> Bool {
+            guard depth <= 4 else { return false }
+            for child in node.children ?? [] {
+                if let inner = child as? XMLElement {
+                    guard collect(inner, depth: depth + 1) else { return false }
+                } else if child.kind == .text {
+                    // A text that already holds a joint could not be parted again.
+                    guard !(child.stringValue ?? "").contains(Visible.joint) else { return false }
+                    texts.append(child)
+                }
+                if texts.count > 512 { return false }
+            }
+            return true
+        }
+        return collect(element, depth: 0) && texts.count > 1 ? texts : nil
     }
     static func parses(_ data: Data) throws -> Bool {
         guard let source = try? decodeXML(data) else { return false }

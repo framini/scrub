@@ -21,7 +21,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def fetch(url):
-    with urllib.request.urlopen(url, timeout=120) as response:
+    request = urllib.request.Request(url, headers={"User-Agent": "scrub-tools/1.0"})
+    with urllib.request.urlopen(request, timeout=120) as response:
         return response.read()
 
 

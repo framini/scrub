@@ -139,7 +139,7 @@ struct LeakGate {
         let real = original.split(separator: "@", maxSplits: 1), made = fake.split(separator: "@", maxSplits: 1)
         guard real.count == 2, made.count == 2 else { return }
         let local = String(real[0]), key = local.lowercased()
-        guard local.filter({ $0.isLetter || $0.isNumber }).count >= 4, local.contains(where: \.isLetter), !Self.mailboxes.contains(key), !NameLists.isWord(local) else { return }
+        guard local.filter({ $0.isLetter || $0.isNumber }).count >= 4, local.contains(where: \.isLetter), !Self.mailboxes.contains(key), !People.isRoleMailbox(original), !NameLists.isWord(local) else { return }
         if locals[key] == nil { locals[key] = (String(made[0]), original); shortest = min(shortest, local.utf16.count) }
     }
 

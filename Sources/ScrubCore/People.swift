@@ -246,7 +246,7 @@ final class People {
         let originals = [person.realFirst, person.realLast].compactMap { $0 }.filter { $0.count >= 3 }
         for _ in 0..<64 {
             let first = pick(Self.choices(for: wanted), originals: originals, emailSafe: false)
-            if usedFullNames.insert(fold(first + " " + person.last)).inserted {
+            if fold(first) != fold(person.last), usedFullNames.insert(fold(first + " " + person.last)).inserted {
                 usedFullNames.remove(fold(person.drawn + " " + person.last))
                 person.redraw(first)
                 return
@@ -342,7 +342,8 @@ final class People {
     private func freshFirst(last: String, originals: [String], gender: String?) -> String? {
         for _ in 0..<64 {
             let first = pick(Self.choices(for: gender), originals: originals, emailSafe: false)
-            if usedFullNames.insert(fold(first + " " + last)).inserted { return first }
+            // "Hudson Hudson" reads as no one's name.
+            if fold(first) != fold(last), usedFullNames.insert(fold(first + " " + last)).inserted { return first }
         }
         return nil
     }
@@ -356,7 +357,7 @@ final class People {
             var last = pick(Self.lastChoices, originals: originals, emailSafe: emailSafe)
             // A suffix also handles documents that exhaust the finite name pool.
             if attempt >= 64 { last += String(attempt) }
-            if usedFullNames.insert(fold(first + " " + last)).inserted { return (first, last) }
+            if fold(first) != fold(last), usedFullNames.insert(fold(first + " " + last)).inserted { return (first, last) }
             attempt += 1
         }
     }
@@ -428,8 +429,14 @@ final class People {
         let name = writtenName(for: value)
         // "thanks odalys" stays lowercase, and "FERRITER" in capitals.
         let letters = value.filter(\.isLetter)
-        let result = value.contains(where: \.isLowercase) && value == value.lowercased() ? name.lowercased()
+        var result = value.contains(where: \.isLowercase) && value == value.lowercased() ? name.lowercased()
             : letters.count >= 4 && letters == letters.uppercased() && letters != letters.lowercased() ? name.uppercased() : name
+        // "Julie BEET": a word in capitals keeps them, word for word.
+        let words = value.split(separator: " "), made = result.split(separator: " ")
+        if result == name, words.count == made.count, words.count > 1 {
+            let shouted = words.map { $0.count >= 2 && $0 == $0.uppercased() && $0 != $0.lowercased() && !People.isTitle(String($0)) }
+            if shouted.contains(true) { result = zip(made, shouted).map { $1 ? $0.uppercased() : String($0) }.joined(separator: " ") }
+        }
         written[value] = result
         return result
     }
@@ -528,12 +535,37 @@ final class People {
         let handle = body + (count > 0 ? digits(count) : "")
         return original.first?.isUppercase == true ? handle.prefix(1).uppercased() + handle.dropFirst() : handle
     }
+    /// The stand-in for an email's domain: one for each domain, whoever's address it is.
+    func domain(of original: String) -> String {
+        let pieces = original.split(separator: "@", maxSplits: 1).map(String.init)
+        let domain = pieces.count > 1 ? fold(pieces[1]) : ""
+        if domains[domain] == nil { domains[domain] = Names.emailDomains[domains.count % Names.emailDomains.count] }
+        return domains[domain] ?? "example.com"
+    }
+    /// Words a shared mailbox is named with: a team, a list or a role, not a person.
+    private static let roleWords: Set<String> = [
+        "team", "teams", "ops", "operations", "support", "help", "helpdesk", "servicedesk", "service", "services", "noreply", "no", "reply", "donotreply", "do", "not",
+        "list", "lists", "listserv", "mailing", "info", "information", "sales", "billing", "invoices", "invoice", "accounts", "account", "accounting", "finance",
+        "payments", "payroll", "admin", "admins", "administrator", "hello", "contact", "contacts", "enquiries", "inquiries", "feedback", "office", "reception",
+        "frontdesk", "front", "desk", "hr", "careers", "jobs", "recruiting", "talent", "press", "media", "pr", "marketing", "news", "newsletter", "announce",
+        "announcements", "updates", "alerts", "notifications", "notify", "security", "abuse", "postmaster", "webmaster", "hostmaster", "privacy", "legal",
+        "compliance", "dev", "devs", "devops", "engineering", "eng", "it", "infra", "sre", "oncall", "on", "call", "data", "qa", "product", "design", "all",
+        "everyone", "staff", "group", "board", "members", "orders", "shipping", "returns", "customer", "customers", "care", "success", "partners", "events",
+        "community", "root", "mailer", "daemon", "bounce", "bounces", "bot", "system", "ci", "builds", "deploy", "release", "releases", "school", "clinic",
+        "general", "global", "emea", "apac", "amer", "uk", "us", "eu", "de", "fr", "intl", "internal", "external", "dpo", "gdpr", "tickets", "ticket",
+    ]
+    /// A shared mailbox, which names no one: "ops-team@…", "billing@…",
+    /// "no-reply@…". Every word of its local part is a role's, digits aside.
+    static func isRoleMailbox(_ email: String) -> Bool {
+        guard let at = email.firstIndex(of: "@") else { return false }
+        let words = email[..<at].lowercased().split { !$0.isLetter }
+        return !words.isEmpty && words.allSatisfy { roleWords.contains(String($0)) }
+    }
     func email(for person: Persona, original: String) -> String {
         let key = fold(original)
         if let existing = person.email(for: key) { return existing }
         let pieces = original.split(separator: "@", maxSplits: 1).map(String.init)
-        let domain = pieces.count > 1 ? fold(pieces[1]) : ""
-        if domains[domain] == nil { domains[domain] = Names.emailDomains[domains.count % Names.emailDomains.count] }
+        let standInDomain = domain(of: original)
         let first = fold(person.first).filter(\.isLetter), last = fold(person.last).filter(\.isLetter)
         let local = pieces.first ?? ""
         let joined = local.lowercased().filter(\.isLetter)
@@ -545,7 +577,7 @@ final class People {
             fakeLocal = first + (local.first(where: { "._-".contains($0) }).map(String.init) ?? "") + String(last.prefix(1))
         }
         else { fakeLocal = first + String(local.first(where: { "._-".contains($0) }) ?? ".") + last }
-        let email = fakeLocal + "@" + (domains[domain] ?? "example.com")
+        let email = fakeLocal + "@" + standInDomain
         person.rememberEmail(email, for: key)
         return email
     }

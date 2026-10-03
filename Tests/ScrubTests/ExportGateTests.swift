@@ -94,3 +94,63 @@ private let note = "Ms Odalys Ferriter called about the refund. Brightwater from
     guard case .finished(let after) = model.state else { Issue.record("not finished"); return }
     #expect(after.result.coverage.missing == [.contextModel])
 }
+
+/// The preview can always be selected and read; what a selection does waits
+/// for the review like everything else that leaves the app: its menu's
+/// Copy, a drag out of the window and a service write nothing until then.
+@MainActor
+@Test func aSelectionCanBeMadeButNotTakenBeforeTheReview() async throws {
+    let (model, board) = try await finished(note)
+    guard case .finished(let done) = model.state else { Issue.record("not finished"); return }
+    #expect(!done.mayExport, "the note must hold something to check")
+    board.clearContents()
+    let output = String(decoding: done.result.output, as: UTF8.self)
+    let view = PreviewTextView()
+    view.isEditable = false
+    view.isSelectable = true
+    view.textStorage?.setAttributedString(ResultView.styled(output, [], font: .monospacedSystemFont(ofSize: 13, weight: .regular)))
+    view.allowsExport = done.mayExport
+    view.blocked = { model.selectionBlocked(copying: $0) }
+    #expect(view.isSelectable && !view.isEditable)
+    view.selectAll(nil)
+    #expect(view.selectedRange().length == (output as NSString).length)
+
+    // A drag writes to a pasteboard of its own: nothing, and the review opens.
+    let drag = NSPasteboard(name: NSPasteboard.Name("scrub-drag-\(UUID().uuidString)"))
+    drag.clearContents()
+    #expect(!view.writeSelection(to: drag, types: view.writablePasteboardTypes))
+    #expect(drag.string(forType: .string) == nil && model.reviewing)
+    model.cancelReview()
+    // Services find no text to take.
+    for type in view.writablePasteboardTypes { #expect(view.validRequestor(forSendType: type, returnType: nil) == nil) }
+    // The context menu's Copy writes nothing anywhere and asks first, as ⌘C does.
+    let general = NSPasteboard.general.changeCount
+    view.copy(nil)
+    #expect(NSPasteboard.general.changeCount == general && model.reviewing)
+
+    model.finishReview(Choices(left: []))
+    try await settled(model)
+    #expect(board.string(forType: .string) == output)
+    guard case .finished(let after) = model.state else { Issue.record("not finished"); return }
+    #expect(after.mayExport)
+
+    // Checked once, the selection leaves as it is, and nothing else is asked.
+    view.allowsExport = after.mayExport
+    drag.clearContents()
+    #expect(view.writeSelection(to: drag, types: view.writablePasteboardTypes))
+    #expect(drag.string(forType: .string) == output && !model.reviewing)
+    #expect(view.writablePasteboardTypes.contains { view.validRequestor(forSendType: $0, returnType: nil) != nil })
+}
+
+/// Asking twice opens one review; a blocked drag adds no copy after it.
+@MainActor
+@Test func aBlockedDragOpensTheReviewWithoutACopy() async throws {
+    let (model, board) = try await finished(note)
+    board.clearContents()
+    model.selectionBlocked(copying: false)
+    model.selectionBlocked(copying: true)
+    #expect(model.reviewing)
+    model.finishReview(Choices(left: []))
+    try await settled(model)
+    #expect(board.string(forType: .string) == nil, "a drag asks, but copies nothing afterwards")
+}

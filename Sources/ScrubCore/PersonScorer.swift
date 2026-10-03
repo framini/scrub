@@ -82,8 +82,13 @@ enum PersonScorer {
     }
 
     /// Whether the learned scorer decides, rather than the hand rules. Read
-    /// once a scrub, like `AddressModel.active`; tests turn it off to compare.
+    /// once a scrub, like `AddressModel.active`; tests turn it off to compare,
+    /// in debug builds only.
+    #if DEBUG
     @TaskLocal static var learned = true
+    #else
+    static var learned: Bool { true }
+    #endif
 
     // Fitted by Tools/PersonScorer/fit.py, in the order of `Signals.names`; its README has the data and the held-out check.
     static let bias = -1.7982

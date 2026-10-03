@@ -99,7 +99,7 @@ public enum JSONFile: FileFormat {
         }
         progress(.checking, 0, 1)
         var result = try render(values, counts: job.counts)
-        result.review = Review(values: values, counts: job.counts, records: records, render: render)
+        result.review = Review(values: values, counts: job.counts, records: records, numeric: Set(leaves.indices.filter { leaves[$0].numericEntity != nil }), render: render)
         progress(.checking, 1, 1)
         return result
     }

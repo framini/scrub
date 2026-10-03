@@ -15,6 +15,8 @@ struct Finished {
     /// What to leave as written, everywhere or place by place, and whether the
     /// person has looked. A value Scrub left as written starts so.
     var choices = Choices()
+    /// Values the person marked for Scrub to replace too; kept for this file only.
+    var marks = Marks()
     var reviewed = false
     var needsReview: Bool { !reviewed && !result.uncertain.isEmpty }
     /// Whether anything of the result may leave the app yet: whole, as a
@@ -23,6 +25,15 @@ struct Finished {
 }
 
 enum Shortcut { case copy, save }
+
+/// A selection in the preview: the text shown there (the output, or one
+/// table cell), the stand-ins in it, what is selected, and the column it sits under.
+struct PreviewSelection {
+    let text: String
+    let marks: [Mark]
+    let range: Range<Int>
+    var key: String?
+}
 
 struct ShortcutPulse: Equatable {
     let shortcut: Shortcut
@@ -49,6 +60,13 @@ final class AppModel {
     var reviewing = false
     private var afterReview: Shortcut?
     private(set) var applyingReview = false
+    /// What the preview's selection stands on, and the kind its missed values
+    /// are marked as: guessed with each selection, and the person's to change.
+    private(set) var pick = Pick()
+    var markKind = "PERSON"
+    /// Copy or Save asked for while the result is being written again; run once it is.
+    private var afterRewrite: Shortcut?
+    private var rewrites = 0
 
     // Clear, and any newer input, bumps the generation; work finishing after
     // that is dropped, so cleared content never comes back.
@@ -125,19 +143,33 @@ final class AppModel {
     /// The one gate every way out of the app passes: Copy, ⌘C on a selection
     /// or on the whole result, and Save. While uncertain findings wait to be
     /// checked, it opens the review instead, and `then` runs once it is done.
-    /// The preview can only be selected, and so dragged, shared or sent to a
-    /// service, once this gate is clear (`Finished.mayExport`).
+    /// The preview can always be selected; copying, dragging or sharing a
+    /// selection waits for this gate too (`PreviewTextView`, `selectionBlocked`).
+    /// While marks or choices are being written in, it waits for them, so
+    /// nothing leaves without them.
     private func cleared(then shortcut: Shortcut) -> Bool {
         guard case .finished(let done) = state else { return false }
+        if applyingReview {
+            afterRewrite = shortcut
+            return false
+        }
         if done.mayExport { return true }
         if !reviewing { review(then: shortcut) }
         return false
     }
 
+    /// A selection in the preview tried to leave while the result waits for
+    /// review: its menu's Copy (`copying`), a drag or a service. Nothing was
+    /// written; the review opens, and a copy then copies the result, as ⌘C does.
+    func selectionBlocked(copying: Bool) {
+        guard case .finished(let done) = state, !done.mayExport, !reviewing else { return }
+        review(then: copying ? .copy : nil)
+    }
+
     /// ⌘C copies a selection when the focused view has one, and otherwise the
     /// whole result. A responder with nothing selected leaves the pasteboard
     /// untouched, which is how the two cases are told apart. While the result
-    /// waits for review nothing can be selected, and ⌘C asks first.
+    /// waits for review a selection copies nothing, and ⌘C asks first.
     func copyCommand(sendCopy: () -> Bool = { NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) }) {
         if case .finished = state, !cleared(then: .copy) { return }
         let before = board.changeCount
@@ -167,22 +199,67 @@ final class AppModel {
         reviewing = false
         let next = afterReview
         afterReview = nil
+        rewrite(choices, done.marks, reviewed: true, then: next)
+    }
+
+    /// Reads what a selection in the preview stands on; nil clears it.
+    func select(_ selection: PreviewSelection?) {
+        guard case .finished(let done) = state, let selection else {
+            pick = Pick()
+            return
+        }
+        pick = done.result.pick(in: selection.text, marks: selection.marks, range: selection.range)
+        if let first = pick.missed.first { markKind = Marks.guess(first, key: selection.key) }
+    }
+
+    /// ⌘E: replaces what the selection holds that Scrub missed, or else keeps
+    /// the originals of the stand-ins it is on.
+    func applySelection() {
+        if !pick.missed.isEmpty { mark(pick.missed, as: markKind) } else if !pick.isEmpty { keepOriginal() }
+    }
+
+    /// Replaces `texts` as `entity` everywhere they and their variants are written.
+    func mark(_ texts: [String], as entity: String) {
+        guard case .finished(let done) = state, !texts.isEmpty else { return }
+        let (choices, marks) = done.result.marking(texts, as: entity, choices: done.choices, marks: done.marks)
+        rewrite(choices, marks)
+    }
+
+    /// Leaves what the selection's stand-ins replaced as written, everywhere.
+    func keepOriginal() {
+        guard case .finished(let done) = state, !pick.isEmpty else { return }
+        let (choices, marks) = done.result.keeping(pick, choices: done.choices, marks: done.marks)
+        rewrite(choices, marks)
+    }
+
+    /// Writes the result again with `choices` and `marks`, always from the
+    /// scrub as first made, then copies or saves if asked. A newer rewrite
+    /// replaces one still running.
+    private func rewrite(_ choices: Choices, _ marks: Marks, reviewed: Bool = false, then next: Shortcut? = nil) {
+        guard case .finished(let done) = state else { return }
         let ticket = generation
         let result = done.result
+        rewrites += 1
+        let mine = rewrites
+        pick = Pick()
         applyingReview = true
+        work?.cancel()
         work = Task.detached(priority: .userInitiated) { [weak self] in
-            let outcome = Result { try result.applying(choices) }
+            let outcome = Result { try result.applying(choices, marks: marks) }
             await MainActor.run {
-                guard let self, self.generation == ticket, case .finished(var current) = self.state else { return }
+                guard let self, self.generation == ticket, self.rewrites == mine, case .finished(var current) = self.state else { return }
                 self.applyingReview = false
+                let after = next ?? self.afterRewrite
+                self.afterRewrite = nil
                 switch outcome {
                 case .success(let revised):
                     current.result = revised
                     current.choices = choices
-                    current.reviewed = true
+                    current.marks = marks
+                    if reviewed { current.reviewed = true }
                     current.copied = false
                     self.state = .finished(current)
-                    switch next {
+                    switch after {
                     case .copy: self.copy()
                     case .save: self.save()
                     case nil: break
@@ -244,6 +321,8 @@ final class AppModel {
         reviewing = false
         afterReview = nil
         applyingReview = false
+        afterRewrite = nil
+        pick = Pick()
     }
 
     private func fail(_ name: String, _ source: Source, _ code: String) {
@@ -269,7 +348,10 @@ final class AppModel {
             await MainActor.run {
                 guard let self, self.generation == ticket else { return }
                 switch outcome {
-                case .success(let result): self.state = .finished(Finished(name: name, source: source, result: result, choices: result.choices))
+                case .success(let result):
+                    self.state = .finished(Finished(name: name, source: source, result: result, choices: result.choices))
+                    // The first selection in a large file then answers at once.
+                    Task.detached(priority: .utility) { result.prepareMarking() }
                 case .failure(let error): self.state = .failed(name: name, source: source, code: Self.code(for: error))
                 }
             }

@@ -19,6 +19,12 @@ enum ListedNames {
     /// Two first names joined: "Wade & Heidi", "Holly and Grace".
     private static let joined = TextPattern(#"(?<![\p{L}\p{N}'’.@/_-])(\p{Lu}\p{Ll}+)[ \t]+(?:&|and)[ \t]+(\p{Lu}\p{Ll}+)(?![\p{L}\p{N}'’@/_-])"#)
     private static let places = Set(Places.all.map { $0.city.lowercased() })
+    /// A verb that asks for someone, opening a sentence or a line, then the
+    /// name it asks for: "Ask Brisa for…", "Call Odalys Ferriter on…".
+    private static let instructed = TextPattern(#"(?:^|[.!?][ \t]+|\n)[ \t>*•-]*(\p{Lu}\p{Ll}+)[ \t]+(\p{Lu}\p{Ll}+(?:[ \t]+\p{Lu}\p{Ll}+(?:-\p{Lu}\p{Ll}+)?)?)(?![\p{L}\p{N}'’@/_-])"#)
+    /// The verbs of `NameShape.commands` that take a person: "Call Support" and "Update Legal" name no one either way.
+    private static let askingFor: Set<String> = ["call", "email", "ask", "ping", "tell", "text", "message", "contact", "phone", "ring", "telephone", "remind",
+                                                 "thank", "invite", "notify", "inform", "cc", "bcc", "dm", "meet", "brief", "nudge", "warn"]
 
     static func scan(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
         var spans: [Span] = []
@@ -36,7 +42,7 @@ enum ListedNames {
                     let rest = ns.substring(with: NSRange(location: end, length: NSMaxRange(ns.lineRange(for: NSRange(location: max(0, end - 1), length: 0))) - end))
                     guard ns.substring(with: match.range(at: 3)) != "", rest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, [",", ":"].contains(ns.substring(with: match.range(at: 3))) else { continue }
                 }
-                spans += people(in: names, ns, greeted: greeted)
+                spans += people(in: names, ns, greeted: greeted, capitals: greeted)
             }
         }
         if text.contains(where: \.isNewline) {
@@ -53,7 +59,7 @@ enum ListedNames {
                 let content = ns.substring(with: line).trimmingCharacters(in: .newlines)
                 guard let signed = TextRanges.matches(signature, in: content).first else { continue }
                 let names = NSRange(location: line.location + signed.range(at: 1).location, length: signed.range(at: 1).length)
-                spans += people(in: names, ns, greeted: true)
+                spans += people(in: names, ns, greeted: true, capitals: false)
             }
         }
         if text.contains("&") || text.contains(" and ") {
@@ -64,6 +70,16 @@ enum ListedNames {
                       !NameTagger.partOfOrganisation(match.range(at: 1).location..<NSMaxRange(match.range), in: text) else { continue }
                 spans += names.map { Span(range: $0.location..<NSMaxRange($0), entity: "PERSON", score: pairScore) }
             }
+        }
+        // Each word after the verb must be a first name or surname that is no word, or no word any list holds:
+        // "Ask Brisa", but not "Ask Legal" or "Call Support".
+        for match in TextRanges.matches(instructed, in: text, isCancelled: isCancelled) where askingFor.contains(ns.substring(with: match.range(at: 1)).lowercased()) {
+            let names = match.range(at: 2)
+            let words = ns.substring(with: names).split(separator: " ").map(String.init)
+            guard words.allSatisfy({ !NameLists.isWord($0) || NameLists.isName($0) && !NameLists.isOrdinary($0) }), NameLists.isFirst(words[0]) || !NameLists.isWord(words[0]),
+                  !places.contains(words.joined(separator: " ").lowercased()), Places.region(words[0]) == nil,
+                  !NameTagger.partOfOrganisation(names.location..<NSMaxRange(names), in: text) else { continue }
+            spans.append(Span(range: names.location..<NSMaxRange(names), entity: "PERSON", score: cuedScore))
         }
         for match in TextRanges.matches(pair, in: text, isCancelled: isCancelled) {
             let first = ns.substring(with: match.range(at: 1)), last = ns.substring(with: match.range(at: 2))
@@ -80,8 +96,11 @@ enum ListedNames {
     /// The people a greeting or signature names: one, or two joined by "&" or
     /// "and" ("Wade & Heidi"). Every word must be name-shaped and one of them
     /// listed; none may be an ordinary word that is no name ("Team", "All"),
-    /// a title or a role.
-    private static func people(in range: NSRange, _ ns: NSString, greeted: Bool) -> [Span] {
+    /// a title or a role. A word in capitals stands only where `greeted`
+    /// (see `CapitalNames`): any after a greeting's word with `capitals`
+    /// ("Hi JINX,"), and above a sign-off only one the lists hold or no
+    /// ordinary word ("Thanks,⏎ODALYS").
+    private static func people(in range: NSRange, _ ns: NSString, greeted: Bool, capitals: Bool) -> [Span] {
         let value = ns.substring(with: range)
         var groups: [[(String, Int)]] = [[]]
         var offset = 0
@@ -102,6 +121,13 @@ enum ListedNames {
                 // An initial ("J.") or a name-shaped word; lowercase only as a whole ("hey beatriz").
                 if bare.count == 1 { return bare.first!.isUppercase }
                 if lower { return NameLists.isFirst(bare) && !NameLists.isWordlike(bare) && !NameLists.isOrdinary(bare) }
+                if bare.count >= 2, bare == bare.uppercased(), bare != bare.lowercased() {
+                    if CapitalNames.acronyms.contains(bare.lowercased()) { return false }
+                    if bare.count >= 4 {
+                        guard greeted, CapitalNames.mayName(bare) else { return false }
+                        return capitals || NameLists.isName(bare) || !NameLists.isOrdinary(bare)
+                    }
+                }
                 guard bare.first!.isUppercase, bare.dropFirst().contains(where: \.isLowercase) || bare.count <= 3 else { return false }
                 // An ordinary word stands as a name only as a first name ("Holly,"), never as a surname alone ("Best,").
                 return !NameLists.isOrdinary(bare) || NameLists.isFirst(bare) || words.count > 1 && NameLists.isSurname(bare)

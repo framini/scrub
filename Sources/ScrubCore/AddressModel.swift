@@ -28,8 +28,12 @@ final class AddressModel: Sendable {
     /// Off only inside a test's `withValue` scope, to show what Scrub finds
     /// without the model. A detector reads it when it is made, so a scrub
     /// started in that scope runs without the model on every thread, and
-    /// every other scrub runs with it.
+    /// every other scrub runs with it. Only debug builds can turn it off.
+    #if DEBUG
     @TaskLocal static var active = true
+    #else
+    static var active: Bool { true }
+    #endif
 
     /// A weight file and the SHA-256 it must hash to. A file that differs is
     /// not loaded: Scrub then runs without that model, and says why in the log.
@@ -46,7 +50,20 @@ final class AddressModel: Sendable {
     /// The postal addresses either model reads in `text`, in UTF-16 offsets,
     /// those that overlap joined into one.
     static func find(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
-        let found = [shared, wide].compactMap { $0?.find(text, isCancelled: isCancelled) }.flatMap { $0 }.sorted { $0.range.lowerBound < $1.range.lowerBound }
+        read(text, isCancelled: isCancelled).spans
+    }
+    /// What `find` finds, and the single pieces with no number that read as a
+    /// street or a house ("I live on Ahornweg now", "moved to Pear Tree
+    /// Cottage"): sentences that only name a street look the same, so these
+    /// are never replaced on their own, only put to a person in review.
+    static func read(_ text: String, isCancelled: () -> Bool = { false }) -> (spans: [Span], doubtful: [Span]) {
+        let readings = [shared, wide].compactMap { $0?.read(text, isCancelled: isCancelled) }
+        let found = readings.flatMap(\.spans).sorted { $0.range.lowerBound < $1.range.lowerBound }
+        var doubtful: [Span] = []
+        for span in readings.flatMap(\.doubtful).sorted(by: { $0.range.lowerBound < $1.range.lowerBound }) where !found.contains(where: { $0.range.overlaps(span.range) }) {
+            if let last = doubtful.last, last.range.overlaps(span.range) { continue }
+            doubtful.append(span)
+        }
         var joined: [Span] = []
         for span in found {
             if let last = joined.last, span.range.lowerBound < last.range.upperBound {
@@ -55,8 +72,10 @@ final class AddressModel: Sendable {
                 joined.append(span)
             }
         }
-        return joined
+        return (joined, doubtful)
     }
+    /// Below the review line, so a person decides; nothing else reads these.
+    static let doubtScore = 0.4
 
     private let buckets: Int
     private let embed: Int
@@ -128,20 +147,31 @@ final class AddressModel: Sendable {
     /// a candidate line are read (see `windows`): text with no digit and no
     /// kind of street, building or unit costs a scan of its words.
     func find(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
-        guard !isCancelled() else { return [] }
-        var spans: [Span] = []
+        read(text, isCancelled: isCancelled).spans
+    }
+    /// What `find` finds, and, for the model that reads numberless lines, the
+    /// single pieces it reads as an address that `accepts` must turn down (see `AddressModel.read`).
+    func read(_ text: String, isCancelled: () -> Bool = { false }) -> (spans: [Span], doubtful: [Span]) {
+        guard !isCancelled() else { return ([], []) }
+        var spans: [Span] = [], doubtful: [Span] = []
         for window in Self.windows(text, numberless: numberless) {
-            if isCancelled() { return [] }
+            if isCancelled() { return ([], []) }
             let part = TextRanges.substring(text, window)
             let tokens = NameModel.tokens(part)
             guard tokens.contains(where: \.isWord) else { continue }
             let probabilities = self.probabilities(tokens, isCancelled: isCancelled)
-            guard probabilities.count == tokens.count else { return [] }
-            for range in Self.decode(tokens, probabilities, numberless: numberless).compactMap({ Self.refined($0, tokens) }) where Self.accepts(TextRanges.substring(part, range)) {
+            guard probabilities.count == tokens.count else { return ([], []) }
+            for range in Self.decode(tokens, probabilities, numberless: numberless).compactMap({ Self.refined($0, tokens) }) {
+                let value = TextRanges.substring(part, range)
+                guard Self.accepts(value) || Self.cued(value, before: (part as NSString).substring(to: range.lowerBound)) else { continue }
                 spans.append(Span(range: (range.lowerBound + window.lowerBound)..<(range.upperBound + window.lowerBound), entity: "ADDRESS", score: Self.score))
             }
+            guard numberless else { continue }
+            for range in Self.decodeSingle(tokens, probabilities) where Self.doubtful(TextRanges.substring(part, range), before: (part as NSString).substring(to: range.lowerBound)) {
+                doubtful.append(Span(range: (range.lowerBound + window.lowerBound)..<(range.upperBound + window.lowerBound), entity: "ADDRESS", score: Self.doubtScore))
+            }
         }
-        return spans
+        return (spans, doubtful)
     }
 
     /// The stretches worth reading: every candidate line with the two lines
@@ -270,6 +300,64 @@ final class AddressModel: Sendable {
         }
         return result
     }
+
+    /// The runs `decode` turns down for having no number and one piece: a
+    /// street or a house named on its own, in the window's UTF-16 offsets.
+    static func decodeSingle(_ tokens: [NameModel.Token], _ probabilities: [[Float]]) -> [Range<Int>] {
+        var result: [Range<Int>] = [], current: (Int, Int)?
+        func close() {
+            guard let (start, end) = current else { return }
+            current = nil
+            var first = start, last = end
+            while first <= last, !tokens[first].isWord { first += 1 }
+            while last >= first, !tokens[last].isWord { last -= 1 }
+            guard first <= last else { return }
+            let span = tokens[first...last]
+            guard !span.contains(where: { $0.scalars.contains(where: isDigit) }), !parted(span), span.contains(where: \.isWord) else { return }
+            result.append(tokens[first].range.lowerBound..<tokens[last].range.upperBound)
+        }
+        for (index, p) in probabilities.enumerated() {
+            if p[1] + p[2] >= threshold { current = current.map { ($0.0, index) } ?? (index, index) } else { close() }
+        }
+        close()
+        return result
+    }
+    /// Words that say an address follows: "moved to", "lives at", "address:",
+    /// "send it to", "wohne in der".
+    private static let addressCue = TextPattern(#"(?i)(?:\b(?:moved|moving|move|relocated|relocating)\s+(?:in\s+)?to|\b(?:live|lives|living|lived|stay|stays|staying|based|located|reside|resides)\s+(?:(?:now|still)\s+)?(?:at|on|in)(?:\s+the)?|\b(?:address(?:\s+is)?|adresse|anschrift|dirección|indirizzo|adres)\s*[:\-]?|\b(?:send|ship|deliver|post|mail|forward)\b[^.!?\n]{0,24}?\bto|\bwohne\s+(?:jetzt\s+)?(?:in\s+der|in|am|an\s+der)|\bhabite\s+(?:au|à|a)|\bvivo\s+en|\bwoon\s+(?:nu\s+)?(?:op|aan|in))\s*$"#)
+    /// A lowercase address `accepts` turns down for want of a postcode, a unit
+    /// or a known place, with a second cue instead: words before it that say
+    /// an address follows ("she moved to 12 rue des lilas"). It must still
+    /// hold a number and a kind of street, so "moved to 3 new projects" is none.
+    static func cued(_ value: String, before: String) -> Bool {
+        guard value.contains(where: \.isNumber), !value.contains(where: \.isUppercase), !value.contains(where: \.isNewline) else { return false }
+        let pieces = AddressBlock.pieces(value)
+        guard pieces.contains(where: { AddressBlock.isStreet($0) || AddressBlock.namesStreet($0) }) else { return false }
+        return !TextRanges.matches(addressCue, in: String(before.suffix(40))).isEmpty
+    }
+    /// A single piece worth asking about: capitalised, one to four words, a
+    /// street's or a house's name ("Ahornweg", "Mill Lane", "Pear Tree
+    /// Cottage"), after words that say someone lives there or post goes
+    /// there (`addressCue`): "We met on Bay Street" is no one's address.
+    static func doubtful(_ value: String, before: String) -> Bool {
+        let words = value.split(whereSeparator: { $0 == " " || $0 == "\t" })
+        guard (1...4).contains(words.count), !value.contains(where: \.isNewline), words.allSatisfy({ $0.first?.isUppercase == true || $0.count <= 3 }),
+              AddressBlock.namesStreet(value) || AddressBlock.namesBuilding(value) else { return false }
+        return !TextRanges.matches(addressCue, in: String(before.suffix(40))).isEmpty
+    }
+    /// A street or a house named on its own, as no town is: "Mill Lane",
+    /// "Pear Tree Cottage", "Ahornweg". Read as a place, it is asked about as
+    /// an address rather than given a town's stand-in (see `Detector`).
+    static func streetAlone(_ value: String) -> Bool {
+        let words = value.split(whereSeparator: { $0 == " " || $0 == "\t" })
+        guard let last = words.last?.lowercased(), words.count <= 4, !value.contains(where: { $0.isNumber || $0.isNewline || $0 == "," }),
+              words.allSatisfy({ $0.first?.isUppercase == true || $0.count <= 3 }), !AddressBlock.knownPlace(value) else { return false }
+        if words.count >= 2 { return aloneKinds.contains(last) }
+        return !notSuffixed.contains(last) && cueSuffixes.contains { last.hasSuffix($0) && last.count > $0.count + 2 }
+    }
+    /// Last words that end a street's or a house's name and seldom a town's ("Mountain View" and "Notting Hill" are both).
+    private static let aloneKinds: Set<String> = ["street", "st", "road", "rd", "lane", "ln", "avenue", "ave", "drive", "close", "crescent", "terrace", "mews",
+                                                  "gardens", "boulevard", "blvd", "cottage", "rectory", "vicarage", "farmhouse", "manor"]
 
     /// An address without the ordinary words the model let run into it: a
     /// lowercase word or two before it ("be Apt 1205, …"), or after its last
