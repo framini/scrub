@@ -1,4 +1,8 @@
 {
+  "addressLookAlikes" : {
+    "cases" : 40,
+    "passed" : 34
+  },
   "birthDates" : {
     "cases" : 40,
     "passed" : 40
@@ -9,7 +13,7 @@
   },
   "companiesWithoutPeople" : {
     "cases" : 40,
-    "passed" : 21
+    "passed" : 25
   },
   "datesNotBirths" : {
     "cases" : 40,
@@ -80,6 +84,10 @@
     "passed" : 40
   },
   "titlesWithoutPeople" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "worldAddresses" : {
     "cases" : 40,
     "passed" : 40
   },

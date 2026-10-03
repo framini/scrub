@@ -1,0 +1,13 @@
+# Development only: retrains the name model's weights. Nothing here ships in Scrub.
+# Python 3.12.11. Exact versions, from the environment the shipped NameModel.bin was trained in.
+torch==2.14.1
+numpy==2.5.3
+filelock==4.0.7
+fsspec==2026.9.0
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+mpmath==1.3.0
+networkx==3.7
+sympy==1.14.0
+typing_extensions==4.16.0
+setuptools==84.0.0

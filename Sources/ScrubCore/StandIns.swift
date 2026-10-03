@@ -7,7 +7,12 @@ final class StandIns {
     /// Every value found in the document: a stand-in never repeats one, or a
     /// fake date could put another person's real birth date back.
     private var originals: Set<String> = []
-    func avoid(_ original: String) { originals.insert(original.lowercased()) }
+    func avoid(_ original: String) {
+        originals.insert(original.lowercased())
+        // "Denver, Colorado 80205" also names Denver, which no other place may become.
+        guard original.contains(","), original.utf16.count <= 160, let parts = AddressParts.line(original)?.parts else { return }
+        for part in [parts.city, parts.region].compactMap({ $0 }) { originals.insert(part.lowercased()) }
+    }
     private func unused(_ candidate: String, _ original: String) -> Bool {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.caseInsensitiveCompare(original.trimmingCharacters(in: .whitespacesAndNewlines)) != .orderedSame && !originals.contains(trimmed.lowercased())
@@ -17,6 +22,13 @@ final class StandIns {
     private func keepsEnding(_ entity: String, _ candidate: String, _ original: String) -> Bool {
         let real = original.filter { $0.isASCII && $0.isNumber }, made = candidate.filter { $0.isASCII && $0.isNumber }
         return Self.numbered.contains(entity) && real.count >= 7 && made.count >= 4 && real.suffix(4) == made.suffix(4)
+    }
+    /// Nor does it end in another value the document holds: "last4_ssn" beside
+    /// a tax ID repeats its stand-in's last four digits, and a stand-in ending
+    /// "1973" would write a real birth year back (and, refused as one, leave no stand-in at all).
+    private func endsAsAnOriginal(_ entity: String, _ candidate: String) -> Bool {
+        let made = candidate.filter { $0.isASCII && $0.isNumber }
+        return Self.numbered.contains(entity) && made.count >= 7 && originals.contains(String(made.suffix(4)))
     }
     private var rng: any RandomNumberGenerator
     init(rng: any RandomNumberGenerator = SystemRandomNumberGenerator()) {
@@ -36,12 +48,26 @@ final class StandIns {
     /// year, the last four digits from the number they end.
     static let derived: Set<String> = ["AGE", "LAST_DIGITS"]
     func replace(_ entity: String, _ original: String, persona: Persona? = nil, address: AddressParts? = nil) -> String {
+        let fake = drawn(entity, original, persona: persona, address: address)
+        // "ODALYS@KESTREL.EXAMPLE" is the same address as in lowercase, and keeps its capitals.
+        if entity == "EMAIL_ADDRESS", original.contains(where: \.isLetter), original == original.uppercased() { return fake.uppercased() }
+        return fake
+    }
+    /// A username or an email's local part, and the stand-in each took: "user
+    /// quillpen77" beside "quillpen77@marrowmail.example" is one account.
+    private var handles: [String: String] = [:]
+    private func drawn(_ entity: String, _ original: String, persona: Persona?, address: AddressParts?) -> String {
         let actual = entity == "LOCATION" && people.knows(original) ? "PERSON" : entity
         if actual == "AGE" { return age(original) }
-        let plain = actual + "\u{0}" + original
+        // An email is the same address however it is capitalised.
+        let plain = actual + "\u{0}" + (actual == "EMAIL_ADDRESS" ? original.lowercased() : original)
         let placed = Self.placed.contains(actual) && (actual != "ADDRESS" || AddressParts.line(original) != nil)
         // Found again elsewhere, a part keeps the stand-in its address gave it.
         if address == nil, placed || Self.local.contains(actual), let found = assigned[plain] { return found }
+        // One line wherever it is written: a number takes the area code of the
+        // first address it is near, and an extension too short to have one
+        // ("x81656") stays the same beside the next.
+        if actual == "PHONE_NUMBER", let found = assigned[plain] { return found }
         // A one-line address is placed by its own parts: the city it names, not a state beside it.
         var parts = address ?? Self.lone(actual, original)
         if ["ADDRESS", "LOCATION"].contains(actual), let own = AddressParts.line(original)?.parts, own.city != nil {
@@ -58,27 +84,50 @@ final class StandIns {
         let stableEmail = actual == "EMAIL_ADDRESS" && (persona != nil || people.find(email: original) != nil)
         if !stablePerson && !stableEmail, let found = assigned[key] { return found }
         var fake = "[\(actual)]"
-        let sameDigits = digitKey(actual, original).flatMap { assigned[$0] }.flatMap { pour($0, into: original) }
+        // A bare number that the document also writes as a phone number
+        // ("4158672290" beside "(415) 867-2290") is that phone, and takes its stand-in.
+        let digitKind = actual == "ID_NUMBER" && phones.contains(normalized("PHONE_NUMBER", original)) ? "PHONE_NUMBER" : actual
+        let sameDigits = digitKey(digitKind, original).flatMap { assigned[$0] }.flatMap { pour($0, into: original) }
         for attempt in 0..<8 {
-            let candidate = attempt == 0 ? sameDigits ?? make(actual, original, persona, place) : make(actual, original, persona, place)
+            // A number a bare "last4" ends keeps its fourth-last digit off zero, before
+            // it is judged: the ending it is judged by is the one written.
+            let candidate = barelyEnding(actual, original, attempt == 0 ? sameDigits ?? make(digitKind, original, persona, place) : make(digitKind, original, persona, place))
             // A persona's name is fixed; only a fresh value can be drawn again.
             // A part of a stand-in place may match someone else's real one: a state code or ZIP names no one.
             let free = place != nil && ["REGION", "POSTAL_CODE", "TIME_ZONE", "LATITUDE", "LONGITUDE"].contains(actual) && candidate.caseInsensitiveCompare(original) != .orderedSame
                 // Initials read off the stand-in name are right even where they happen to match.
                 || actual == "INITIALS" && persona != nil
             if keepsEnding(actual, candidate, original) { continue }
+            // Digits the same number already has elsewhere stay as they are.
+            if attempt > 0 || sameDigits == nil, endsAsAnOriginal(actual, candidate) { continue }
             if free || unused(candidate, original) || attempt >= 2 && stablePerson && candidate.caseInsensitiveCompare(original) != .orderedSame {
                 fake = candidate; break
             }
         }
-        fake = barelyEnding(actual, original, fake)
         if !stablePerson && !stableEmail {
             assigned[key] = fake
             if assigned[plain] == nil { assigned[plain] = fake }
         }
         remember(actual, original, fake)
-        if let digitKey = digitKey(actual, original), assigned[digitKey] == nil { assigned[digitKey] = normalized(actual, fake) }
+        if let digitKey = digitKey(digitKind, original), assigned[digitKey] == nil { assigned[digitKey] = normalized(digitKind, fake) }
+        if !original.contains("@"), ["USERNAME", "EMAIL_ADDRESS"].contains(actual), let local = handleKey(original), handles[local] == nil {
+            handles[local] = fake
+        } else if actual == "EMAIL_ADDRESS", let local = handleKey(String(original.prefix { $0 != "@" })), handles[local] == nil, let made = fake.split(separator: "@").first {
+            handles[local] = String(made)
+        }
         return fake
+    }
+    /// A handle worth matching between a username and an email: four letters
+    /// or digits or more, and at least one letter.
+    private func handleKey(_ value: String) -> String? {
+        let key = value.lowercased()
+        return key.filter({ $0.isLetter || $0.isNumber }).count >= 4 && key.contains(where: \.isLetter) ? key : nil
+    }
+    /// The digits of every phone number found, as `normalized` writes them.
+    private var phones: Set<String> = []
+    func notePhone(_ original: String) {
+        let digits = normalized("PHONE_NUMBER", original)
+        if digits.count >= 10, !Self.isMasked(original) { phones.insert(digits) }
     }
     /// One number written two ways ("536-21-7784", "536217784", 536217784)
     /// keeps one stand-in, each in its own layout.
@@ -102,6 +151,12 @@ final class StandIns {
     /// Birth years and number endings already replaced, so "birth_year",
     /// "age" and "ssn_last4" can agree with the stand-ins they come from.
     private var years: [Int: Int] = [:]
+    /// The birth years in `years`, in the order first met, so an age as close
+    /// to two of them goes by the first, whatever order a dictionary keeps.
+    private var yearOrder: [Int] = []
+    /// The year a job runs in, read once: a job that runs over New Year moves
+    /// every birth year and age by the same rule.
+    private let now = Calendar(identifier: .gregorian).component(.year, from: Date())
     private var endings: [String: String] = [:]
     private var phoneEndings: Set<String> = []
     /// Last four digits written as a bare number ("ssn_last4": 7784) can't
@@ -138,7 +193,6 @@ final class StandIns {
     /// one, close enough that an age bracket or age estimate beside it still reads true.
     private func year(for original: Int) -> Int {
         if let known = years[original] { return known }
-        let now = Calendar(identifier: .gregorian).component(.year, from: Date())
         func draw() -> Int {
             let shift = Int.random(in: 1...8, using: &rng) * (Bool.random(using: &rng) ? 1 : -1)
             return (1900...now).contains(original + shift) ? original + shift : original - shift
@@ -146,15 +200,16 @@ final class StandIns {
         var fake = draw()
         for _ in 0..<8 where fake == original || years.values.contains(fake) { fake = draw() }
         years[original] = fake
+        yearOrder.append(original)
         return fake
     }
     /// An age moved by as many years as the birth year it matches. With no
     /// birth date in the document it tells nothing and stays.
     private func age(_ original: String) -> String {
         guard let age = Int(original.trimmingCharacters(in: .whitespaces)) else { return original }
-        let now = Calendar(identifier: .gregorian).component(.year, from: Date())
-        let matches = years.filter { abs((now - $0.key) - age) <= 1 }
-        guard let (real, fake) = matches.min(by: { abs((now - $0.key) - age) < abs((now - $1.key) - age) }) else { return original }
+        let distance = { (year: Int) in abs((self.now - year) - age) }
+        // The first-met of the closest: `min` keeps the first of equals.
+        guard let real = yearOrder.filter({ distance($0) <= 1 }).min(by: { distance($0) < distance($1) }), let fake = years[real] else { return original }
         return original.replacingOccurrences(of: String(age), with: String(max(0, min(120, age + real - fake))))
     }
     /// The last four digits of a number the document also holds in full take
@@ -326,18 +381,241 @@ final class StandIns {
             }
             // A mail stop or room code beside the street ("EB3880D") keeps its shape.
             else if !piece.contains(" "), piece.contains(where: \.isNumber), piece.contains(where: \.isLetter) { written = unit(piece) ?? idLike(piece) }
-            else { written = unit(piece) ?? street(like: piece) }
+            // "624, chemin des Chênes": a house number on its own, a street named as another language does.
+            else if piece.allSatisfy(\.isNumber) { written = renumbered(piece) }
+            else if AddressBlock.isStreet(piece), !piece.first!.isNumber { written = foreignStreet(like: piece, country: parts.country.flatMap(AddressBlock.countryName) ?? Places.country(city: parts.city, region: parts.region, postal: parts.postal, country: nil)) }
+            else { written = unit(piece) ?? (AddressBlock.isUnit(piece) ? renumbered(piece) : street(like: piece)) }
             return written + (index < parsed.pieces.count - 1 ? separators.next() ?? ", " : "")
         }.joined() + (original.hasSuffix(".") ? "." : "")
     }
-    private static let suffixes: Set<String> = ["st", "street", "rd", "road", "ave", "av", "avenue", "blvd", "boulevard", "dr", "drive", "ln", "lane", "ct", "court", "way", "pl", "place", "pkwy", "parkway", "ter", "terrace", "cir", "circle", "hwy", "highway", "trl", "trail", "loop", "sq", "square"]
+    /// An address `AddressParts.line` cannot read, rewritten piece by piece in
+    /// its own layout (see `AddressBlock`). Its locality comes from one real
+    /// place: in the US, Canada, the UK and Australia from `Places`, so the
+    /// city, region and postcode agree; elsewhere from a short list of cities
+    /// of the same country. Where no country is clear, the city is drawn as
+    /// any other place's and the postcode keeps its shape.
+    private func block(_ original: String, _ parsed: AddressBlock) -> String {
+        let main = parsed.main
+        var place: Place?
+        if let country = parsed.country, ["US", "CA", "GB", "AU"].contains(country), let main {
+            // A postcode no stand-in place can be written like still leaves the city and region to place it.
+            place = self.place(for: AddressParts(city: main.city, region: main.region, postal: main.postal, country: country))
+                ?? self.place(for: AddressParts(city: main.city ?? main.postal, region: main.region, postal: nil, country: country))
+        }
+        let cities = parsed.localities.compactMap(\.locality.city)
+        let abroad = place == nil ? parsed.country.flatMap { abroadCity(country: $0, original: main?.city ?? main?.postal ?? original, besides: cities) } : nil
+        let localities = Dictionary(uniqueKeysWithValues: parsed.localities.map { ($0.index, $0.locality) })
+        var separators = parsed.separators.makeIterator()
+        return parsed.pieces.enumerated().map { index, piece in
+            let written: String
+            switch parsed.roles[index] {
+            case .country: written = piece
+            // "Apt 4B" takes another number; "Ground Floor" or "bajo" names no one and stays.
+            case .unit: written = unit(piece) ?? renumbered(piece)
+            case .street:
+                let trimmed = piece.trimmingCharacters(in: .whitespaces)
+                written = trimmed.allSatisfy(\.isNumber) ? renumbered(piece)
+                    : Self.english(parsed.country) && trimmed.first?.isNumber == true ? street(like: piece) : foreignStreet(like: piece, country: parsed.country)
+            case .locality: written = locality(piece, localities[index] ?? AddressBlock.Locality(), place: place, abroad: abroad)
+            case .place:
+                let trimmed = piece.trimmingCharacters(in: .whitespaces)
+                // A region's code on a line of its own ("CDMX") stays, or takes the stand-in city's.
+                written = trimmed.count <= 4 && trimmed == trimmed.uppercased() ? (abroad?.region ?? piece) : placeName(like: piece, country: parsed.country)
+            }
+            return written + (index < parsed.pieces.count - 1 ? separators.next() ?? ", " : "")
+        }.joined()
+    }
+
+    private static func english(_ country: String?) -> Bool { country.map { ["US", "CA", "GB", "AU", "NZ", "IE", "ZA", "IN", "SG"].contains($0) } ?? true }
+
+    /// Its digits drawn afresh, the rest as written: "3º Esq." → "7º Esq.".
+    private func renumbered(_ original: String) -> String {
+        // "12th Floor" → "7th Floor": an ordinal keeps its ending.
+        if let match = original.range(of: #"^\d+(?=th\b)"#, options: .regularExpression) {
+            return String(Int.random(in: 4...19, using: &rng)) + original[match.upperBound...]
+        }
+        if original.range(of: #"^\d+(?:st|nd|rd)\b"#, options: .regularExpression) != nil { return String(Int.random(in: 4...19, using: &rng)) + "th" + original.drop { $0.isNumber }.dropFirst(2) }
+        let lead = original.firstIndex(where: \.isNumber)
+        return String(original.indices.map { index in original[index].isNumber ? Character(digit(index == lead)) : original[index] })
+    }
+
+    /// A locality piece with its postcode, city and region rewritten where they stand.
+    private func locality(_ piece: String, _ parts: AddressBlock.Locality, place: Place?, abroad: Places.Abroad?) -> String {
+        var result = piece
+        func swap(_ old: String?, _ new: String?) {
+            guard let old, let new, let range = result.range(of: old) else { return }
+            result.replaceSubrange(range, with: new)
+        }
+        if let place {
+            swap(parts.postal, parts.postal.map { postal(of: place, like: $0, bare: false) != nil ? placedPostal(place, $0, bare: false) : anyPostal(of: place, like: $0) })
+            swap(parts.region, parts.region.map { Places.write(place, like: $0) })
+            swap(parts.city, parts.city.map { city(of: place, like: $0) })
+        } else if let abroad {
+            swap(parts.postal, parts.postal.map { postal in
+                abroad.postal(like: postal, digit: { self.digit() }, letter: { self.pick(Array("ACDEFHKNPRTVWXY")) ?? "A" })
+            })
+            swap(parts.region, parts.region.map { abroad.region ?? $0 })
+            swap(parts.city, parts.city.map { $0 == $0.uppercased() ? abroad.city.uppercased() : abroad.city })
+        } else {
+            swap(parts.postal, parts.postal.map { idLike($0) })
+            swap(parts.city, parts.city.map { city in
+                let fake = pick(Names.cities.filter { !originals.contains($0.lowercased()) }) ?? "Austin"
+                return city == city.uppercased() ? fake.uppercased() : fake
+            })
+        }
+        return result
+    }
+
+    /// A postcode of the place in its own country's layout, for an original
+    /// no code of the place shares a shape with ("CF10 1EP" when the place has only "LS6").
+    private func anyPostal(of place: Place, like original: String) -> String {
+        let code = pick(place.postal) ?? ""
+        let spaced = original.contains(" ")
+        switch place.country {
+        case "GB": return code + (spaced ? " " : "") + digit() + String(pick(Array("ABDEFGHJLNPQRSTUWXYZ")) ?? "A") + String(pick(Array("ABDEFGHJLNPQRSTUWXYZ")) ?? "B")
+        case "CA": return code + (spaced ? " " : "") + digit() + String(pick(Array("ABCEGHJKLMNPRSTVWXYZ")) ?? "A") + digit()
+        default: return code
+        }
+    }
+
+    /// One city per original locality, of the same country.
+    private var abroadCities: [String: Places.Abroad] = [:]
+    private func abroadCity(country: String, original: String, besides: [String] = []) -> Places.Abroad? {
+        let key = country + "\u{0}" + original.lowercased()
+        if let known = abroadCities[key] { return known }
+        let taken = Set(abroadCities.values.map(\.city))
+        // Not the same city under another district: "København N" never becomes "København K", nor "Dublin 24" "Dublin".
+        let stems = ([original] + besides).map { $0.lowercased().split(separator: " ").first.map(String.init) ?? $0.lowercased() }
+        let candidates = Places.abroad.filter { place in
+            place.country == country && !originals.contains(place.city.lowercased()) && !original.lowercased().hasPrefix(place.city.lowercased())
+                && !stems.contains { place.city.lowercased().hasPrefix($0) }
+        }
+        // A city that is its country ("Singapore") stays itself; its postcode still changes.
+        let own = Places.abroad.first { $0.country == country && original.lowercased().hasPrefix($0.city.lowercased()) && Places.abroad.filter { $0.country == country }.count == 1 }
+        guard let chosen = pick(candidates.filter { !taken.contains($0.city) }) ?? pick(candidates) ?? own else { return nil }
+        abroadCities[key] = chosen
+        return chosen
+    }
+
+    /// The words a stand-in street or district of a country is named with, or
+    /// nil where English ones read right.
+    private func names(for country: String?) -> [String] {
+        let pool = country.flatMap { Places.streetWords[$0] } ?? Names.streets
+        return pool.filter { !originals.contains($0.lowercased()) }
+    }
+
+    /// A street in a layout of its own country, "Lindenhofer Straße 48a" →
+    /// "Ahorner Straße 12", "Calle de las Hiedras 27" → "Calle de las Rosales 61":
+    /// its numbers keep their length, its kind of street and every lowercase
+    /// word ("de la", "ul.", "m.") stay, and its capitalised name becomes another.
+    private func foreignStreet(like original: String, country: String?) -> String {
+        let key = "STREET\u{0}" + original.lowercased()
+        if let known = assigned[key] { return known }
+        let pool = names(for: country).filter { !original.lowercased().contains($0.lowercased()) }
+        // "de l'Ardoise": the elided article stays, the name after it is the name.
+        var words: [String] = []
+        for word in original.split(separator: " ", omittingEmptySubsequences: false).map(String.init) {
+            if let match = word.range(of: #"^\p{Ll}{1,2}['’](?=\p{Lu})"#, options: .regularExpression) {
+                words.append(String(word[match])); words.append("\u{1}" + String(word[match.upperBound...]))
+            } else { words.append(word) }
+        }
+        func bare(_ word: String) -> String { word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".,\u{1}")) }
+        func capital(_ word: String) -> Bool {
+            let text = word.trimmingCharacters(in: CharacterSet(charactersIn: "\u{1}"))
+            return text.first.map { $0.isLetter && $0.isUppercase } == true && !text.contains(where: \.isNumber) && !AddressBlock.streetKinds.contains(bare(text)) && !AddressBlock.englishKinds.contains(bare(text))
+        }
+        // Each name is a run of capitalised words with the small joining words inside it
+        // ("Calçada do Mirante"); every run takes another name.
+        var index = 0, used: [String] = []
+        while index < words.count {
+            guard capital(words[index]) else { index += 1; continue }
+            var last = index, next = index + 1
+            while next < words.count, !words[next].contains(where: \.isNumber), !AddressBlock.streetKinds.contains(bare(words[next])), !AddressBlock.englishKinds.contains(bare(words[next])) {
+                if capital(words[next]) { last = next } else if words[next].first?.isLowercase != true { break }
+                next += 1
+            }
+            let name = pick(pool.filter { !used.contains($0) }) ?? pick(pool) ?? "Linden"
+            used.append(name)
+            let ending = bare(words[last])
+            var made = name
+            if let suffix = AddressBlock.streetSuffixes.first(where: { ending.hasSuffix($0) && ending.count > $0.count + 2 }) {
+                made += String(words[last].suffix(suffix.count))
+            } else if last + 1 < words.count, ["straße", "strasse", "weg", "platz", "allee", "gasse", "ring", "damm"].contains(bare(words[last + 1])), ["DE", "AT", "CH"].contains(country ?? "") {
+                // "Lindenhofer Straße" → "Ahornstraße".
+                made += words[last + 1].lowercased()
+                words.remove(at: last + 1)
+            }
+            let first = words[index].trimmingCharacters(in: CharacterSet(charactersIn: "\u{1}"))
+            if first == first.uppercased() && first.count > 1 { made = made.uppercased() }
+            words.replaceSubrange(index...last, with: [(words[index].hasPrefix("\u{1}") ? "\u{1}" : "") + made])
+            index += 1
+        }
+        var fake = ""
+        for word in words {
+            let text = word.contains(where: \.isNumber) ? renumbered(word) : word
+            if text.hasPrefix("\u{1}") { fake += String(text.dropFirst()) } else { fake += (fake.isEmpty || fake.hasSuffix("'") || fake.hasSuffix("’") && false ? "" : " ") + text }
+        }
+        fake = fake.hasPrefix(" ") ? String(fake.dropFirst()) : fake
+        assigned[key] = fake
+        return fake
+    }
+
+    /// A district, county, building or street name without a number: another
+    /// of the same kind ("Corrib House" → "Maple House", "Wexley Lane" → "Cedar Lane").
+    private func placeName(like original: String, country: String?) -> String {
+        let key = "PLACE\u{0}" + original.lowercased()
+        if let known = assigned[key] { return known }
+        let trimmed = original.trimmingCharacters(in: .whitespaces)
+        let words = trimmed.split(separator: " ").map(String.init)
+        let name = pick(names(for: country).filter { !trimmed.lowercased().contains($0.lowercased()) }) ?? "Linden"
+        let fake: String
+        if AddressBlock.isStreet(trimmed) {
+            fake = foreignStreet(like: trimmed, country: country)
+        } else if let last = words.last, words.count > 1, Self.buildingWords.contains(last.lowercased()) || Self.suffixes.contains(last.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) {
+            fake = (words.first?.lowercased() == "the" ? "The " : "") + name + " " + last
+        } else if let first = words.first, words.count > 1, ["co.", "co", "county"].contains(first.lowercased()) {
+            fake = first + " " + (pick(Self.counties.filter { !trimmed.contains($0) }) ?? "Clare")
+        } else if let first = words.first, words.count > 1, first.hasSuffix("."), first.count <= 5 {
+            fake = first + " " + name
+        } else if words.first?.lowercased() == "the" {
+            fake = "The " + name + " " + (pick(["House", "Lodge", "Cottage", "Barn"]) ?? "House")
+        } else if Self.english(country) {
+            fake = name + (pick(["field", "wood", "ford", "dale", "brook", "ton", "bury", "ley"]) ?? "field")
+        } else {
+            fake = name
+        }
+        let written = trimmed == trimmed.uppercased() && trimmed.count > 1 ? fake.uppercased() : fake
+        assigned[key] = written
+        return written
+    }
+    private static let buildingWords: Set<String> = ["house", "court", "lodge", "cottage", "mansions", "building", "point", "tower", "hall", "barn", "farm", "works", "mill", "place", "wharf",
+                                                     "apartments", "residency", "towers", "enclave", "heights", "complex", "plaza", "centre", "center", "hub", "residences", "suites", "yard",
+                                                     "forge", "granary", "rectory", "chambers", "studios", "park"]
+    private static let counties = ["Clare", "Kerry", "Mayo", "Sligo", "Wexford", "Kildare", "Meath", "Offaly", "Laois", "Louth"]
+    private static let suffixes: Set<String> = ["st", "street", "rd", "road", "ave", "av", "avenue", "blvd", "boulevard", "dr", "drive", "ln", "lane", "ct", "court", "way", "pl", "place", "pkwy", "parkway", "ter", "terrace", "cir", "circle", "hwy", "highway", "trl", "trail", "loop", "sq", "square",
+                                                "close", "cl", "crescent", "cres", "gardens", "gdns", "grove", "gr", "mews", "rise", "row", "walk", "parade", "pde", "tce", "view", "green", "vale", "hill",
+                                                "fields", "meadows", "gate", "end", "chase", "wharf", "esplanade", "esp", "circuit", "cct", "quay", "yard", "path", "pike", "run", "alley", "bvd"]
     /// A street written as the original is: its house number's length and its
     /// kind of street, "4821 Juniper Hollow Rd" → "3907 Maple Rd". The same
     /// street gets the same stand-in, on its own line or in a full address.
     private func street(like original: String) -> String {
         let key = "STREET\u{0}" + original.lowercased()
         if let known = assigned[key] { return known }
+        // A unit before the house number stays one: "1406 - 2280 Kessler Crescent", "4/12 Smith St".
+        if let match = original.range(of: #"^\d+[A-Za-z]?\s*[-/]\s*(?=\d)"#, options: .regularExpression) {
+            let fake = renumbered(String(original[match])) + street(like: String(original[match.upperBound...]))
+            assigned[key] = fake
+            return fake
+        }
         let words = original.split(separator: " ")
+        // "5th Cross Road" → "7th Maple Road".
+        if let first = words.first, first.range(of: #"^\d+(?:st|nd|rd|th)$"#, options: .regularExpression) != nil, words.count > 1 {
+            let kind = Self.suffixes.contains(words.last!.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) ? String(words.last!) : "Street"
+            let name = pick(Names.streets.filter { !originals.contains($0.lowercased()) && !original.lowercased().contains($0.lowercased()) }) ?? "Main"
+            let fake = renumbered(String(first)) + " " + name + " " + kind
+            assigned[key] = fake
+            return fake
+        }
         let number = words.first.map { $0.allSatisfy(\.isNumber) ? $0.count : 0 } ?? 0
         let last = words.count > 1 ? words.last.map(String.init) : nil
         let kind = last.flatMap { Self.suffixes.contains($0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) ? $0 : nil } ?? "Street"
@@ -403,14 +681,17 @@ final class StandIns {
         let trimmed = original.trimmingCharacters(in: .whitespaces)
         if trimmed.hasPrefix("#"), trimmed.count <= 6 { return "#" + idLike(String(trimmed.dropFirst())) }
         let words = trimmed.split(whereSeparator: { $0 == " " || $0 == "." })
-        if let first = words.first, Self.units.contains(first.lowercased()), words.count <= 3 {
+        // "Apt 2B", "Suite B", "Flat 3"; not "Top Floor", whose last word is no number.
+        if let first = words.first, Self.units.contains(first.lowercased()), words.count <= 3, trimmed.contains(where: \.isNumber) || words.count == 1 || words.last!.count <= 2 {
             let number = words.count > 1 ? idLike(String(words.last!)) : digits(2)
             return String(trimmed.prefix(trimmed.count - (words.count > 1 ? words.last!.count : 0))) + (words.count > 1 ? number : " " + number)
         }
         if Self.boxes.contains(where: trimmed.lowercased().hasPrefix) {
-            // The box's own number, not the postcode after it ("PO Box 4324, Halifax NS B3J 2K9").
-            guard let number = trimmed.range(of: #"\d+"#, options: .regularExpression) else { return nil }
-            return trimmed.replacingCharacters(in: number, with: digits(trimmed.distance(from: number.lowerBound, to: number.upperBound)))
+            // The box's own number, not the postcode after it ("PO Box 4324, Halifax NS B3J 2K9");
+            // all of it where it is written in groups ("Postfach 12 03 44").
+            guard let number = trimmed.range(of: #"\d[\d ]*\d|\d"#, options: .regularExpression) else { return nil }
+            let lead = trimmed[number].first.map { $0 != "0" } ?? true
+            return trimmed.replacingCharacters(in: number, with: String(trimmed[number].enumerated().map { index, char in char.isNumber ? Character(digit(index == 0 && lead)) : char }))
         }
         return nil
     }
@@ -487,8 +768,10 @@ final class StandIns {
         return kept
     }
     /// A post office box keeps its kind and the length of its number.
-    private static let boxes = ["po box", "p.o. box", "p.o.box", "p o box", "post office box", "postfach", "apartado", "private bag"]
-    private static let units: Set<String> = ["apt", "apartment", "suite", "ste", "unit", "floor", "fl", "room", "rm", "bldg", "building", "#"]
+    private static let boxes = ["po box", "p.o. box", "p.o.box", "p o box", "post office box", "postfach", "apartado", "private bag", "gpo box", "locked bag", "postbus", "postboks",
+                                "bp ", "b.p. ", "cs ", "casella postale", "caixa postal", "box ", "c.p. ", "cp "]
+    private static let units: Set<String> = ["apt", "apartment", "suite", "ste", "unit", "floor", "fl", "room", "rm", "bldg", "building", "#", "flat", "level", "lvl", "shop", "lot",
+                                             "pmb", "blk", "block", "top", "wohnung", "appt", "apto", "piso", "bureau", "sala", "bloco", "depto", "int", "escalier", "bâtiment", "plot"]
     private static let digitsOnly: Set<String> = ["PHONE_NUMBER", "US_SSN", "ID_NUMBER", "POSTAL_CODE", "US_BANK_NUMBER", "US_PASSPORT", "US_DRIVER_LICENSE", "US_ITIN", "MEDICAL_LICENSE"]
     private func make(_ entity: String, _ original: String, _ persona: Persona?, _ place: Place? = nil) -> String {
         if let masked = ["US_SSN", "CREDIT_CARD", "PHONE_NUMBER", "US_BANK_NUMBER", "ID_NUMBER", "LAST_DIGITS"].contains(entity) ? masked(original) : nil { return masked }
@@ -534,13 +817,20 @@ final class StandIns {
         case "LAST_NAME": return (persona ?? people.register(nil, original)).last
         case "EMAIL_ADDRESS":
             if let owner = persona ?? people.find(email: original), original.contains("@") { return people.email(for: owner, original: original) }
+            if let local = handleKey(String(original.prefix { $0 != "@" })), let handle = handles[local], original.contains("@") {
+                return handle.lowercased() + "@" + (pick(Names.emailDomains) ?? "example.com")
+            }
             return "\(people.unrelatedName(first: true).lowercased()).\(people.unrelatedName(first: false).lowercased())@\(pick(Names.emailDomains) ?? "example.com")"
         case "LOCATION": return pick(Names.cities.filter { !originals.contains($0.lowercased()) }) ?? "Austin"
         case "REGION": return pick(Places.regions.filter { $0.country == "US" && !originals.contains($0.code.lowercased()) && !originals.contains($0.name.lowercased()) }).map { original.count > 3 ? $0.name : $0.code } ?? "TX"
         case "ADDRESS":
+            // "PO Box 7712, Halifax NS B3K 5M2" is a box and a locality, each rewritten.
+            if let parsed = AddressBlock.read(original), parsed.pieces.count > 1 { return block(original, parsed) }
             if let unit = unit(original) { return unit }
             // A short code on its own ("4B", "12") keeps its shape.
             if !original.contains(" "), original.count <= 6, original.contains(where: \.isNumber) { return idLike(original) }
+            // A street written as another country writes one keeps its layout.
+            if let parsed = AddressBlock.read(original), !Self.english(parsed.country) { return block(original, parsed) }
             return street(like: original)
         case "INITIALS":
             let letters = persona.map { [$0.first.first, $0.last.first].compactMap { $0 } } ?? []
@@ -571,7 +861,10 @@ final class StandIns {
         case "MEDICAL_LICENSE": return "AB" + digits(6)
         case "CRYPTO": return "bc1q" + (0..<38).map { _ in String(pick(Array("023456789acdefghjklmnpqrstuvwxyz")) ?? "a") }.joined()
         case "USERNAME":
-            if let persona, let handle = people.handle(for: persona, original: original, digits: { self.digits($0) }) { return handle }
+            // "@odalysf" keeps its at sign.
+            if original.hasPrefix("@"), original.count > 1 { return "@" + make(entity, String(original.dropFirst()), persona, place) }
+            if let owner = persona ?? people.find(handle: original), let handle = people.handle(for: owner, original: original, digits: { self.digits($0) }) { return handle }
+            if let key = handleKey(original), let handle = handles[key] { return handle }
             return people.unrelatedName(first: true).lowercased() + digits(3)
         case "SECRET":
             // A CVV, PIN or one-time code stays a short number.

@@ -20,11 +20,16 @@ enum NameTagger {
         let nextWord = TextRanges.matches(leadingWord, in: following).first.map {
             TextRanges.substring(following, $0.range.location..<NSMaxRange($0.range)).trimmingCharacters(in: .whitespaces).lowercased()
         }
-        let run = following.split(separator: " ", omittingEmptySubsequences: true).prefix(4).prefix { word in
+        // The run stops at the line's end; "L.L.C." and "Inc." read as "llc" and "inc".
+        let line = following.prefix { !$0.isNewline }
+        let run = line.split(whereSeparator: \.isWhitespace).prefix(4).prefix { word in
             word.first?.isUppercase == true || ["&", "and", "of"].contains(word.lowercased())
         }
-        return namesOrganisation(TextRanges.substring(text, range)) || nextWord.map({ organisationWords.contains($0) }) == true
-            || run.contains(where: { organisationWords.contains($0.lowercased().trimmingCharacters(in: .punctuationCharacters)) })
+        // After a comma only a legal suffix continues the name ("Tamsley II, L.L.C."):
+        // "Ms Lind, Home Office" is a person and her employer.
+        let suffixed = line.range(of: #"^(?:[ \t]+[IVX]{1,3}|[ \t]+[A-Z])?,[ \t]*(?i:l\.?l\.?c|inc|ltd|corp|co|plc|gmbh|l\.?l\.?p|l\.?p|limited|incorporated)\b"#, options: .regularExpression) != nil
+        return namesOrganisation(TextRanges.substring(text, range)) || nextWord.map({ organisationWords.contains($0) }) == true || suffixed
+            || run.contains(where: { organisationWords.contains($0.lowercased().filter(\.isLetter)) })
     }
     /// Person and place names in `text`. What the tagger reads as an
     /// organisation goes into `organisations`, so a guess made elsewhere
@@ -92,6 +97,9 @@ enum NameTagger {
             var mapped = lower..<upper
             if partOfOrganisation(mapped, in: original) { return true }
             if tag == .personalName { mapped = trimmedToWrittenCapitals(mapped, in: original) }
+            // A name is a word of its own. The tagger splits "Qz7m9rx5l1ba2ms6" at
+            // its digits and can call "Qz" a name; that is the head of a token.
+            if glued(mapped, in: original) { return true }
             if tag == .personalName {
                 let value = TextRanges.substring(original, mapped)
                 let tokens = TextRanges.matches(asciiWord, in: value)
@@ -118,6 +126,15 @@ enum NameTagger {
             return true
         }
         return result
+    }
+    /// Whether a letter or digit runs straight into either end of `range`.
+    static func glued(_ range: Range<Int>, in text: String) -> Bool {
+        let ns = text as NSString
+        func alphanumeric(_ index: Int) -> Bool {
+            guard index >= 0, index < ns.length, let scalar = Unicode.Scalar(ns.character(at: index)) else { return false }
+            return CharacterSet.alphanumerics.contains(scalar)
+        }
+        return !range.isEmpty && (alphanumeric(range.lowerBound - 1) || alphanumeric(range.upperBound))
     }
     // The model sometimes joins the next word into a name ("Ana Pereira
     // called"). When the writer capitalised some of the name, the words they

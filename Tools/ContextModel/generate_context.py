@@ -65,6 +65,15 @@ ID_TEMPLATES = ["my {l} is {v}", "{L}: {v}", "{l} {v}", "Can you update the {l} 
                 "{L} #{v}", "the caller gave {l} {v} to verify", "{L} = {v}", "her {l} ({v}) does not match", "confirm {l}: {v}?"]
 ID_BARE = ["re-check record {v} before Friday", "{v} matched two people in the import", "duplicate: {v} appears in both files",
            "please anonymise {v} in the export", "{v} belongs to the caller from this morning"]
+# A case, claim or file someone brought, cited by its number: the number is theirs.
+REF_LABELS = ["application", "complaint", "claim", "appeal", "petition", "case file", "file", "dossier", "grievance", "request"]
+REF_TEMPLATES = ["the {r} (no. {v}) was lodged last spring", "{w} lodged an {r} (no. {v}) against the council", "{R} no. {v} was joined to the others",
+                 "in {r} No. {v} the panel found a breach", "under {r} no. {v}, the hearing is set for May", "her {r}, no. {v}, is still pending",
+                 "{w} withdrew {r} no. {v}", "see the decision on {r} no. {v}", "{R} No. {v} ({w} v. the city) was struck out"]
+# Numbers of laws, articles, protocols and rules: everyone's, no one's own.
+NOT_REF = ["Article {r} § {s} of the Convention", "Protocol No. {s} to the treaty", "under Rule {r} of the rules of procedure",
+           "Law no. {n} on public assemblies", "Regulation (EU) {y}/{k} applies", "Directive {y}/{r}/EC was transposed late",
+           "Resolution {k}/{y} of the assembly", "section {r}({s}) of the Act", "paragraph {r} of the judgment", "Decree no. {n}/{y} was repealed"]
 NOT_ID = ["order #{n}", "invoice INV-{y}-{s}", "ticket {n}", "build {n} passed", "version {a}.{b}.{c}", "port {p}", "PR #{n}",
           "request_id={h}", "room {r}", "flight BA{s}", "SKU {sku}", "page {r} of {n}", "{n} items in stock", "batch {y}-{s}",
           "tracking number {track}"]
@@ -254,9 +263,17 @@ class Multi(g.Gen):
                                        "b": self.r.randint(0, 20), "c": self.r.randint(0, 30), "p": self.c([22, 443, 5432, 8080, 6379]),
                                        "h": self.hexs(12), "r": self.r.randint(1, 400), "sku": self.upper(3) + "-" + self.digits(5),
                                        "track": self.upper(2) + self.digits(9) + self.upper(2)})
-        elif roll < 0.85:
+        elif roll < 0.42:
+            fill(doc, self.c(NOT_REF), {"r": self.r.randint(1, 40), "s": self.r.randint(1, 4), "y": self.r.randint(1990, 2025),
+                                        "n": self.r.randint(100, 9999), "k": self.r.randint(1, 999)})
+        elif roll < 0.75:
             label = self.c(ID_LABELS)
             fill(doc, self.c(ID_TEMPLATES), {"l": label, "L": label[0].upper() + label[1:], "v": (self.id_value(), "ID")})
+        elif roll < 0.85:
+            ref = self.c(REF_LABELS)
+            value = self.c([lambda: f"{self.digits(self.r.randint(4, 5))}/{self.digits(2)}", lambda: f"{self.digits(self.r.randint(3, 6))}/{self.r.randint(1990, 2025)}",
+                            lambda: f"{self.upper(2)}-{self.digits(4)}/{self.digits(2)}", self.id_value])()
+            fill(doc, self.c(REF_TEMPLATES), {"r": ref, "R": ref[0].upper() + ref[1:], "v": (value, "ID"), "w": self.who()})
         else:
             fill(doc, self.c(ID_BARE), {"v": (self.id_value(), "ID")})
 

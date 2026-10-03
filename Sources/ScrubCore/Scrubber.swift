@@ -11,12 +11,16 @@ public enum Scrubber {
         progress(.starting, 1, 1)
         try checkCancellation()
         let job = seed.map { Job(seed: $0) } ?? Job()
+        let result: ScrubResult
         switch format {
-        case "json": return try JSONFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
-        case "xml": return try XMLFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
-        case "csv": return try CSVFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
-        default: return try TextFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
+        case "json": result = try JSONFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
+        case "xml": result = try XMLFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
+        case "csv": result = try CSVFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
+        default: result = try TextFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
         }
+        // Cancelling stops a scrub; it never hands back one that stopped looking partway.
+        try checkCancellation()
+        return result
     }
     public static func classify(_ data: Data, name: String) throws -> String {
         guard !data.isEmpty, !data.allSatisfy({ [9, 10, 11, 12, 13, 32].contains($0) }) else { throw ScrubError.unsupported("empty_file") }

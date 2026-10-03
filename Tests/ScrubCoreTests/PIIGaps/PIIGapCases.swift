@@ -17,10 +17,11 @@ enum PIIGapCategory: String, CaseIterable, Codable {
     case placesInProse, employersOfPeople, nonLatinNames, handlesInProse
     case datesNotBirths, labelsWithoutValues, secretWordsNotSecrets, yearsNotBirths, extensionLookAlikes, headersWithoutPeople, titlesWithoutPeople
     case companiesWithoutPeople, nonLatinNotNames
+    case worldAddresses, addressLookAlikes
 
     var isKeep: Bool {
         [.datesNotBirths, .labelsWithoutValues, .secretWordsNotSecrets, .yearsNotBirths, .extensionLookAlikes, .headersWithoutPeople, .titlesWithoutPeople,
-         .companiesWithoutPeople, .nonLatinNotNames].contains(self)
+         .companiesWithoutPeople, .nonLatinNotNames, .addressLookAlikes].contains(self)
     }
 
     /// The type a found value must be replaced as.
@@ -29,7 +30,7 @@ enum PIIGapCategory: String, CaseIterable, Codable {
         case .birthDates: "DATE_OF_BIRTH"
         case .labelledIDs: "ID_NUMBER"
         case .secretsInProse: "SECRET"
-        case .poBoxes, .stackedAddresses: "ADDRESS"
+        case .poBoxes, .stackedAddresses, .worldAddresses: "ADDRESS"
         case .birthYears: "DATE_OF_BIRTH"
         case .phoneExtensions: "PHONE_NUMBER"
         case .mailHeaders, .titledNames, .nonLatinNames: "PERSON"
@@ -64,6 +65,8 @@ enum PIIGapCategory: String, CaseIterable, Codable {
         case .handlesInProse: "A handle given in a sentence: discord, insta, slack"
         case .companiesWithoutPeople: "Companies named with no one working there (keep)"
         case .nonLatinNotNames: "Words in another script that name no one (keep)"
+        case .worldAddresses: "An address in another country's format, in a signature or a sentence"
+        case .addressLookAlikes: "Numbers beside capitalised words: versions, tickets, seats, counts (keep)"
         }
     }
 }
@@ -281,6 +284,41 @@ struct PIIGapCaseGen {
                 "Subtitle language: 한국어 only.",
                 "The shop sign reads 営業中 all night.",
                 "The caption said Καλημέρα with a sunrise.",
+            ])
+            return PIIGapCase(category: category, prose: prose, targets: [])
+        case .worldAddresses:
+            let stem = pick(["Pellow", "Wexley", "Quarrendon", "Tamsin", "Rookery", "Halloway", "Brackenfold", "Orrinvale", "Thornbury", "Kestrelwood"])
+            let number = String(n(2...240))
+            let (address, targets): (String, [String]) = pick([
+                ("\(number) \(stem) Gardens\nBristol BS6 \(n(1...9))QR", [stem, "Bristol", "BS6"]),
+                ("Flat \(n(1...12)), \(number) \(stem) Mews, Exeter EX4 \(n(1...9))QJ", [stem, "Exeter", "EX4"]),
+                ("\(stem)er Straße \(number)a\n70178 Stuttgart", [stem + "er", "70178", "Stuttgart"]),
+                ("\(stem)gracht \(number), 2312 BR Leiden", [stem + "gracht", "2312", "Leiden"]),
+                ("\(number) rue des \(stem)s, 44100 Nantes", [stem + "s", "44100", "Nantes"]),
+                ("Via dei \(stem) \(number), 50122 Firenze (FI)", [stem, "50122", "Firenze"]),
+                ("\(stem)vägen \(number), 752 36 Uppsala", [stem + "vägen", "Uppsala"]),
+                ("Unit \(n(1...20)), \(number) \(stem) Road\nCollingwood VIC 3066", [stem, "Collingwood", "3066"]),
+                ("ul. \(stem)owa \(number)/\(n(1...30)), 30-389 Kraków", [stem + "owa", "30-389", "Kraków"]),
+                ("Apartment \(n(1...40)), \(stem) House, \(number) Weir Lane, Galway, H91 X2T6", [stem, "Galway", "H91", "X2T6"]),
+            ])
+            let prose = pick([
+                "Kind regards,\n\(pick(Self.people))\n\(address)\nT: +44 113 496 0821",
+                "Please send the signed copy to \(address.replacingOccurrences(of: "\n", with: ", ")) — thanks!",
+                "Our new office is at \(address.replacingOccurrences(of: "\n", with: ", ")).",
+                "Ship to:\n\(address)",
+            ])
+            return PIIGapCase(category: category, prose: prose, targets: targets)
+        case .addressLookAlikes:
+            let prose = pick([
+                "Release \(n(1...9)).\(n(0...20)).\(n(0...9)) adds \(n(2...30)) new Map Styles and 2 Street View modes.",
+                "Ticket #\(digits(5)) Priority High, assigned to Platform Team.",
+                "Seats \(n(1...30))A and \(n(1...30))B, Row \(n(1...40)), Stand C.",
+                "We ordered \(n(2...40)) Queen Beds and \(n(2...40)) King Size Pillows for the lodge.",
+                "Sprint \(n(1...40)) Planning: \(n(2...6)) Main Goals, \(n(3...21)) Story Points each.",
+                "Season \(n(1...9)) Episode \(n(1...22)) airs on Channel 5 at 21:00.",
+                "Meeting moved to \(n(9...17)):30 in Room \(n(1...9))B, Building \(n(1...6)).",
+                "Item \(n(1...9)), Lot \(n(10...400)): Edwardian Oak Bookcase, \(n(2...6)) Shelves.",
+                "Version \(n(1...12)).\(n(0...9)) Street Edition supports \(n(2...8)) Players.",
             ])
             return PIIGapCase(category: category, prose: prose, targets: [])
         case .yearsNotBirths:

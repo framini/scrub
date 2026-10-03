@@ -1,0 +1,2 @@
+# Development only: rebuilds Sources/ScrubCore/Resources/NameLists.txt. Nothing here ships in Scrub.
+# Python 3.12 or later, standard library only (urllib, zipfile, csv, hashlib). No packages to install.

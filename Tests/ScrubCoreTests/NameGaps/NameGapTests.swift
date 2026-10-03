@@ -11,7 +11,8 @@ import Testing
 /// The default run is fixed and guards `baseline.json`: no category may score
 /// lower than it did. SCRUB_GAPS_RECORD=1 rewrites the baseline after an
 /// improvement. SCRUB_GAPS_SEED and SCRUB_GAPS_CASES explore other corpora
-/// (the baseline is only checked on the default one). SCRUB_GAPS_DUMP=<path>
+/// (the baseline is only checked on the default one), and SCRUB_GAPS_SCORER=off
+/// the hand rules in place of the person scorer. SCRUB_GAPS_DUMP=<path>
 /// writes every case and its outcome as JSON lines.
 @Suite(.serialized)
 struct NameGaps {
@@ -40,10 +41,19 @@ struct NameGaps {
     }
 
     @Test func nameGaps() throws {
+        // SCRUB_GAPS_SCORER=off measures the hand rules in place of the person scorer.
+        if ProcessInfo.processInfo.environment["SCRUB_GAPS_SCORER"] == "off" {
+            try PersonScorer.$learned.withValue(false) { try measure() }
+        } else {
+            try measure()
+        }
+    }
+
+    private func measure() throws {
         let environment = ProcessInfo.processInfo.environment
         let seed = environment["SCRUB_GAPS_SEED"].flatMap(UInt64.init) ?? Self.defaultSeed
         let count = environment["SCRUB_GAPS_CASES"].flatMap(Int.init) ?? Self.defaultCases
-        let isDefault = seed == Self.defaultSeed && count == Self.defaultCases
+        let isDefault = seed == Self.defaultSeed && count == Self.defaultCases && environment["SCRUB_GAPS_SCORER"] == nil
         var outcomes: [Outcome] = []
         for (position, category) in GapCategory.allCases.enumerated() {
             var cases = GapCaseGen(seed: seed &+ UInt64(position) &* 100_003)

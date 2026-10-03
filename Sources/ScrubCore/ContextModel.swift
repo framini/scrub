@@ -11,12 +11,10 @@ import os
 /// both together.
 ///
 /// The weights ship as ordinary resource files, split in parts, and must hash
-/// to `checksum`. A missing or altered part leaves Scrub without the model:
-/// every other detector still runs, and the reason is logged.
+/// to their checksum in `ContextWeights`. A missing or altered part leaves
+/// Scrub without the model: every other detector still runs, and the reason is logged.
 final class ContextModel: Sendable {
-    static let shared: ContextModel? = load()
-    static let checksum = "7206a189c4d511dcd8325631bd0d94a492d823b56b670fc8f3fefc32b959fec1"
-    static let partCount = 2
+    static let shared: ContextModel? = load(ContextWeights.shipped)
     static let window = 128
     static let stride = 96
     private static let log = Logger(subsystem: "Scrub", category: "ContextModel")
@@ -49,17 +47,16 @@ final class ContextModel: Sendable {
         let norm2: (gain: [Float], bias: [Float])
     }
 
-    private static func load() -> ContextModel? {
-        guard let bundle = ModelResources.bundle else { log.error("Context model not loaded: resource bundle missing"); return nil }
+    private static func load(_ weights: ContextWeights) -> ContextModel? {
         var parts: [Data] = []
-        for index in 1...partCount {
-            guard let url = bundle.url(forResource: "ContextModel.\(index)", withExtension: "bin"), let part = try? Data(contentsOf: url, options: .alwaysMapped) else {
-                log.error("Context model not loaded: part \(index) of \(partCount) missing")
+        for index in 1...weights.parts {
+            guard let url = weights.url(part: index), let part = try? Data(contentsOf: url, options: .alwaysMapped) else {
+                log.error("Context model not loaded: part \(index) of \(weights.parts) missing")
                 return nil
             }
             parts.append(part)
         }
-        guard let data = verified(parts) else {
+        guard let data = verified(parts, weights: weights) else {
             log.error("Context model not loaded: its weights do not match the expected checksum")
             return nil
         }
@@ -67,9 +64,10 @@ final class ContextModel: Sendable {
         return model
     }
 
-    /// The parts joined in order, if they hash to `checksum`.
-    static func verified(_ parts: [Data], checksum: String = checksum) -> Data? {
-        guard parts.count == partCount else { return nil }
+    /// The parts joined in order, if they hash to the weights' checksum.
+    static func verified(_ parts: [Data], weights: ContextWeights = .shipped, checksum: String? = nil) -> Data? {
+        let checksum = checksum ?? weights.checksum
+        guard parts.count == weights.parts else { return nil }
         var data = Data(capacity: parts.reduce(0) { $0 + $1.count })
         for part in parts { data.append(part) }
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
@@ -131,15 +129,18 @@ final class ContextModel: Sendable {
                 }
             }
         }
-        vDSP_vadd(state, 1, position, 1, &state, 1, vDSP_Length(count * hidden))
+        // In place: passing an array as input and output copies it first, and
+        // a sum or product rounds once, so the result is the same.
+        state.withUnsafeMutableBufferPointer { into in vDSP_vadd(into.baseAddress!, 1, position, 1, into.baseAddress!, 1, vDSP_Length(count * hidden)) }
         normalize(&state, rows: count, embedNorm)
-        for layer in layers { apply(layer, to: &state, rows: count) }
+        var scratch = Scratch()
+        for layer in layers { apply(layer, to: &state, rows: count, scratch: &scratch) }
         var result = multiply(state, rows: count, inner: hidden, classifier, columns: labels.count)
         add(classifierBias, to: &result, rows: count)
         return result
     }
 
-    private func apply(_ layer: Layer, to state: inout [Float], rows: Int) {
+    private func apply(_ layer: Layer, to state: inout [Float], rows: Int, scratch: inout Scratch) {
         let width = hidden / heads
         var qkv = multiply(state, rows: rows, inner: hidden, layer.qkv, columns: 3 * hidden)
         add(layer.qkvBias, to: &qkv, rows: rows)
@@ -156,7 +157,7 @@ final class ContextModel: Sendable {
             }
             vDSP_mtrans(key, 1, &keyT, 1, vDSP_Length(width), vDSP_Length(rows))
             vDSP_mmul(query, 1, keyT, 1, &weights, 1, vDSP_Length(rows), vDSP_Length(rows), vDSP_Length(width))
-            vDSP_vsmul(weights, 1, &scale, &weights, 1, vDSP_Length(rows * rows))
+            weights.withUnsafeMutableBufferPointer { into in vDSP_vsmul(into.baseAddress!, 1, &scale, into.baseAddress!, 1, vDSP_Length(rows * rows)) }
             Self.softmax(&weights, rows: rows)
             vDSP_mmul(weights, 1, value, 1, &mixed, 1, vDSP_Length(rows), vDSP_Length(width), vDSP_Length(rows))
             context.withUnsafeMutableBufferPointer { into in
@@ -165,21 +166,23 @@ final class ContextModel: Sendable {
         }
         var attended = multiply(context, rows: rows, inner: hidden, layer.out, columns: hidden)
         add(layer.outBias, to: &attended, rows: rows)
-        vDSP_vadd(state, 1, attended, 1, &state, 1, vDSP_Length(rows * hidden))
+        state.withUnsafeMutableBufferPointer { into in vDSP_vadd(into.baseAddress!, 1, attended, 1, into.baseAddress!, 1, vDSP_Length(rows * hidden)) }
         normalize(&state, rows: rows, layer.norm1)
         var raised = multiply(state, rows: rows, inner: hidden, layer.up, columns: inner)
         add(layer.upBias, to: &raised, rows: rows)
-        Self.gelu(&raised)
+        Self.gelu(&raised, scratch: &scratch)
         var lowered = multiply(raised, rows: rows, inner: inner, layer.down, columns: hidden)
         add(layer.downBias, to: &lowered, rows: rows)
-        vDSP_vadd(state, 1, lowered, 1, &state, 1, vDSP_Length(rows * hidden))
+        state.withUnsafeMutableBufferPointer { into in vDSP_vadd(into.baseAddress!, 1, lowered, 1, into.baseAddress!, 1, vDSP_Length(rows * hidden)) }
         normalize(&state, rows: rows, layer.norm2)
     }
 
     private func multiply(_ left: [Float], rows: Int, inner: Int, _ right: [Float], columns: Int) -> [Float] {
-        var result = [Float](repeating: 0, count: rows * columns)
-        vDSP_mmul(left, 1, right, 1, &result, 1, vDSP_Length(rows), vDSP_Length(columns), vDSP_Length(inner))
-        return result
+        // Every element is written, so the result needs no zeros first.
+        [Float](unsafeUninitializedCapacity: rows * columns) { result, count in
+            vDSP_mmul(left, 1, right, 1, result.baseAddress!, 1, vDSP_Length(rows), vDSP_Length(columns), vDSP_Length(inner))
+            count = rows * columns
+        }
     }
 
     private func add(_ bias: [Float], to values: inout [Float], rows: Int) {
@@ -228,40 +231,73 @@ final class ContextModel: Sendable {
         }
     }
 
+    /// Room for the activation's working values, one block long: fresh
+    /// arrays as long as a layer's whole output, each step a full pass over
+    /// them, cost a third of the model's time once every core ran a window.
+    struct Scratch {
+        static let block = 4096
+        var x: [Float], magnitude: [Float], t: [Float], poly: [Float], negative: [Float], sign: [Float], spare: [Float], ones: [Float]
+        init() {
+            func zeros() -> [Float] { [Float](repeating: 0, count: Self.block) }
+            (x, magnitude, t, poly, negative, sign, spare) = (zeros(), zeros(), zeros(), zeros(), zeros(), zeros(), zeros())
+            ones = [Float](repeating: 1, count: Self.block)
+        }
+    }
+
     /// x·Φ(x), the exact form the network was trained with. erf comes from
-    /// Abramowitz and Stegun 7.1.26 (error below 1.5e-7), in vector operations.
-    static func gelu(_ values: inout [Float]) {
-        let count = vDSP_Length(values.count)
-        var count32 = Int32(values.count)
-        var x = values
+    /// Abramowitz and Stegun 7.1.26 (error below 1.5e-7), in vector operations,
+    /// a block at a time so the working values stay in cache. Each value goes
+    /// through the same operations whatever block it is in.
+    static func gelu(_ values: inout [Float], scratch: inout Scratch) {
+        values.withUnsafeMutableBufferPointer { all in
+            var start = 0
+            while start < all.count {
+                let length = min(Scratch.block, all.count - start)
+                gelu(all.baseAddress! + start, length, scratch: &scratch)
+                start += length
+            }
+        }
+    }
+
+    /// Each step writes a buffer other than the ones it reads, then swaps it
+    /// in, as separate arrays did.
+    private static func gelu(_ values: UnsafeMutablePointer<Float>, _ length: Int, scratch s: inout Scratch) {
+        let count = vDSP_Length(length)
+        var count32 = Int32(length)
         var scale: Float = 1 / Float(2).squareRoot()
-        vDSP_vsmul(x, 1, &scale, &x, 1, count)
-        var magnitude = [Float](repeating: 0, count: values.count)
-        vDSP_vabs(x, 1, &magnitude, 1, count)
-        var t = [Float](repeating: 0, count: values.count)
+        vDSP_vsmul(values, 1, &scale, &s.x, 1, count)
+        vDSP_vabs(s.x, 1, &s.magnitude, 1, count)
         var p: Float = 0.3275911, one: Float = 1
-        vDSP_vsmsa(magnitude, 1, &p, &one, &t, 1, count)
-        vvrecf(&t, t, &count32)
-        var poly = [Float](repeating: 1.061405429, count: values.count)
+        vDSP_vsmsa(s.magnitude, 1, &p, &one, &s.spare, 1, count)
+        vvrecf(&s.t, s.spare, &count32)
+        var first: Float = 1.061405429
+        vDSP_vfill(&first, &s.poly, 1, count)
         for coefficient: Float in [-1.453152027, 1.421413741, -0.284496736, 0.254829592] {
             var c = coefficient
-            vDSP_vmsa(poly, 1, t, 1, &c, &poly, 1, count)
+            vDSP_vmsa(s.poly, 1, s.t, 1, &c, &s.spare, 1, count)
+            swap(&s.poly, &s.spare)
         }
-        vDSP_vmul(poly, 1, t, 1, &poly, 1, count)
-        var negative = [Float](repeating: 0, count: values.count)
-        vDSP_vmul(magnitude, 1, magnitude, 1, &negative, 1, count)
-        vDSP_vneg(negative, 1, &negative, 1, count)
-        vvexpf(&negative, negative, &count32)
+        vDSP_vmul(s.poly, 1, s.t, 1, &s.spare, 1, count)
+        swap(&s.poly, &s.spare)
+        vDSP_vmul(s.magnitude, 1, s.magnitude, 1, &s.negative, 1, count)
+        vDSP_vneg(s.negative, 1, &s.spare, 1, count)
+        swap(&s.negative, &s.spare)
+        vvexpf(&s.spare, s.negative, &count32)
+        swap(&s.negative, &s.spare)
         // erf(|x|) = 1 - poly·e^(-x²); Φ = (1 + sign(x)·erf(|x|)) / 2.
-        vDSP_vmul(poly, 1, negative, 1, &poly, 1, count)
+        vDSP_vmul(s.poly, 1, s.negative, 1, &s.spare, 1, count)
+        swap(&s.poly, &s.spare)
         var minusOne: Float = -1
-        vDSP_vsmsa(poly, 1, &minusOne, &one, &poly, 1, count)
-        var sign = [Float](repeating: 0, count: values.count)
-        vvcopysignf(&sign, [Float](repeating: 1, count: values.count), x, &count32)
-        vDSP_vmul(poly, 1, sign, 1, &poly, 1, count)
+        vDSP_vsmsa(s.poly, 1, &minusOne, &one, &s.spare, 1, count)
+        swap(&s.poly, &s.spare)
+        vvcopysignf(&s.sign, s.ones, s.x, &count32)
+        vDSP_vmul(s.poly, 1, s.sign, 1, &s.spare, 1, count)
+        swap(&s.poly, &s.spare)
         var half: Float = 0.5
-        vDSP_vsmsa(poly, 1, &half, &half, &poly, 1, count)
-        vDSP_vmul(values, 1, poly, 1, &values, 1, count)
+        vDSP_vsmsa(s.poly, 1, &half, &half, &s.spare, 1, count)
+        swap(&s.poly, &s.spare)
+        // A product rounds once, so writing it over its input changes nothing.
+        vDSP_vmul(values, 1, s.poly, 1, values, 1, count)
     }
 
     // MARK: - Reading text
@@ -381,6 +417,24 @@ final class ContextModel: Sendable {
             for index in start..<(start + width) where logits[index] > logits[best] { best = index }
             return best - start
         }
+    }
+}
+
+/// The context model's weights as Scrub ships them (Tools/ContextModel builds
+/// them): the parts' resource name and count, the SHA-256 they must hash to,
+/// and the threshold its non-Latin names were calibrated against.
+struct ContextWeights: Sendable, Equatable {
+    /// The parts' resource name: `name`.1.bin, `name`.2.bin, …
+    let name: String
+    let parts: Int
+    let checksum: String
+    /// The most a non-Latin name's pieces may lean to no label (see ContextStage).
+    let nonLatinDoubt: Float
+
+    static let shipped = ContextWeights(name: "ContextModel", parts: 2, checksum: "7a403a6536d0205b9eccad7dded5216fb04dfe7a403bff5ab445a10fd1f9dd28", nonLatinDoubt: 0.004)
+
+    func url(part index: Int) -> URL? {
+        ModelResources.bundle?.url(forResource: "\(name).\(index)", withExtension: "bin")
     }
 }
 

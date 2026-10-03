@@ -13,34 +13,69 @@ struct Replacement {
 
 enum Correction {
     static func run(_ initial: String, marks: [Mark], job: Job) throws -> (String, [Mark], [Mark]) {
-        try run(initial, marks: marks, job: job, matcher: OriginalMatcher(job), gazetteer: GazetteerMatcher(job.gazetteer, nameParts: job.nameParts))
+        var gate = LeakGate()
+        gate.add(marks, in: initial)
+        return try run(initial, marks: marks, job: job, matcher: OriginalMatcher(job), gazetteer: GazetteerMatcher(job.gazetteer, nameParts: job.nameParts, cuedParts: job.cuedParts), gate: gate)
     }
-    static func run(_ initial: String, marks initialMarks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, passes: Int = 3, base: [Span]? = nil) throws -> (String, [Mark], [Mark]) {
+    /// Replaces what is left of the originals in `initial`, up to `passes`
+    /// times, until a pass finds nothing. What is still there after the last
+    /// pass, and what the leak gate only suspects, comes back as unresolved:
+    /// marks over text left as written, with the original and a confidence
+    /// below `Finding.reviewBelow`, so review asks about each one.
+    static func run(_ initial: String, marks initialMarks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, gate: LeakGate, passes: Int = 3, base: [Span]? = nil) throws -> (String, [Mark], [Mark]) {
         var output = initial
         var marks = initialMarks
         for pass in 0..<passes {
             try Scrubber.checkCancellation()
-            let spans = Detector.resolve(leftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer, base: pass == 0 ? base : nil))
-            if spans.isEmpty { return (output, marks, []) }
+            let found = leftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer, gate: gate, base: pass == 0 ? base : nil)
+            let spans = Detector.resolve(found.spans)
+            if spans.isEmpty { return (output, marks, unresolved(found.suspects, in: output)) }
             var fakes = Array(repeating: "", count: spans.count)
+            var sources = [String?](repeating: nil, count: spans.count)
             for (count, index) in spans.indices.reversed().enumerated() {
                 if count.isMultiple(of: 64) { try Scrubber.checkCancellation() }
-                fakes[index] = job.replacement(for: spans[index].entity, original: TextRanges.substring(output, spans[index].range))
+                let span = spans[index], original = TextRanges.substring(output, span.range)
+                // A variant of a replaced value takes the stand-in its original got, written the same way.
+                if let leak = found.leaks[span.range], leak.entity == span.entity {
+                    sources[index] = leak.source
+                    if let fake = leak.fake { fakes[index] = job.variant(original, fake: fake, entity: leak.entity); continue }
+                }
+                fakes[index] = job.replacement(for: span.entity, original: original)
             }
             let edits = zip(spans, fakes).map { (range: $0.range, value: $1) }
             let (edited, placed) = TextRanges.apply(edits, to: output)
-            marks = TextRanges.shift(marks, by: edits) + zip(placed, spans).map { Mark(range: $0, entity: $1.entity) }
+            marks = TextRanges.shift(marks, by: edits) + zip(placed, spans.indices).map { range, index in
+                let span = spans[index], original = TextRanges.substring(output, span.range)
+                // As sure as the value it varies: a name only a model read stays one to ask about.
+                let confidence = sources[index].flatMap { job.confidence(of: $0) } ?? job.confidence(of: original) ?? span.score
+                return Mark(range: range, entity: sources[index] == nil ? job.kind(of: original, read: span.entity) : span.entity, original: original, confidence: min(confidence, 1))
+            }
             marks.sort { $0.range.lowerBound < $1.range.lowerBound }
             output = edited
         }
-        var unresolved = leftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer).map { Mark(range: $0.range, entity: $0.entity) }
-        var seen: Set<String> = []
-        unresolved = unresolved.filter { seen.insert("\($0.range.lowerBound):\($0.range.upperBound):\($0.entity)").inserted }
-        return (output, marks, unresolved)
+        let found = leftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer, gate: gate)
+        // Still there after the last pass: left as written, and asked about.
+        let left = Detector.resolve(found.spans).map { Span(range: $0.range, entity: $0.entity, score: LeakGate.suspectConfidence) }
+        return (output, marks, unresolved(left + found.suspects, in: output))
     }
 
-    private static func leftovers(in output: String, marks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, base: [Span]? = nil) -> [Span] {
-        if marks.contains(where: { $0.range == 0..<(output as NSString).length }) { return [] }
+    /// Suspects as marks over the text left as written, once each, in order.
+    private static func unresolved(_ suspects: [Span], in output: String) -> [Mark] {
+        var seen: Set<String> = []
+        return suspects.sorted { $0.range.lowerBound != $1.range.lowerBound ? $0.range.lowerBound < $1.range.lowerBound : $0.range.upperBound < $1.range.upperBound }
+            .filter { seen.insert("\($0.range.lowerBound):\($0.range.upperBound):\($0.entity)").inserted }
+            .map { Mark(range: $0.range, entity: $0.entity, original: TextRanges.substring(output, $0.range), confidence: min($0.score, LeakGate.suspectConfidence)) }
+    }
+
+    private struct Leftovers {
+        var spans: [Span] = []
+        /// The variants the leak gate found, by range, with the stand-in each takes.
+        var leaks: [Range<Int>: LeakGate.Leak] = [:]
+        var suspects: [Span] = []
+    }
+
+    private static func leftovers(in output: String, marks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, gate: LeakGate, base: [Span]? = nil) -> Leftovers {
+        if marks.contains(where: { $0.range == 0..<(output as NSString).length }) { return Leftovers() }
         // The name model joins words next to a stand-in into one name ("Scott
         // Hunt Called"); that adds no personal data. A pattern match running
         // past a stand-in can be the tail of a secret, so only exact containment
@@ -62,20 +97,54 @@ enum Correction {
             while index < ordered.count, ordered[index].range.lowerBound < max(range.upperBound, range.lowerBound + 1) {
                 let mark = ordered[index].range
                 if (mark.lowerBound <= range.lowerBound && range.upperBound <= mark.upperBound)
-                    || (["PERSON", "LOCATION"].contains(entity) && mark.overlaps(range)) { return true }
+                    || (["PERSON", "LOCATION"].contains(entity) && mark.overlaps(range))
+                    // "retry 3 for Theresa Lane" ends in a stand-in surname that reads as a street.
+                    || (entity == "ADDRESS" && mark.lowerBound < range.upperBound && range.upperBound <= mark.upperBound)
+                    // "Estrada Quiet Weekly Summary 403" opens with a stand-in surname that reads as a road.
+                    || (entity == "ADDRESS" && !StandIns.placed.contains(ordered[index].entity) && mark.lowerBound <= range.lowerBound && range.lowerBound < mark.upperBound) { return true }
                 index += 1
             }
             return job.isEmitted(TextRanges.substring(output, range))
         }
-        var found: [Span] = []
-        found.append(contentsOf: matcher.spans(in: output).filter { !ours($0.range, "") })
+        var found = Leftovers()
+        found.spans.append(contentsOf: matcher.spans(in: output).filter { !ours($0.range, "") })
         let detected = base.map { job.detector.combined($0, text: output, matcher: gazetteer) }
             ?? job.detector.find(output, matcher: gazetteer, modelled: false)
         // Places the first pass found are originals, and the matcher above finds
         // them. A place detected only now was read from the stand-ins' context
         // ("Later, Larry Alvarado" makes "Later" a city) and names nothing real.
-        found.append(contentsOf: detected.filter { $0.entity != "LOCATION" && !ours($0.range, $0.entity) })
+        // So is a person made of ordinary words that the tagger reads only now:
+        // "Later" opening a sentence after a stand-in "Quinn Ramos" is no one,
+        // and the first pass, reading the original, said so.
+        found.spans.append(contentsOf: detected.filter { $0.entity != "LOCATION" && !ours($0.range, $0.entity) && !readOffStandIns($0, in: output) })
+        found.spans = Links.outside(found.spans, in: output)
+        // The leak gate: variants of values already replaced, which no detector
+        // reads, and numbers that check themselves left as written. A pass fixes
+        // a bounded number of variants, in proportion to the text; the rest are suspects.
+        let gated = gate.scan(output, budget: max(256, (output as NSString).length / 8))
+        let length = (output as NSString).length
+        // A name inside a link is left to review rather than breaking the link.
+        let linked = gated.leaks.isEmpty ? [] : Links.ranges(in: output)
+        for leak in gated.leaks where !ours(leak.range, "PERSON") {
+            if Links.named.contains(leak.entity), linked.contains(where: { $0.overlaps(leak.range) }) {
+                found.suspects.append(Span(range: leak.range, entity: leak.entity, score: LeakGate.suspectConfidence))
+                continue
+            }
+            found.spans.append(Span(range: leak.range, entity: leak.entity, score: 1.1))
+            found.leaks[leak.range] = leak
+        }
+        found.suspects += gated.suspects.filter { $0.range.upperBound <= length && !ours($0.range, "PERSON") }
         return found
+    }
+
+    /// A guess about a person, below the surety of a found original, made of
+    /// ordinary words that are no one's first name or surname ("Later"). A
+    /// name that is also a word ("Olive", "Randy") is still caught.
+    static func readOffStandIns(_ span: Span, in text: String) -> Bool {
+        guard span.entity == "PERSON", span.score < 0.9 else { return false }
+        let words = NameShape.words(span.range, in: text)
+        return !words.isEmpty && words.allSatisfy { NameLists.isOrdinary($0.bare) || NameShape.joining.contains($0.bare) }
+            && !words.contains { NameLists.isFirst($0.bare) || NameLists.isSurname($0.bare) }
     }
 }
 
@@ -135,7 +204,16 @@ struct OriginalMatcher {
         for (supplement, labels) in supplements {
             result.append(contentsOf: supplement.matcherSpans(in: text, entities: labels))
         }
-        return result
+        // A name that is also an ordinary word ("Rose", "Day") spreads only where
+        // it is written as a name: "the rose", "pipeline day" and "Rose bushes"
+        // opening a sentence are no one.
+        let ns = text as NSString
+        return result.filter { span in
+            guard ["PERSON", "FIRST_NAME", "LAST_NAME", "LOCATION"].contains(span.entity) else { return true }
+            let word = ns.substring(with: NSRange(location: span.range.lowerBound, length: span.range.count))
+            guard GazetteerMatcher.ordinaryWord(word) else { return true }
+            return NameLists.isUnlistedWord(word) ? NameCues.namedWord(span.range, in: text) : NameCues.position(span.range, in: text)
+        }
     }
 }
 

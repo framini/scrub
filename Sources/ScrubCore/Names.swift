@@ -28,3 +28,39 @@ public enum Names {
     public static let lastFolded = Set(last.map { $0.lowercased() })
     static let citiesFolded = Set(cities.map { $0.lowercased() })
 }
+
+/// Common English short forms of first names, both ways: "Bob" and "Robert"
+/// are one person's, "Liz" and "Beth" are both "Elizabeth"'s.
+enum Nicknames {
+    private static let table = """
+    robert:bob,bobby,rob,robbie,bert;william:bill,billy,will,willie,liam;richard:rick,ricky,rich,dick,richie;james:jim,jimmy,jamie;john:jack,johnny,jon;
+    joseph:joe,joey;thomas:tom,tommy;charles:charlie,chuck,chas;michael:mike,mikey,mick;christopher:chris,kit;daniel:dan,danny;matthew:matt;anthony:tony;
+    donald:don,donnie;steven:steve;stephen:steve;paul:paulie;andrew:andy,drew;kenneth:ken,kenny;edward:ed,eddie,ted,ned;timothy:tim,timmy;ronald:ron,ronnie;
+    jeffrey:jeff;gregory:greg;benjamin:ben,benny;samuel:sam,sammy;alexander:alex,xander;patrick:pat,paddy;frank:frankie;francis:frank,fran;raymond:ray;
+    jerome:jerry;gerald:gerry,jerry;nicholas:nick,nicky;jonathan:jon,jonny;lawrence:larry;leonard:leo,len,lenny;peter:pete;douglas:doug;zachary:zach,zack;
+    walter:walt,wally;harold:hal,harry;henry:hank,harry;frederick:fred,freddie;albert:al,bert;alfred:alf,fred;arthur:art;eugene:gene;vincent:vince,vinny;
+    philip:phil;phillip:phil;bradley:brad;jacob:jake;joshua:josh;nathan:nate;nathaniel:nate,nat;theodore:ted,teddy,theo;terrence:terry;gabriel:gabe;
+    elizabeth:liz,lizzie,beth,betty,eliza,libby;margaret:maggie,meg,peggy,margie;katherine:kate,kathy,katie,kat;catherine:cathy,kate,katie,cat;
+    kathleen:kathy,kate;jennifer:jen,jenny;patricia:pat,patty,trish;susan:sue,susie;deborah:deb,debbie;rebecca:becky,becca;jessica:jess,jessie;
+    christine:chris,chrissy;christina:chris,tina;barbara:barb,babs;victoria:vicky,tori;samantha:sam,sammie;stephanie:steph;alexandra:alex,sasha;
+    pamela:pam;cynthia:cindy;sandra:sandy;dorothy:dot,dottie;judith:judy;abigail:abby;amanda:mandy;kimberly:kim;nicole:nicki,nikki;caroline:carrie;
+    jacqueline:jackie;theresa:terry,tess;teresa:terry,tess;josephine:jo,josie;eleanor:ellie,nell;helen:nell;valerie:val;suzanne:sue,suzy;gwendolyn:gwen
+    """
+    /// Every name known as the same first name: the formal one and its short forms.
+    static let groups: [String: Set<String>] = {
+        var groups: [String: Set<String>] = [:]
+        for entry in table.split(separator: ";") {
+            let halves = entry.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":")
+            guard halves.count == 2 else { continue }
+            let formal = String(halves[0])
+            let forms = Set([formal] + halves[1].split(separator: ",").map(String.init))
+            for form in forms { groups[form, default: []].formUnion(forms) }
+        }
+        return groups
+    }()
+    /// The other forms of `name`'s first name, lowercase; empty when it has none.
+    static func variants(of name: String) -> Set<String> {
+        let folded = name.lowercased()
+        return (groups[folded] ?? []).subtracting([folded])
+    }
+}

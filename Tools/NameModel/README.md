@@ -26,10 +26,10 @@ that already holds stand-ins.
 
 ## Retraining
 
-Python 3.12 with PyTorch:
+Python 3.12 with PyTorch, at the versions in `requirements.txt`:
 
 ```sh
-uv venv -p 3.12 .venv && VIRTUAL_ENV=.venv uv pip install torch numpy
+uv venv -p 3.12.11 .venv && VIRTUAL_ENV=.venv uv pip install -r requirements.txt
 python3 extract_prose.py > prose.txt
 python3 generate.py --count 250000 --seed 7 --prose prose.txt > train.jsonl
 python3 generate.py --count 5000 --seed 99 --prose prose.txt > valid.jsonl

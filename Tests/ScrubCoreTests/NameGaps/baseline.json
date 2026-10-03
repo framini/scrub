@@ -3,61 +3,61 @@
     "apple" : 37,
     "cases" : 40,
     "detector" : 38,
-    "scrub" : 38
+    "scrub" : 39
   },
   "diverse" : {
     "apple" : 37,
     "cases" : 40,
     "detector" : 38,
-    "scrub" : 38
+    "scrub" : 40
   },
   "fragments" : {
     "apple" : 13,
     "cases" : 40,
-    "detector" : 23,
-    "scrub" : 23
+    "detector" : 26,
+    "scrub" : 28
   },
   "greeting" : {
     "apple" : 11,
     "cases" : 40,
-    "detector" : 33,
-    "scrub" : 33
+    "detector" : 38,
+    "scrub" : 39
   },
   "handles" : {
     "apple" : 0,
     "cases" : 40,
     "detector" : 15,
-    "scrub" : 26
+    "scrub" : 27
   },
   "jsonNote" : {
     "apple" : 38,
     "cases" : 40,
     "detector" : 32,
-    "scrub" : 33
+    "scrub" : 38
   },
   "lowercase" : {
     "apple" : 3,
     "cases" : 40,
     "detector" : 23,
-    "scrub" : 24
+    "scrub" : 39
   },
   "plain" : {
     "apple" : 39,
     "cases" : 40,
     "detector" : 39,
-    "scrub" : 39
+    "scrub" : 40
   },
   "signOff" : {
     "apple" : 13,
     "cases" : 40,
-    "detector" : 35,
-    "scrub" : 36
+    "detector" : 40,
+    "scrub" : 40
   },
   "surnameOnly" : {
     "apple" : 35,
     "cases" : 40,
     "detector" : 32,
-    "scrub" : 32
+    "scrub" : 36
   },
   "toolsAndOrgs" : {
     "apple" : 26,

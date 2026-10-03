@@ -34,7 +34,9 @@ def script(ch):
     return "COMMON" if unicodedata.category(ch)[0] in "PSNZ" else "OTHER"
 
 
-def main(out_dir, corpus_files):
+def main(out_dir, corpus_files, min_count=1):
+    """`min_count`: how often the corpus must use a piece the scripts' top
+    pieces leave out for it to be kept (1 for the first shipped model)."""
     tok = AutoTokenizer.from_pretrained(BASE_TOKENIZER, revision=BASE_REVISION)
     spec = json.loads(tok.backend_tokenizer.to_str())
     vocab = spec["model"]["vocab"]  # [[piece, score], ...] by id
@@ -55,7 +57,7 @@ def main(out_dir, corpus_files):
     for s, items in by_script.items():
         items.sort(reverse=True)
         keep.update(i for _, i in items[:TOP[s]])
-    used = 0
+    uses = defaultdict(int)
     for path in corpus_files:
         lines = open(path).read().splitlines()
         for start in range(0, len(lines), 2000):
@@ -64,9 +66,10 @@ def main(out_dir, corpus_files):
                 for i in ids:
                     text = vocab[i][0].replace("▁", "")
                     if not ({script(ch) for ch in text} & {"OTHER"}):
-                        if i not in keep:
-                            used += 1
-                        keep.add(i)
+                        uses[i] += 1
+    added = {i for i, n in uses.items() if n >= min_count} - keep
+    used = len(added)
+    keep |= added
     old_ids = sorted(keep)
     spec["model"]["vocab"] = [vocab[i] for i in old_ids]
     spec["model"]["unk_id"] = old_ids.index(3)
@@ -79,4 +82,6 @@ def main(out_dir, corpus_files):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2:])
+    # python prune.py OUT_DIR [--min-count=N] CORPUS...
+    flags = [a for a in sys.argv[2:] if a.startswith("--min-count=")]
+    main(sys.argv[1], [a for a in sys.argv[2:] if a not in flags], int(flags[-1].split("=")[1]) if flags else 1)

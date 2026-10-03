@@ -1,0 +1,135 @@
+# Handwritten final check for the address model, written before the shipped model was chosen and never used to change it.
+# Invented people, streets and numbers only. Cases are separated by "===="; addresses are marked ⟦…⟧.
+Warmly,
+Tamsin Quillfeather
+Studio Manager
+⟦4th Floor, 61 Brackenridge Row
+Sheffield S1 2GH⟧
+m: 07700 900461
+====
+Best,
+Ravi
+⟦2/88 Wattlebird Parade
+Ascot Vale VIC 3032⟧
+====
+Saludos,
+Itziar Mendibil
+⟦Calle Peñascal 41, 2º dcha.
+48003 Bilbao⟧
+====
+Grüße aus Wien,
+Leopold Rauscher
+⟦Kranzgasse 17/3
+1150 Wien
+Österreich⟧
+====
+Met vriendelijke groet,
+Femke Dijkhuis
+⟦Wolvenstraat 23-1
+3512 CH Utrecht⟧
+====
+Hälsningar
+Signe Bergqvist
+⟦Kvarnbacken 4 B
+722 14 Västerås⟧
+====
+Can you post the forms to ⟦47 Harlow Mead, Chelmsford CM2 7QP⟧? Ta.
+====
+Moving date is the 3rd — new address will be ⟦Apt 1205, 450 Bramwell Street, Toronto, ON M5V 2Y4⟧.
+====
+Nos bureaux sont au ⟦8 bis rue Lamartine, 33000 Bordeaux⟧ depuis lundi.
+====
+Siamo al ⟦Corso Vercelli 112, 10155 Torino TO⟧, citofono Rossi-Bianchi.
+====
+The van couldn't find ⟦Unit 9, Kestrel Trade Park, Mallow Road, Swindon SN3 4TL⟧ so it went back to the depot.
+====
+please ship to ⟦po box 3381, lethbridge ab t1j 4b1⟧ thanks
+====
+I'll be at my sister's — ⟦19 Coppice Walk, Ilkley LS29 8RT⟧ — for the long weekend.
+====
+Our warehouse moved from ⟦1180 Ostrander Way, Reno, NV 89502⟧ to ⟦75 Calloway Industrial Blvd, Sparks, NV 89431⟧.
+====
+Billing address: ⟦Rua Marquês de Fronteira 92, 4º, 1070-297 Lisboa, Portugal⟧
+====
+{"customer": 991, "remark": "deliver to ⟦Sankt Hans Gade 7, 2. th., 2200 København N⟧ after 4pm"}
+====
+id,first,last,comment
+3,Halina,Wrzesniak,"new flat: ⟦ul. Jaśminowa 14/2, 60-461 Poznań⟧"
+====
+<remark>Moved to ⟦71 Peregrine Close, Christchurch 8053, New Zealand⟧ in July.</remark>
+====
+Ship to:
+Kofi Mensah-Lindqvist
+⟦House No. 214, Sector 21
+Gurugram, Haryana 122016⟧
+====
+Return to: ⟦GPO Box 2210, Brisbane QLD 4001⟧
+====
+Sender: ⟦Vesterbrogade 140, 1620 København V, Denmark⟧
+====
+Inspection booked at ⟦33 Fernhollow Drive⟧ on Thursday at 10.
+====
+The fire was reported at ⟦18-20 Wickham Street, Fortitude Valley QLD 4006⟧ shortly after midnight.
+====
+Kontakt: ⟦Mühlenkamp 9, 22303 Hamburg⟧ · 040 555 0181
+====
+Dr Ottilie Brandvold
+Department of Oceanography
+⟦Postboks 7803
+5020 Bergen
+Norway⟧
+====
+she said the address is ⟦Flat 5, 2 Thistledown Court, Inverness IV2 3BX⟧ but the buzzer is broken
+====
+Venue address: ⟦The Old Forge, 3 Smithy Lane, Ludlow SY8 1PA⟧
+====
+⟦1600 Halcyon Avenue NW, Suite 300
+Washington, DC 20009⟧
+====
+Head office – ⟦Level 3, 22 Pellucid Street, Wellington 6011⟧
+====
+Address: ⟦C/ Sant Pere Més Alt 61, 3r 2a, 08003 Barcelona⟧
+====
+Python 3.13.2 and Swift 6.2.1 both ship in Xcode 26.4 Beta 3.
+====
+Order 448201 – 2 Large Boxes, 1 Main Course Pack – shipped 14 May.
+====
+Hi Wanjiru,
+
+Re: ticket 90311
+Your refund of 42.50 GBP was processed today.
+====
+Room 12 is booked from 9:00 to 11:30; Room 14 after lunch.
+====
+The 3 Park Avenue towers and 2 Square Mile banks reported Q2 results.
+====
+Season 4 Episode 12 airs on Channel 5 at 21:00.
+====
+Step 3: run make -j8 install, then reboot into Recovery Mode 2.
+====
+SELECT * FROM orders WHERE region = 'North' AND qty > 12;
+====
+Rule 12(b)(6) and Section 230 were both argued on 3 March.
+====
+2 Way Radios, 4 Lane Hubs and 6 Port Switches restocked.
+====
+Score: Kestrel 3 Marlowe 2 (half time 1-1)
+====
+v4.2.0-rc1 (build 8812) fixes Street View crashes on iOS 18.2.
+====
+-p port
+        Connect to port instead of 22. With -o 5 the client retries five times.
+====
+Tickets: Gate C14, Row 22, Seat 7.
+====
+Flight LX 318 lands at Terminal 2 at 14:05.
+====
+Article 6 § 1 of the Convention applies (see paragraph 42 above).
+====
+Sprint 14 Planning — 3 Main Goals, 12 Story Points each.
+====
+Pay 1,200.00 EUR by 30 June to account 4471 0099 2210.
+====
+The patch touches 12 Lane Detection files in src/vision/lanes/v2.
+====
+14:30 Standup @ Room 3B, Building North

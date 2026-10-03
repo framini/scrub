@@ -1,0 +1,119 @@
+import Foundation
+
+/// Names the government's name lists support where a cue says a name stands:
+/// the person a message greets ("Hi Holly,", "Scott:") or is signed by
+/// ("Regards,⏎Greg Elliott"), and a known first name before a known surname
+/// ("Greg Elliott" in a signature block), or two first names joined ("Wade &
+/// Heidi"). A list alone proves nothing, so
+/// each needs the position or the pair, and a name that is also an ordinary
+/// word ("Will", "Rose") counts only in a greeting or above a sign-off, where
+/// nothing else could stand.
+enum ListedNames {
+    static let cuedScore = 0.9
+    static let pairScore = 0.8
+
+    private static let greeting = TextPattern(#"(?m)^[ \t>]*(?:((?i:hi|hello|hey|dear|morning|good morning|good afternoon|good evening|hiya|greetings|thanks|thank you))[ \t,]+)?(\p{L}[\p{L}'’.-]*(?:[ \t]+(?:(?:&|and)[ \t]+)?\p{L}[\p{L}'’.-]*){0,2})[ \t]*([,:!]|—|–|-|$)"#)
+    private static let closing = TextPattern(#"(?im)^[ \t>]*(?:thanks|thank you|many thanks|thanks again|thx|cheers|regards|best regards|kind regards|warm regards|best|best wishes|all the best|sincerely|yours|yours truly|yours sincerely|love|take care|talk soon|ciao)[ \t]*[,.!]*[ \t]*\r?$"#)
+    private static let signature = TextPattern(#"^[ \t>]*(?:-{1,2}|~|—)?[ \t]*(\p{L}[\p{L}'’.-]*(?:[ \t]+\p{L}[\p{L}'’.-]*){0,2})[ \t]*\r?$"#)
+    private static let pair = TextPattern(#"(?<![\p{L}\p{N}'’.@/_-])(\p{Lu}\p{Ll}+)(?:[ \t]+\p{Lu}\.)?[ \t]+(\p{Lu}\p{Ll}+(?:-\p{Lu}\p{Ll}+)?)(?![\p{L}\p{N}'’@/_-])"#)
+    /// Two first names joined: "Wade & Heidi", "Holly and Grace".
+    private static let joined = TextPattern(#"(?<![\p{L}\p{N}'’.@/_-])(\p{Lu}\p{Ll}+)[ \t]+(?:&|and)[ \t]+(\p{Lu}\p{Ll}+)(?![\p{L}\p{N}'’@/_-])"#)
+    private static let places = Set(Places.all.map { $0.city.lowercased() })
+
+    static func scan(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
+        var spans: [Span] = []
+        let ns = text as NSString
+        if text.contains(where: \.isNewline) || text.contains(",") || text.contains(":") {
+            for match in TextRanges.matches(greeting, in: text, isCancelled: isCancelled) {
+                let greeted = match.range(at: 1).location != NSNotFound
+                let names = match.range(at: 2)
+                // Without "Hi" or "Dear", the line holds the name and its comma only ("Holly,").
+                if !greeted {
+                    // "Best," and "Thanks," close a message; they greet no one.
+                    let line = ns.substring(with: ns.lineRange(for: NSRange(location: match.range.location, length: 0))).trimmingCharacters(in: .newlines)
+                    if !TextRanges.matches(closing, in: line).isEmpty { continue }
+                    let end = NSMaxRange(match.range)
+                    let rest = ns.substring(with: NSRange(location: end, length: NSMaxRange(ns.lineRange(for: NSRange(location: max(0, end - 1), length: 0))) - end))
+                    guard ns.substring(with: match.range(at: 3)) != "", rest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, [",", ":"].contains(ns.substring(with: match.range(at: 3))) else { continue }
+                }
+                spans += people(in: names, ns, greeted: greeted)
+            }
+        }
+        if text.contains(where: \.isNewline) {
+            for match in TextRanges.matches(closing, in: text, isCancelled: isCancelled) {
+                var at = NSMaxRange(ns.lineRange(for: NSRange(location: match.range.location, length: 0)))
+                // The next line with anything on it.
+                while at < ns.length {
+                    let line = ns.lineRange(for: NSRange(location: at, length: 0))
+                    if !ns.substring(with: line).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || NSMaxRange(line) <= at { break }
+                    at = NSMaxRange(line)
+                }
+                guard at < ns.length else { continue }
+                let line = ns.lineRange(for: NSRange(location: at, length: 0))
+                let content = ns.substring(with: line).trimmingCharacters(in: .newlines)
+                guard let signed = TextRanges.matches(signature, in: content).first else { continue }
+                let names = NSRange(location: line.location + signed.range(at: 1).location, length: signed.range(at: 1).length)
+                spans += people(in: names, ns, greeted: true)
+            }
+        }
+        if text.contains("&") || text.contains(" and ") {
+            for match in TextRanges.matches(joined, in: text, isCancelled: isCancelled) {
+                let names = [match.range(at: 1), match.range(at: 2)]
+                let words = names.map { ns.substring(with: $0) }
+                guard words.allSatisfy(NameLists.isFirst), words.contains(where: { !NameLists.isWordlike($0) && !NameLists.isOrdinary($0) }),
+                      !NameTagger.partOfOrganisation(match.range(at: 1).location..<NSMaxRange(match.range), in: text) else { continue }
+                spans += names.map { Span(range: $0.location..<NSMaxRange($0), entity: "PERSON", score: pairScore) }
+            }
+        }
+        for match in TextRanges.matches(pair, in: text, isCancelled: isCancelled) {
+            let first = ns.substring(with: match.range(at: 1)), last = ns.substring(with: match.range(at: 2))
+            guard NameLists.isFirst(first), NameLists.isSurname(last.split(separator: "-").first.map(String.init) ?? last),
+                  ![first, last].contains(where: { NameLists.isWordlike($0) || NameLists.isOrdinary($0) }) else { continue }
+            let range = match.range.location..<NSMaxRange(match.range)
+            let value = ns.substring(with: match.range)
+            guard !places.contains(value.lowercased()), Places.region(value) == nil, !NameTagger.partOfOrganisation(range, in: text) else { continue }
+            spans.append(Span(range: range, entity: "PERSON", score: pairScore))
+        }
+        return spans
+    }
+
+    /// The people a greeting or signature names: one, or two joined by "&" or
+    /// "and" ("Wade & Heidi"). Every word must be name-shaped and one of them
+    /// listed; none may be an ordinary word that is no name ("Team", "All"),
+    /// a title or a role.
+    private static func people(in range: NSRange, _ ns: NSString, greeted: Bool) -> [Span] {
+        let value = ns.substring(with: range)
+        var groups: [[(String, Int)]] = [[]]
+        var offset = 0
+        for word in value.split(separator: " ", omittingEmptySubsequences: false) {
+            let text = String(word)
+            if text == "&" || text == "and" { groups.append([]) }
+            else if !text.isEmpty { groups[groups.count - 1].append((text.trimmingCharacters(in: .whitespaces), offset)) }
+            offset += (text as NSString).length + 1
+        }
+        var spans: [Span] = []
+        for group in groups where !group.isEmpty {
+            let words = group.map(\.0)
+            if NameTagger.namesOrganisation(words.joined(separator: " ")) { continue }
+            let lower = words.allSatisfy { $0 == $0.lowercased() }
+            guard words.count <= 3, words.allSatisfy({ word in
+                let bare = word.trimmingCharacters(in: CharacterSet(charactersIn: ".'’"))
+                guard !bare.isEmpty, !People.isTitle(bare), !NameShape.isRole(bare), !NameShape.joining.contains(bare.lowercased()) else { return false }
+                // An initial ("J.") or a name-shaped word; lowercase only as a whole ("hey beatriz").
+                if bare.count == 1 { return bare.first!.isUppercase }
+                if lower { return NameLists.isFirst(bare) && !NameLists.isWordlike(bare) && !NameLists.isOrdinary(bare) }
+                guard bare.first!.isUppercase, bare.dropFirst().contains(where: \.isLowercase) || bare.count <= 3 else { return false }
+                // An ordinary word stands as a name only as a first name ("Holly,"), never as a surname alone ("Best,").
+                return !NameLists.isOrdinary(bare) || NameLists.isFirst(bare) || words.count > 1 && NameLists.isSurname(bare)
+            }), greeted || words.contains(where: { NameLists.isFirst($0) || NameLists.isSurname($0) }) else { continue }
+            if lower && words.count > 1 { continue }
+            let start = range.location + group.first!.1
+            let end = range.location + group.last!.1 + (group.last!.0 as NSString).length
+            var span = start..<end
+            // A full stop after the last word is the line's ("Thanks, Holly.").
+            if ns.substring(with: NSRange(location: end - 1, length: 1)) == ".", (group.last!.0.count > 2) { span = start..<(end - 1) }
+            spans.append(Span(range: span, entity: "PERSON", score: cuedScore))
+        }
+        return spans
+    }
+}

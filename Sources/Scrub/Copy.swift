@@ -4,7 +4,8 @@ enum Copy {
     static let howItWorksSteps = [
         "Finds personal details three ways: field names such as “password”, “email” or “assigned_to”; patterns for emails, card numbers, IBANs, IDs, IP addresses and secrets; and Apple’s on-device recognition of names, places, phone numbers and addresses.",
         "Replaces each one with a realistic stand-in. The same person or value gets the same stand-in everywhere in the file.",
-        "Checks the result again, replaces what slipped through, and shows anything it couldn’t resolve as left to review.",
+        "Checks the result against what it replaced: a name, number or email written another way is replaced too, and anything it only suspects is left for you to decide.",
+        "Asks you about the replacements it’s least sure of before you copy or save, so you can leave any that aren’t personal.",
         "Keeps the file’s structure, so JSON, CSV and XML stay valid.",
     ]
     static let howItWorksFooter = "macOS sandboxes the app with no network access, so nothing can be sent anywhere."
@@ -29,6 +30,34 @@ enum Copy {
         default: "IDs"
         }
     }
+
+    /// One finding's kind, for the review list.
+    static func kind(_ entity: String) -> String {
+        switch entity {
+        case "PERSON", "FIRST_NAME", "LAST_NAME", "INITIALS": "Name"
+        case "EMAIL_ADDRESS": "Email"
+        case "PHONE_NUMBER": "Phone"
+        case "ADDRESS", "POSTAL_CODE": "Address"
+        case "LOCATION", "REGION", "LATITUDE", "LONGITUDE", "COORDINATES", "TIME_ZONE": "Place"
+        case "DATE_OF_BIRTH", "AGE": "Birth date"
+        case "SECRET": "Secret"
+        case "USERNAME": "Username"
+        case "EMPLOYER": "Employer"
+        default: "ID"
+        }
+    }
+
+    static func reviewTitle(_ count: Int) -> String {
+        count == 1 ? "Check 1 replacement before sharing" : "Check \(count) replacements before sharing"
+    }
+    static let reviewBody = "Scrub isn’t sure these are personal. Leave any that aren’t, and replace any its last check found but left as written. A choice covers every place the value appears, and every other stand-in stays as it is."
+    static let replaceHelp = "Replace it everywhere it appears"
+    static func leaveHelp(_ original: String) -> String { "Leave “\(original)” as written everywhere it appears" }
+    static func reviewTally(leaving: Int, of total: Int) -> String {
+        leaving == 0 ? "Replacing all \(total)" : "Leaving \(leaving) of \(total)"
+    }
+    static func toCheck(_ count: Int) -> String { count == 1 ? "1 to check" : "\(count) to check" }
+    static func checked(leaving: Int) -> String { leaving == 0 ? "Checked" : "Checked · \(leaving) left as written" }
 
     static func grouped(_ counts: [String: Int]) -> [(label: String, count: Int)] {
         var totals: [String: Int] = [:]

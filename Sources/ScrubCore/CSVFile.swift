@@ -56,68 +56,77 @@ public enum CSVFile: FileFormat {
         leaves.removeAll(keepingCapacity: false)
         progress(.finding, found, found)
         try Scrubber.checkCancellation()
-        var marks: [TableMark] = []
-        let unresolved = values.flatMap(\.unresolved)
-        var valueIndex = 0
-        for row in rows.indices {
-            if row.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
-            for column in rows[row].indices {
-                rows[row][column] = values[valueIndex].text
-                if row < previewRows {
-                    marks += values[valueIndex].marks.map { TableMark(row: row, column: column, range: $0.range, entity: $0.entity) }
+        // Rows are written again from the values, so a review can write them with some findings taken back.
+        let widths = rows.map(\.count), headings = columns
+        rows = []
+        func render(_ values: [DocumentValue], counts: [String: Int]) throws -> ScrubResult {
+            var rows = widths.map { [String](repeating: "", count: $0) }, columns = headings
+            var marks: [TableMark] = []
+            let unresolved = values.flatMap(\.unresolved)
+            var valueIndex = 0
+            for row in rows.indices {
+                if row.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
+                for column in rows[row].indices {
+                    rows[row][column] = values[valueIndex].text
+                    if row < previewRows {
+                        marks += values[valueIndex].marks.map { TableMark(row: row, column: column, range: $0.range, entity: $0.entity) }
+                    }
+                    valueIndex += 1
                 }
-                valueIndex += 1
             }
+            for (column, index) in headerIDs.enumerated() {
+                columns[column] = values[index].text
+                marks += values[index].marks.map { TableMark(row: TableMark.header, column: column, range: $0.range, entity: $0.entity) }
+            }
+            let previewWidth = max(columns.count, rows.prefix(previewRows).map(\.count).max() ?? 0)
+            let previewColumns = columns + Array(repeating: "", count: previewWidth - columns.count)
+            var neutralized = 0
+            func shift(row: Int, column: Int) {
+                for mark in marks.indices where marks[mark].row == row && marks[mark].column == column {
+                    let old = marks[mark]
+                    marks[mark] = TableMark(row: row, column: column, range: (old.range.lowerBound + 1)..<(old.range.upperBound + 1), entity: old.entity)
+                }
+            }
+            if hasHeader {
+                for column in columns.indices {
+                    if let safe = neutralize(columns[column]) {
+                        columns[column] = safe
+                        neutralized += 1
+                        shift(row: TableMark.header, column: column)
+                    }
+                }
+            }
+            for row in rows.indices {
+                if row.isMultiple(of: 64) { try Scrubber.checkCancellation() }
+                for column in rows[row].indices {
+                    if let safe = neutralize(rows[row][column]) {
+                        rows[row][column] = safe
+                        neutralized += 1
+                        if row < previewRows { shift(row: row, column: column) }
+                    }
+                }
+            }
+            var output = Data()
+            output.reserveCapacity(data.count + data.count / 4)
+            func append(_ row: [String]) {
+                for column in row.indices {
+                    if column > 0 { output.append(contentsOf: String(delimiter).utf8) }
+                    output.append(contentsOf: quote(row[column], delimiter: delimiter, quoteCharacter: quoteCharacter).utf8)
+                }
+                output.append(contentsOf: newline.utf8)
+            }
+            if hasHeader { append(columns) }
+            for (index, row) in rows.enumerated() {
+                if index.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
+                append(row)
+            }
+            return ScrubResult(format: "csv", output: output, preview: .table(columns: previewColumns, rows: Array(rows.prefix(previewRows)), rowCount: rows.count, marks: marks), counts: counts, unresolved: unresolved, neutralized: neutralized)
         }
-        for (column, index) in headerIDs.enumerated() {
-            columns[column] = values[index].text
-            marks += values[index].marks.map { TableMark(row: TableMark.header, column: column, range: $0.range, entity: $0.entity) }
-        }
-        let previewWidth = max(columns.count, rows.prefix(previewRows).map(\.count).max() ?? 0)
-        let previewColumns = columns + Array(repeating: "", count: previewWidth - columns.count)
         progress(.checking, 0, 1)
-        var neutralized = 0
-        func shift(row: Int, column: Int) {
-            for mark in marks.indices where marks[mark].row == row && marks[mark].column == column {
-                let old = marks[mark]
-                marks[mark] = TableMark(row: row, column: column, range: (old.range.lowerBound + 1)..<(old.range.upperBound + 1), entity: old.entity)
-            }
-        }
-        if hasHeader {
-            for column in columns.indices {
-                if let safe = neutralize(columns[column]) {
-                    columns[column] = safe
-                    neutralized += 1
-                    shift(row: TableMark.header, column: column)
-                }
-            }
-        }
-        for row in rows.indices {
-            if row.isMultiple(of: 64) { try Scrubber.checkCancellation() }
-            for column in rows[row].indices {
-                if let safe = neutralize(rows[row][column]) {
-                    rows[row][column] = safe
-                    neutralized += 1
-                    if row < previewRows { shift(row: row, column: column) }
-                }
-            }
-        }
-        var output = Data()
-        output.reserveCapacity(data.count + data.count / 4)
-        func append(_ row: [String]) {
-            for column in row.indices {
-                if column > 0 { output.append(contentsOf: String(delimiter).utf8) }
-                output.append(contentsOf: quote(row[column], delimiter: delimiter, quoteCharacter: quoteCharacter).utf8)
-            }
-            output.append(contentsOf: newline.utf8)
-        }
-        if hasHeader { append(columns) }
-        for (index, row) in rows.enumerated() {
-            if index.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
-            append(row)
-        }
+        var result = try render(values, counts: job.counts)
+        result.review = Review(values: values, counts: job.counts, render: render)
         progress(.checking, 1, 1)
-        return ScrubResult(format: "csv", output: output, preview: .table(columns: previewColumns, rows: Array(rows.prefix(previewRows)), rowCount: rows.count, marks: marks), counts: job.counts, unresolved: unresolved, neutralized: neutralized)
+        return result
     }
     static func sniffDelimiter(_ text: String) -> Character { sniffFormat(text).0 }
     static func sniffQuote(_ text: String, delimiter: Character) -> Character { sniffFormat(text, delimiters: [delimiter]).1 }

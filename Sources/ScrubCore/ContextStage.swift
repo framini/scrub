@@ -15,14 +15,28 @@ enum ContextStage {
     /// about 20 seconds a megabyte of prose on an M1 Max, the rest of a scrub
     /// several times that.
     static let gateFrom = Atomic<Int>(10_000_000)
-    /// The most a non-Latin name's pieces may lean to no label. Every non-Latin
-    /// name in the held-out generated set stays under 0.0026.
-    static let nonLatinDoubt: Float = 0.004
+    /// The most a non-Latin name's pieces may lean to no label, set per build
+    /// of the model from its held-out generated set (`ContextWeights`).
+    static let nonLatinDoubt = ContextWeights.shipped.nonLatinDoubt
     /// Off only in tests that measure Scrub without the model.
     static let enabled = Atomic(true)
 
+    /// What the model read in one text: its findings as Scrub names them,
+    /// and the people it read in Latin script, which count only where
+    /// something else agrees. `whole` is false where the gate left windows unread.
+    struct Reading: Sendable {
+        var spans: [Span] = []
+        var people: [Person] = []
+        var whole = true
+    }
+    struct Person: Sendable, Equatable {
+        let range: Range<Int>
+        /// The most any of its pieces leaned to no label at all.
+        let doubt: Float
+    }
+
     /// The model's findings for each text, nil where it read nothing.
-    static func find(_ texts: [String?], progress: (Stage, Int, Int) -> Void, cancelled: CancellationFlag) throws -> [[Span]?] {
+    static func find(_ texts: [String?], progress: (Stage, Int, Int) -> Void, cancelled: CancellationFlag) throws -> [Reading?] {
         guard enabled.load(ordering: .relaxed), let model = ContextModel.shared else { return texts.map { _ in nil } }
         let readable = texts.indices.filter { texts[$0].map(isFreeText) == true }
         guard !readable.isEmpty else { return texts.map { _ in nil } }
@@ -57,48 +71,53 @@ enum ContextStage {
             leaves.append((leaf, ordered, windows, read))
         }
 
-        // Windows, longest first so the last ones to finish are short.
-        let jobs = leaves.indices.flatMap { item in leaves[item].windows.indices.filter { leaves[item].read[$0] }.map { (item, $0) } }
-            .sorted { leaves[$0.0].windows[$0.1].ids.count > leaves[$1.0].windows[$1.1].ids.count }
-        let ids = leaves.map { $0.windows.map(\.ids) }
-        let predictions = Mutex([[[ContextModel.Decision]?]](leaves.map { [[ContextModel.Decision]?](repeating: nil, count: $0.windows.count) }))
+        // A window's labels follow from its pieces alone, so windows with the
+        // same pieces (a table's repeated notes) are read once.
+        var distinct: [[Int32]] = [], reading: [[Int32]: Int] = [:]
+        var readAs = leaves.map { [Int?](repeating: nil, count: $0.windows.count) }
+        for item in leaves.indices {
+            for window in leaves[item].windows.indices where leaves[item].read[window] {
+                let ids = leaves[item].windows[window].ids
+                if let known = reading[ids] { readAs[item][window] = known; continue }
+                reading[ids] = distinct.count
+                readAs[item][window] = distinct.count
+                distinct.append(ids)
+            }
+        }
+        // Longest first so the last ones to finish are short.
+        let toRead = distinct
+        let jobs = toRead.indices.sorted { toRead[$0].count > toRead[$1].count }
+        let decided = Mutex([[ContextModel.Decision]?](repeating: nil, count: toRead.count))
         let done = Atomic(0)
         try parallel(jobs.count, cancelled: cancelled, progress: { progress(.reading, done.load(ordering: .relaxed), jobs.count) }) { index in
-            let (item, window) = jobs[index]
-            let labels = model.decide(model.logits(ids[item][window]))
-            predictions.withLock { $0[item][window] = labels }
+            let labels = model.decide(model.logits(toRead[jobs[index]]))
+            decided.withLock { $0[jobs[index]] = labels }
             done.add(1, ordering: .relaxed)
         }
         progress(.reading, jobs.count, jobs.count)
+        let labelsRead = decided.withLock { $0 }
+        let predictions = readAs.map { windows in windows.map { $0.flatMap { labelsRead[$0] } } }
 
-        var result = texts.map { _ -> [Span]? in nil }
-        let read = predictions.withLock { $0 }
+        var result = texts.map { _ -> Reading? in nil }
         for (item, leaf) in leaves.enumerated() {
             let text = texts[leaf.leaf]!
-            let labels = model.labelled(leaf.pieces, windows: leaf.windows, predictions: read[item])
+            let labels = model.labelled(leaf.pieces, windows: leaf.windows, predictions: predictions[item])
             let links = links(in: text)
-            result[leaf.leaf] = model.spans(leaf.pieces, labels: labels, in: text).compactMap { span($0, in: text, links: links) }
+            let found = model.spans(leaf.pieces, labels: labels, in: text)
+            result[leaf.leaf] = Reading(spans: found.compactMap { span($0, in: text, links: links) },
+                                        people: found.compactMap { person($0, in: text, links: links) },
+                                        whole: !leaf.read.contains(false))
         }
         return result
     }
 
     /// A finding as Scrub names it, or nil for one the stage leaves to others:
-    /// a person in Latin script is the name model's and the tagger's to find,
+    /// a person in Latin script counts only where something else agrees (`person`),
     /// and a handle needs a digit, dot or underscore to be told from a word.
     static func span(_ found: ContextModel.Found, in text: String, links: [Range<Int>] = []) -> Span? {
         let ns = text as NSString
-        // Punctuation at either end belongs to the sentence ("(1-800…", "ICYMI-").
-        var range = found.range
-        while range.count > 0, edges.contains(Character(Unicode.Scalar(ns.character(at: range.lowerBound)) ?? " ")) { range = (range.lowerBound + 1)..<range.upperBound }
-        while range.count > 0, edges.contains(Character(Unicode.Scalar(ns.character(at: range.upperBound - 1)) ?? " ")) { range = range.lowerBound..<(range.upperBound - 1) }
-        guard !range.isEmpty else { return nil }
+        guard let range = cleaned(found.range, in: text, links: links) else { return nil }
         let value = TextRanges.substring(text, range)
-        // A link's path and a hashtag are written for everyone to read: "t.co/8X9QR2r7zz" is no ID.
-        if links.contains(where: { $0.overlaps(range) }) { return nil }
-        // A piece of a word ("Down" of "Downtown") or a run over a line break is a guess, not a finding.
-        if value.contains(where: \.isNewline) || TextRanges.joinsWord(ns, at: range.lowerBound, underscore: true) && joined(ns, range.lowerBound)
-            || TextRanges.joinsWord(ns, at: range.upperBound, underscore: true) && joined(ns, range.upperBound - 1)
-            || hyphened(ns, before: range.lowerBound) || hyphened(ns, after: range.upperBound) { return nil }
         let digits = value.filter(\.isNumber).count
         // A secret, ID or handle is a whole token: the model reading the first
         // letters of "Qz7nwsgydtlekmwf&<\"'\\" would leave the rest behind.
@@ -123,7 +142,9 @@ enum ContextStage {
                   !fileExtensions.contains(inner.split(separator: ".").last.map { $0.lowercased() } ?? "") || !inner.contains(".") else { return nil }
             entity = "USERNAME"
         case "LOCATION":
-            guard named(value) else { return nil }
+            // A country, a continent or a nationality ("a Danish citizen", "the
+            // United Kingdom") is shared by millions: no one's place.
+            guard named(value), !nations.contains(normalPlace(value)), !holidays.contains(normalPlace(value)) else { return nil }
             entity = "LOCATION"
         case "ORG":
             guard named(value), employment(around: range, in: text) else { return nil }
@@ -131,7 +152,10 @@ enum ContextStage {
         case "ID":
             // An amount, a count or a short reference ("deal #268093", "Law no. 3713",
             // "GBP 2,092,569") is no one's ID.
-            guard digits >= 4, !amount(range, in: text), TextRanges.matches(decimal, in: value).isEmpty else { return nil }
+            // Numbers in cells a tab or a run of spaces apart are a table's row ("2093	655	3547"), not one ID.
+            guard digits >= 4, !amount(range, in: text), TextRanges.matches(decimal, in: value).isEmpty, !value.contains("\t"), !value.contains("  ") else { return nil }
+            // A calendar date ("Last backup 2022-11-28") is a date, not an ID; a birth date is DOB's.
+            guard TextRanges.matches(calendarDate, in: value).isEmpty else { return nil }
             // A bare run of digits is someone's only where the sentence ties it to
             // someone: a deal, notice or ticket number in a business email is not.
             if value.allSatisfy(\.isNumber) {
@@ -155,9 +179,78 @@ enum ContextStage {
         return Span(range: range, entity: entity, score: score)
     }
 
+    /// The range without the sentence's punctuation at its ends, or nil for
+    /// a guess rather than a finding: inside a link or a hashtag, a piece of a
+    /// word ("Down" of "Downtown"), or a run over a line break.
+    private static func cleaned(_ found: Range<Int>, in text: String, links: [Range<Int>]) -> Range<Int>? {
+        let ns = text as NSString
+        // Punctuation at either end belongs to the sentence ("(1-800…", "ICYMI-").
+        var range = found
+        while range.count > 0, edges.contains(Character(Unicode.Scalar(ns.character(at: range.lowerBound)) ?? " ")) { range = (range.lowerBound + 1)..<range.upperBound }
+        while range.count > 0, edges.contains(Character(Unicode.Scalar(ns.character(at: range.upperBound - 1)) ?? " ")) { range = range.lowerBound..<(range.upperBound - 1) }
+        guard !range.isEmpty else { return nil }
+        // A link's path and a hashtag are written for everyone to read: "t.co/8X9QR2r7zz" is no ID.
+        if links.contains(where: { $0.overlaps(range) }) { return nil }
+        let value = TextRanges.substring(text, range)
+        if value.contains(where: \.isNewline) || TextRanges.joinsWord(ns, at: range.lowerBound, underscore: true) && joined(ns, range.lowerBound)
+            || TextRanges.joinsWord(ns, at: range.upperBound, underscore: true) && joined(ns, range.upperBound - 1)
+            || hyphened(ns, before: range.lowerBound) || hyphened(ns, after: range.upperBound) { return nil }
+        return range
+    }
+
+    /// A person the model read in Latin script, which it reads well beside
+    /// words that mark a name and too often elsewhere ("Mark" opening a line,
+    /// a product): it counts only where something else agrees (`PersonScorer`).
+    static func person(_ found: ContextModel.Found, in text: String, links: [Range<Int>] = []) -> Person? {
+        guard found.kind == "PERSON", let cleaned = cleaned(found.range, in: text, links: links), !inToken(cleaned, in: text as NSString),
+              TextRanges.matches(handleJoint, in: TextRanges.substring(text, cleaned)).isEmpty else { return nil }
+        let range = chatterTrimmed(cleaned, in: text)
+        let value = TextRanges.substring(text, range)
+        guard value.contains(where: \.isLetter), !value.unicodeScalars.contains(where: isNonLatinNameScript) else { return nil }
+        return Person(range: range, doubt: found.doubt)
+    }
+
+    /// A dot, underscore, at sign or slash between a lowercase letter or digit and another letter or digit, as in a handle ("priya.r"), not between initials ("J.R.").
+    private static let handleJoint = TextPattern(#"[\p{Ll}\d][._@/][\p{L}\d]|[\p{L}\d][._@/][\p{Ll}\d]"#)
+
+    /// Whether the range is part of a handle, an address or a path: a dot,
+    /// underscore, at sign or slash joins it to a letter or digit ("priya" of "priya.r").
+    private static func inToken(_ range: Range<Int>, in ns: NSString) -> Bool {
+        let joiners: Set<unichar> = [46, 95, 64, 47]
+        let before = range.lowerBound >= 2 && joiners.contains(ns.character(at: range.lowerBound - 1)) && joined(ns, range.lowerBound - 2)
+        let after = range.upperBound + 1 < ns.length && joiners.contains(ns.character(at: range.upperBound)) && joined(ns, range.upperBound + 1)
+        // "linnea_" of "linnea_a": the joiner inside the range, the rest of the token outside it.
+        let opens = joiners.contains(ns.character(at: range.lowerBound)) && joined(ns, range.lowerBound - 1)
+        let closes = joiners.contains(ns.character(at: range.upperBound - 1)) && joined(ns, range.upperBound)
+        return before || after || opens || closes
+    }
+
+    /// The guess without a lowercase word at either end that is no listed
+    /// name but an ordinary or a short word, where a listed name is left:
+    /// "fyi sven okafor" is Sven Okafor, "w lucia" is Lucia.
+    static func chatterTrimmed(_ range: Range<Int>, in text: String) -> Range<Int> {
+        let words = NameShape.words(range, in: text)
+        func listed(_ word: NameShape.Word) -> Bool { PersonScorer.listedFirst(word.bare) || NameLists.isSurname(word.bare) }
+        guard words.count >= 2, words.contains(where: listed) else { return range }
+        func chatter(_ word: NameShape.Word) -> Bool {
+            word.text == word.text.lowercased() && !listed(word) && (word.bare.count <= 3 || NameLists.isOrdinary(word.bare))
+        }
+        var low = 0, high = words.count - 1
+        while low < high, chatter(words[low]) { low += 1 }
+        while high > low, chatter(words[high]) { high -= 1 }
+        guard words[low...high].contains(where: listed) else { return range }
+        return words[low].range.lowerBound..<words[high].range.upperBound
+    }
+
     private static let objectID = TextPattern(#"^[a-z]{2,8}_[A-Za-z0-9]{8,}$"#)
     private static let secretWord = TextPattern(#"(?i)(?:pass(?:word|wd|code|phrase)?|pwd|secret|token|key|credential|auth|bearer)"#)
-    private static let decimal = TextPattern(#"^[-+]?\d+[.,]\d{1,2}$"#)
+    /// An amount ("12.50") or a measure or score ("0.874", "3.14159"): one
+    /// point, at most three digits before it.
+    private static let decimal = TextPattern(#"^[-+]?(?:\d+[.,]\d{1,2}|\d{1,3}\.\d+)$"#)
+    private static let calendarDate = TextPattern(#"^(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{4})$"#)
+    /// Days of the year read as places: "visit at Easter".
+    static let holidays: Set<String> = ["easter", "christmas", "xmas", "thanksgiving", "halloween", "new year", "new year's", "hanukkah", "passover",
+                                        "ramadan", "eid", "diwali", "lent", "advent", "pentecost", "whitsun", "midsummer"]
     private static let opening: Set<unichar> = Set("([{\"'“‘:=@".utf16)
     private static let closing: Set<unichar> = Set(")]}\"'”’.,;:!?".utf16)
 
@@ -189,6 +282,41 @@ enum ContextStage {
 
     /// A place or company is named: some word in it is capitalised (or in
     /// another script) and not one of the commonest words ("the", "aviation", "twerk").
+    /// A place as `nations` lists it: lowercase, without "the" or a possessive.
+    static func normalPlace(_ value: String) -> String {
+        var words = value.lowercased().replacingOccurrences(of: "’", with: "'").split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        if words.first == "the" { words.removeFirst() }
+        if let last = words.last, last.hasSuffix("'s") { words[words.count - 1] = String(last.dropLast(2)) }
+        return words.joined(separator: " ")
+    }
+
+    /// Countries, continents and the words for their people, in English.
+    static let nations: Set<String> = Set("""
+        afghanistan afghan albania albanian algeria algerian andorra angola angolan argentina argentine argentinian armenia armenian australia australian \
+        austria austrian azerbaijan azerbaijani bahamas bahrain bangladesh bangladeshi barbados belarus belarusian belgium belgian belize benin bhutan \
+        bolivia bolivian bosnia bosnian botswana brazil brazilian britain british brunei bulgaria bulgarian burkina burundi cambodia cambodian cameroon \
+        canada canadian chad chile chilean china chinese colombia colombian congo congolese croatia croatian cuba cuban cyprus cypriot czechia czech \
+        denmark danish djibouti dominica ecuador egypt egyptian eritrea estonia estonian eswatini ethiopia ethiopian fiji finland finnish france french \
+        gabon gambia georgia georgian germany german ghana ghanaian greece greek grenada guatemala guinea guyana haiti haitian honduras hungary hungarian \
+        iceland icelandic india indian indonesia indonesian iran iranian iraq iraqi ireland irish israel israeli italy italian jamaica jamaican japan \
+        japanese jordan jordanian kazakhstan kazakh kenya kenyan kiribati korea korean kosovo kuwait kuwaiti kyrgyzstan laos latvia latvian lebanon \
+        lebanese lesotho liberia libya libyan liechtenstein lithuania lithuanian luxembourg madagascar malawi malaysia malaysian maldives mali malta \
+        maltese mauritania mauritius mexico mexican micronesia moldova moldovan monaco mongolia mongolian montenegro morocco moroccan mozambique myanmar \
+        namibia nauru nepal nepalese netherlands dutch nicaragua niger nigeria nigerian norway norwegian oman pakistan pakistani palau palestine \
+        palestinian panama paraguay peru peruvian philippines filipino poland polish portugal portuguese qatar romania romanian russia russian rwanda \
+        samoa senegal serbia serbian seychelles singapore slovakia slovak slovenia slovenian somalia somali spain spanish sudan suriname sweden swedish \
+        switzerland swiss syria syrian taiwan taiwanese tajikistan tanzania thailand thai togo tonga tunisia tunisian turkey turkish turkmenistan tuvalu \
+        uganda ugandan ukraine ukrainian uruguay uzbekistan vanuatu venezuela venezuelan vietnam vietnamese yemen zambia zimbabwe english scottish welsh \
+        kurdish kurd arab arabic european asian african american latin \
+        africa asia europe antarctica oceania america
+        """.split(whereSeparator: { $0.isWhitespace }).map(String.init)).union([
+        "united kingdom", "united states", "united states of america", "usa", "uk", "us", "new zealand", "south africa", "south korea", "north korea",
+        "saudi arabia", "sri lanka", "costa rica", "el salvador", "sierra leone", "ivory coast", "czech republic", "dominican republic",
+        "united arab emirates", "great britain", "northern ireland", "north america", "south america", "latin america", "central america",
+        "middle east", "south african", "new zealander", "sri lankan", "saudi", "british isles", "soviet union", "ussr", "eu", "european union",
+        "republic of turkey", "russian federation", "people's republic of china", "republic of ireland", "republic of poland",
+    ])
+
     private static func named(_ value: String) -> Bool {
         let common = ContextModel.shared?.common ?? []
         return value.split(whereSeparator: { !$0.isLetter && $0 != "'" && $0 != "’" }).contains { word in
