@@ -8,7 +8,6 @@ import SwiftUI
 struct PreviewText: NSViewRepresentable {
     let text: String
     let marks: [Mark]
-    let mayExport: Bool
     let model: AppModel
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -38,7 +37,7 @@ struct PreviewText: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let view = scroll.documentView as? PreviewTextView else { return }
-        view.allowsExport = mayExport
+        view.allowsExport = { model.selectionMayLeave }
         let model = model
         view.blocked = { model.selectionBlocked(copying: $0) }
         if context.coordinator.shown != text || context.coordinator.shownMarks != marks {
@@ -80,35 +79,37 @@ struct PreviewText: NSViewRepresentable {
 }
 
 /// A text view that lets a selection leave the app (copied, dragged or sent
-/// to a service) only once the result may (`Finished.mayExport`). Until then
+/// to a service) only when `allowsExport` says so at that moment
+/// (`AppModel.selectionMayLeave`): once the result may leave, and not while
+/// changes to it are still being written in. Until then
 /// its menu's Copy, ⌘C, a drag out of the window and a service write nothing,
 /// and `blocked` opens the review instead.
 final class PreviewTextView: NSTextView {
-    var allowsExport = false
+    var allowsExport: () -> Bool = { false }
     /// Called when a selection tried to leave: `true` for a copy, `false` for a drag or a service.
     var blocked: (Bool) -> Void = { _ in }
 
     // The context menu's Copy, and ⌘C once the menu command sends it here.
     override func copy(_ sender: Any?) {
-        guard allowsExport else { blocked(true); return }
+        guard allowsExport() else { blocked(true); return }
         super.copy(sender)
     }
 
     // A drag out of the window starts nothing until then.
     override func dragSelection(with event: NSEvent, offset mouseOffset: NSSize, slideBack: Bool) -> Bool {
-        guard allowsExport else { blocked(false); return false }
+        guard allowsExport() else { blocked(false); return false }
         return super.dragSelection(with: event, offset: mouseOffset, slideBack: slideBack)
     }
 
     // Copy, drag and services all write the selection through here.
     override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
-        guard allowsExport else { blocked(pboard.name == .general); return false }
+        guard allowsExport() else { blocked(pboard.name == .general); return false }
         return super.writeSelection(to: pboard, types: types)
     }
 
     // Services ("New Note With Selection") find no text to take.
     override func validRequestor(forSendType sendType: NSPasteboard.PasteboardType?, returnType: NSPasteboard.PasteboardType?) -> Any? {
-        guard allowsExport || sendType == nil else { return nil }
+        guard allowsExport() || sendType == nil else { return nil }
         return super.validRequestor(forSendType: sendType, returnType: returnType)
     }
 }
@@ -119,7 +120,6 @@ struct PreviewCell: NSViewRepresentable {
     let text: String
     let marks: [Mark]
     let column: String?
-    let mayExport: Bool
     let model: AppModel
 
     func makeNSView(context: Context) -> PreviewField {
@@ -134,7 +134,7 @@ struct PreviewCell: NSViewRepresentable {
     }
 
     func updateNSView(_ field: PreviewField, context: Context) {
-        field.editor.allowsExport = mayExport
+        field.editor.allowsExport = { model.selectionMayLeave }
         let model = model, text = text, marks = marks, column = column
         field.editor.blocked = { model.selectionBlocked(copying: $0) }
         field.onSelect = { range in model.select(PreviewSelection(text: text, marks: marks, range: range, key: column)) }
@@ -206,7 +206,8 @@ enum PreviewMenu {
             other.submenu = kinds
             menu.addItem(other)
         } else if !pick.isEmpty {
-            menu.addItem(Action(Copy.keepOriginal(ResultView.originals(of: pick)), key: "e") { model.keepOriginal() })
+            let title = pick.replaced.isEmpty ? Copy.removeMark : Copy.keepOriginal(ResultView.originals(of: pick))
+            menu.addItem(Action(title, key: "e") { model.keepOriginal() })
         }
         if !menu.items.isEmpty { menu.addItem(.separator()) }
         menu.addItem(Action("Copy", key: "c") { model.copyCommand() })

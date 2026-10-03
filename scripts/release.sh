@@ -11,8 +11,9 @@ APP=build/Scrub.app
 DMG=build/Scrub.dmg
 
 # The real-text gate first, the ordinary sets and then the holdout (see scripts/eval-gate.sh).
-scripts/eval-gate.sh
-scripts/eval-gate.sh --holdout
+# Strict: a release never goes out without both corpora and their baselines.
+scripts/eval-gate.sh --strict
+scripts/eval-gate.sh --strict --holdout
 
 notarize() {
   xcrun notarytool submit "$1" --keychain-profile "$PROFILE" --wait | tee build/notary.log

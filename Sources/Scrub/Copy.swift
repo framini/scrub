@@ -91,6 +91,27 @@ enum Copy {
     static let replaceSelectionHelp = "Replace it with a stand-in everywhere it’s written, with its variants"
     static let keepOriginalHelp = "Put back what this stand-in replaced, everywhere"
     static func keepOriginal(_ originals: [String]) -> String { originals.count == 1 ? "Keep “\(originals[0])”" : "Keep \(originals.count) originals" }
+    static func inPlaces(_ count: Int) -> String { count == 1 ? "in 1 place" : "in \(count) places" }
+    /// What a mark, a kept original, an undo or a redo just did, said under the preview.
+    static func replaced(_ values: [String], places count: Int, as entity: String) -> String {
+        let kind = kind(entity), lowered = kind == kind.uppercased() ? kind : kind.lowercased()
+        let article = "AEIOU".contains(kind.prefix(1)) ? "an" : "a"
+        // Every place it is written was replaced already, by Scrub or an earlier mark.
+        guard count > 0 else { return "\(quoted(values)) was already replaced everywhere" }
+        return "Replaced \(quoted(values)) as \(article) \(lowered) \(inPlaces(count))"
+    }
+    static func kept(_ originals: [String], places count: Int, unmarking: Bool) -> String {
+        unmarking ? "Took the mark off \(quoted(originals)) \(inPlaces(count))" : "Put back \(quoted(originals)) \(inPlaces(count))"
+    }
+    static func undid(_ change: String) -> String { "Undone: \(change)" }
+    static func redid(_ change: String) -> String { "Redone: \(change)" }
+    static let removeMark = "Remove mark"
+    static let removeMarkHelp = "Take this mark off, and put back what it replaced everywhere"
+    static func reviewBanner(_ count: Int) -> String {
+        count == 1 ? "1 replacement to check before sharing" : "\(count) replacements to check before sharing"
+    }
+    static let reviewBannerBody = "Scrub isn’t sure about these. Copy and Save ask you first."
+    static func moreCounts(_ count: Int) -> String { "+\(count) more" }
     static func checked(leaving: Int) -> String { leaving == 0 ? "Checked" : "Checked · \(leaving) left as written" }
 
     static let reducedCoverageTitle = "Reduced coverage"

@@ -47,7 +47,7 @@ enum OrderedJSON {
                 write(String(quote(TextRanges.substring(value, cursor..<mark.range.lowerBound)).dropFirst().dropLast()))
                 let start = (output as NSString).length
                 write(String(quote(TextRanges.substring(value, mark.range)).dropFirst().dropLast()))
-                marks.append(Mark(range: start..<(output as NSString).length, entity: mark.entity))
+                marks.append(Mark(range: start..<(output as NSString).length, entity: mark.entity, byHand: mark.byHand))
                 cursor = mark.range.upperBound
             }
             write(String(quote(TextRanges.substring(value, cursor..<(value as NSString).length)).dropFirst().dropLast()))
@@ -80,7 +80,7 @@ enum OrderedJSON {
             case .number(let number):
                 let start = (output as NSString).length
                 write(number)
-                for mark in valueMarks[path] ?? [] { marks.append(Mark(range: (start + mark.range.lowerBound)..<(start + mark.range.upperBound), entity: mark.entity)) }
+                for mark in valueMarks[path] ?? [] { marks.append(Mark(range: (start + mark.range.lowerBound)..<(start + mark.range.upperBound), entity: mark.entity, byHand: mark.byHand)) }
             case .bool(let bool): write(bool ? "true" : "false")
             case .null: write("null")
             }

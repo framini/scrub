@@ -109,7 +109,7 @@ private let note = "Ms Odalys Ferriter called about the refund. Brightwater from
     view.isEditable = false
     view.isSelectable = true
     view.textStorage?.setAttributedString(ResultView.styled(output, [], font: .monospacedSystemFont(ofSize: 13, weight: .regular)))
-    view.allowsExport = done.mayExport
+    view.allowsExport = { model.selectionMayLeave }
     view.blocked = { model.selectionBlocked(copying: $0) }
     #expect(view.isSelectable && !view.isEditable)
     view.selectAll(nil)
@@ -135,7 +135,6 @@ private let note = "Ms Odalys Ferriter called about the refund. Brightwater from
     #expect(after.mayExport)
 
     // Checked once, the selection leaves as it is, and nothing else is asked.
-    view.allowsExport = after.mayExport
     drag.clearContents()
     #expect(view.writeSelection(to: drag, types: view.writablePasteboardTypes))
     #expect(drag.string(forType: .string) == output && !model.reviewing)
@@ -153,4 +152,37 @@ private let note = "Ms Odalys Ferriter called about the refund. Brightwater from
     model.finishReview(Choices(left: []))
     try await settled(model)
     #expect(board.string(forType: .string) == nil, "a drag asks, but copies nothing afterwards")
+}
+
+/// While a mark is being written in, the preview still shows the value it
+/// replaces: a selection there leaves nothing, by drag, service or menu Copy,
+/// until the new text is shown.
+@MainActor
+@Test func aSelectionCannotLeaveWhileAMarkIsWrittenIn() async throws {
+    let (model, _) = try await finished(note)
+    guard case .finished(let done) = model.state else { Issue.record("not finished"); return }
+    model.finishReview(done.choices)
+    try await settled(model)
+    guard case .finished(let checked) = model.state else { Issue.record("not finished"); return }
+    let output = String(decoding: checked.result.output, as: UTF8.self)
+    try #require(output.contains("billing"), "the note must hold a value Scrub left: \(output)")
+    let view = PreviewTextView()
+    view.isEditable = false
+    view.isSelectable = true
+    view.textStorage?.setAttributedString(ResultView.styled(output, [], font: .monospacedSystemFont(ofSize: 13, weight: .regular)))
+    view.allowsExport = { model.selectionMayLeave }
+    view.blocked = { model.selectionBlocked(copying: $0) }
+    view.selectAll(nil)
+    model.mark(["billing"], as: "EMPLOYER")
+    #expect(model.applyingReview && !model.selectionMayLeave)
+    let drag = NSPasteboard(name: NSPasteboard.Name("scrub-drag-\(UUID().uuidString)"))
+    drag.clearContents()
+    #expect(!view.writeSelection(to: drag, types: view.writablePasteboardTypes))
+    #expect(drag.string(forType: .string) == nil)
+    for type in view.writablePasteboardTypes { #expect(view.validRequestor(forSendType: type, returnType: nil) == nil) }
+    let general = NSPasteboard.general.changeCount
+    view.copy(nil)
+    #expect(NSPasteboard.general.changeCount == general && !model.reviewing)
+    try await settled(model)
+    #expect(model.selectionMayLeave)
 }

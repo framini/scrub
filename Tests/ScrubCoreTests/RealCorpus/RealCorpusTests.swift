@@ -93,7 +93,13 @@ struct RealCorpus {
 
     @Test func realCorpus() throws {
         let environment = ProcessInfo.processInfo.environment
-        guard let directory = environment["SCRUB_REAL_CORPUS"], FileManager.default.fileExists(atPath: directory) else { return }
+        // SCRUB_REAL_CORPUS_STRICT=1, as releases run it, fails where a probe would quietly pass:
+        // no data, no documents in the slice, or no baseline to hold them to.
+        let strict = environment["SCRUB_REAL_CORPUS_STRICT"] == "1"
+        guard let directory = environment["SCRUB_REAL_CORPUS"], FileManager.default.fileExists(atPath: directory) else {
+            if strict { Issue.record("strict gate: no corpus at \(environment["SCRUB_REAL_CORPUS"] ?? "(SCRUB_REAL_CORPUS unset)")") }
+            return
+        }
         let onlyHoldout = environment["SCRUB_REAL_CORPUS_HOLDOUT"] == "only"
         let sets = environment["SCRUB_REAL_CORPUS_SETS"].map { Set($0.split(separator: ",").map(String.init)) }
         let limit = environment["SCRUB_REAL_CORPUS_LIMIT"].flatMap(Int.init) ?? .max
@@ -118,6 +124,11 @@ struct RealCorpus {
         let corpus = ((directory as NSString).standardizingPath as NSString).lastPathComponent
         let complete = sets == nil && limit == .max && paths.count == PIIGaps.InputPath.allCases.count && environment["SCRUB_REAL_CORPUS_GATE"] == nil
         var failures: [String] = []
+        if strict {
+            if !complete { failures.append("strict gate: a run limited to some sets, documents or paths gates nothing") }
+            if scores.isEmpty { failures.append("strict gate: no documents in \(corpus)/\(slice)") }
+            if environment["SCRUB_REAL_CORPUS_RECORD"] == "1" { failures.append("strict gate: recording a baseline is no check") }
+        }
         if complete {
             var baseline = (try? JSONSerialization.jsonObject(with: Data(contentsOf: Self.baselineURL))) as? [String: Any] ?? [:]
             let measured = Self.aggregate(scores, paths: paths.count)
@@ -132,6 +143,7 @@ struct RealCorpus {
                 report += "\n\nGATE \(corpus)/\(slice): " + (failures.isEmpty ? "within tolerance of the baseline" : "\(failures.count) regressions\n  " + failures.joined(separator: "\n  "))
             } else {
                 report += "\n\nGATE \(corpus)/\(slice): no baseline recorded"
+                if strict { failures.append("strict gate: no baseline recorded for \(corpus)/\(slice)") }
             }
         }
         print(report)

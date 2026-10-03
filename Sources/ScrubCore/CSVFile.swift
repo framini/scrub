@@ -71,14 +71,14 @@ public enum CSVFile: FileFormat {
                 for column in rows[row].indices {
                     rows[row][column] = values[valueIndex].text
                     if row < previewRows {
-                        marks += values[valueIndex].marks.map { TableMark(row: row, column: column, range: $0.range, entity: $0.entity) }
+                        marks += values[valueIndex].marks.map { TableMark(row: row, column: column, range: $0.range, entity: $0.entity, byHand: $0.byHand) }
                     }
                     valueIndex += 1
                 }
             }
             for (column, index) in headerIDs.enumerated() {
                 columns[column] = values[index].text
-                marks += values[index].marks.map { TableMark(row: TableMark.header, column: column, range: $0.range, entity: $0.entity) }
+                marks += values[index].marks.map { TableMark(row: TableMark.header, column: column, range: $0.range, entity: $0.entity, byHand: $0.byHand) }
             }
             let previewWidth = max(columns.count, rows.prefix(previewRows).map(\.count).max() ?? 0)
             let previewColumns = columns + Array(repeating: "", count: previewWidth - columns.count)
@@ -86,7 +86,7 @@ public enum CSVFile: FileFormat {
             func shift(row: Int, column: Int) {
                 for mark in marks.indices where marks[mark].row == row && marks[mark].column == column {
                     let old = marks[mark]
-                    marks[mark] = TableMark(row: row, column: column, range: (old.range.lowerBound + 1)..<(old.range.upperBound + 1), entity: old.entity)
+                    marks[mark] = TableMark(row: row, column: column, range: (old.range.lowerBound + 1)..<(old.range.upperBound + 1), entity: old.entity, byHand: old.byHand)
                 }
             }
             if hasHeader {
