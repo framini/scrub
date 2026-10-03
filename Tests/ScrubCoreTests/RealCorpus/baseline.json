@@ -1,0 +1,534 @@
+{
+  "corpus" : {
+    "holdout" : {
+      "court" : {
+        "changedWords" : 93,
+        "documents" : 19,
+        "documentsWithLeft" : 6,
+        "labels" : {
+          "DATE_OF_BIRTH" : {
+            "caught" : 22,
+            "spans" : 23
+          },
+          "ID_NUMBER" : {
+            "caught" : 68,
+            "spans" : 72
+          },
+          "LOCATION" : {
+            "caught" : 25,
+            "spans" : 28
+          },
+          "PERSON" : {
+            "caught" : 176,
+            "spans" : 186
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 35475,
+        "reviewFindings" : 471,
+        "words" : 14219
+      },
+      "email" : {
+        "changedWords" : 402,
+        "documents" : 63,
+        "documentsWithLeft" : 26,
+        "labels" : {
+          "ADDRESS" : {
+            "caught" : 0,
+            "spans" : 4
+          },
+          "EMAIL_ADDRESS" : {
+            "caught" : 37,
+            "spans" : 37
+          },
+          "LOCATION" : {
+            "caught" : 2,
+            "spans" : 2
+          },
+          "ORG_EMPLOYER" : {
+            "caught" : 0,
+            "spans" : 6
+          },
+          "PERSON" : {
+            "caught" : 272,
+            "spans" : 300
+          },
+          "PHONE_NUMBER" : {
+            "caught" : 25,
+            "spans" : 25
+          },
+          "SECRET" : {
+            "caught" : 1,
+            "spans" : 3
+          },
+          "USERNAME" : {
+            "caught" : 0,
+            "spans" : 2
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 17715,
+        "reviewFindings" : 180,
+        "words" : 6725
+      },
+      "manpages" : {
+        "changedWords" : 3,
+        "documents" : 124,
+        "documentsWithLeft" : 0,
+        "labels" : {
+
+        },
+        "paths" : 3,
+        "plainWords" : 12696,
+        "reviewFindings" : 0,
+        "words" : 4232
+      },
+      "social" : {
+        "changedWords" : 51,
+        "documents" : 261,
+        "documentsWithLeft" : 51,
+        "labels" : {
+          "LOCATION" : {
+            "caught" : 16,
+            "spans" : 32
+          },
+          "PERSON" : {
+            "caught" : 34,
+            "spans" : 68
+          },
+          "USERNAME" : {
+            "caught" : 10,
+            "spans" : 20
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 12030,
+        "reviewFindings" : 189,
+        "words" : 4305
+      },
+      "tweets" : {
+        "changedWords" : 75,
+        "documents" : 210,
+        "documentsWithLeft" : 57,
+        "labels" : {
+          "LOCATION" : {
+            "caught" : 34,
+            "spans" : 58
+          },
+          "PERSON" : {
+            "caught" : 39,
+            "spans" : 52
+          },
+          "USERNAME" : {
+            "caught" : 51,
+            "spans" : 80
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 8475,
+        "reviewFindings" : 309,
+        "words" : 3210
+      }
+    },
+    "main" : {
+      "court" : {
+        "changedWords" : 570,
+        "documents" : 108,
+        "documentsWithLeft" : 37,
+        "labels" : {
+          "DATE_OF_BIRTH" : {
+            "caught" : 99,
+            "spans" : 101
+          },
+          "ID_NUMBER" : {
+            "caught" : 214,
+            "spans" : 253
+          },
+          "LOCATION" : {
+            "caught" : 216,
+            "spans" : 257
+          },
+          "PERSON" : {
+            "caught" : 696,
+            "spans" : 727
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 238479,
+        "reviewFindings" : 2217,
+        "words" : 94333
+      },
+      "email" : {
+        "changedWords" : 1167,
+        "documents" : 237,
+        "documentsWithLeft" : 88,
+        "labels" : {
+          "ADDRESS" : {
+            "caught" : 4,
+            "spans" : 18
+          },
+          "EMAIL_ADDRESS" : {
+            "caught" : 120,
+            "spans" : 123
+          },
+          "ID_NUMBER" : {
+            "caught" : 1,
+            "spans" : 6
+          },
+          "LOCATION" : {
+            "caught" : 22,
+            "spans" : 25
+          },
+          "ORG_EMPLOYER" : {
+            "caught" : 2,
+            "spans" : 16
+          },
+          "PERSON" : {
+            "caught" : 953,
+            "spans" : 1054
+          },
+          "PHONE_NUMBER" : {
+            "caught" : 102,
+            "spans" : 107
+          },
+          "SECRET" : {
+            "caught" : 1,
+            "spans" : 2
+          },
+          "URL_PERSONAL" : {
+            "caught" : 0,
+            "spans" : 1
+          },
+          "USERNAME" : {
+            "caught" : 0,
+            "spans" : 2
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 65319,
+        "reviewFindings" : 651,
+        "words" : 24785
+      },
+      "manpages" : {
+        "changedWords" : 51,
+        "documents" : 476,
+        "documentsWithLeft" : 0,
+        "labels" : {
+
+        },
+        "paths" : 3,
+        "plainWords" : 49827,
+        "reviewFindings" : 21,
+        "words" : 16609
+      },
+      "social" : {
+        "changedWords" : 240,
+        "documents" : 1026,
+        "documentsWithLeft" : 177,
+        "labels" : {
+          "LOCATION" : {
+            "caught" : 37,
+            "spans" : 91
+          },
+          "PERSON" : {
+            "caught" : 133,
+            "spans" : 227
+          },
+          "USERNAME" : {
+            "caught" : 51,
+            "spans" : 112
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 47835,
+        "reviewFindings" : 693,
+        "words" : 17014
+      },
+      "tweets" : {
+        "changedWords" : 186,
+        "documents" : 790,
+        "documentsWithLeft" : 242,
+        "labels" : {
+          "LOCATION" : {
+            "caught" : 108,
+            "spans" : 208
+          },
+          "PERSON" : {
+            "caught" : 193,
+            "spans" : 275
+          },
+          "USERNAME" : {
+            "caught" : 204,
+            "spans" : 300
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 31677,
+        "reviewFindings" : 1278,
+        "words" : 12290
+      }
+    }
+  },
+  "fresh" : {
+    "holdout" : {
+      "court" : {
+        "changedWords" : 129,
+        "documents" : 30,
+        "documentsWithLeft" : 10,
+        "labels" : {
+          "DATE_OF_BIRTH" : {
+            "caught" : 30,
+            "spans" : 30
+          },
+          "ID_NUMBER" : {
+            "caught" : 135,
+            "spans" : 147
+          },
+          "LOCATION" : {
+            "caught" : 47,
+            "spans" : 49
+          },
+          "PERSON" : {
+            "caught" : 235,
+            "spans" : 245
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 63471,
+        "reviewFindings" : 807,
+        "words" : 25172
+      },
+      "email" : {
+        "changedWords" : 504,
+        "documents" : 64,
+        "documentsWithLeft" : 17,
+        "labels" : {
+          "ADDRESS" : {
+            "caught" : 1,
+            "spans" : 1
+          },
+          "EMAIL_ADDRESS" : {
+            "caught" : 20,
+            "spans" : 21
+          },
+          "ID_NUMBER" : {
+            "caught" : 3,
+            "spans" : 3
+          },
+          "LOCATION" : {
+            "caught" : 2,
+            "spans" : 2
+          },
+          "ORG_EMPLOYER" : {
+            "caught" : 2,
+            "spans" : 4
+          },
+          "PERSON" : {
+            "caught" : 205,
+            "spans" : 226
+          },
+          "PHONE_NUMBER" : {
+            "caught" : 34,
+            "spans" : 37
+          },
+          "SECRET" : {
+            "caught" : 1,
+            "spans" : 1
+          },
+          "USERNAME" : {
+            "caught" : 0,
+            "spans" : 1
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 17007,
+        "reviewFindings" : 213,
+        "words" : 6359
+      },
+      "manpages" : {
+        "changedWords" : 21,
+        "documents" : 120,
+        "documentsWithLeft" : 0,
+        "labels" : {
+
+        },
+        "paths" : 3,
+        "plainWords" : 12507,
+        "reviewFindings" : 3,
+        "words" : 4169
+      },
+      "social" : {
+        "changedWords" : 90,
+        "documents" : 191,
+        "documentsWithLeft" : 40,
+        "labels" : {
+          "LOCATION" : {
+            "caught" : 3,
+            "spans" : 9
+          },
+          "PERSON" : {
+            "caught" : 48,
+            "spans" : 86
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 7005,
+        "reviewFindings" : 132,
+        "words" : 2475
+      },
+      "tweets" : {
+        "changedWords" : 87,
+        "documents" : 196,
+        "documentsWithLeft" : 24,
+        "labels" : {
+          "LOCATION" : {
+            "caught" : 13,
+            "spans" : 18
+          },
+          "PERSON" : {
+            "caught" : 30,
+            "spans" : 40
+          },
+          "USERNAME" : {
+            "caught" : 22,
+            "spans" : 33
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 7254,
+        "reviewFindings" : 159,
+        "words" : 2642
+      }
+    },
+    "main" : {
+      "court" : {
+        "changedWords" : 369,
+        "documents" : 97,
+        "documentsWithLeft" : 36,
+        "labels" : {
+          "DATE_OF_BIRTH" : {
+            "caught" : 89,
+            "spans" : 90
+          },
+          "ID_NUMBER" : {
+            "caught" : 263,
+            "spans" : 299
+          },
+          "LOCATION" : {
+            "caught" : 188,
+            "spans" : 214
+          },
+          "PERSON" : {
+            "caught" : 759,
+            "spans" : 784
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 221160,
+        "reviewFindings" : 2043,
+        "words" : 87482
+      },
+      "email" : {
+        "changedWords" : 1005,
+        "documents" : 236,
+        "documentsWithLeft" : 87,
+        "labels" : {
+          "ADDRESS" : {
+            "caught" : 0,
+            "spans" : 5
+          },
+          "EMAIL_ADDRESS" : {
+            "caught" : 97,
+            "spans" : 97
+          },
+          "ID_NUMBER" : {
+            "caught" : 6,
+            "spans" : 8
+          },
+          "LOCATION" : {
+            "caught" : 11,
+            "spans" : 12
+          },
+          "ORG_EMPLOYER" : {
+            "caught" : 3,
+            "spans" : 12
+          },
+          "PERSON" : {
+            "caught" : 933,
+            "spans" : 1039
+          },
+          "PHONE_NUMBER" : {
+            "caught" : 86,
+            "spans" : 100
+          },
+          "SECRET" : {
+            "caught" : 5,
+            "spans" : 8
+          },
+          "USERNAME" : {
+            "caught" : 0,
+            "spans" : 2
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 66651,
+        "reviewFindings" : 567,
+        "words" : 25013
+      },
+      "manpages" : {
+        "changedWords" : 159,
+        "documents" : 480,
+        "documentsWithLeft" : 0,
+        "labels" : {
+
+        },
+        "paths" : 3,
+        "plainWords" : 52188,
+        "reviewFindings" : 33,
+        "words" : 17396
+      },
+      "social" : {
+        "changedWords" : 243,
+        "documents" : 818,
+        "documentsWithLeft" : 197,
+        "labels" : {
+          "LOCATION" : {
+            "caught" : 14,
+            "spans" : 45
+          },
+          "PERSON" : {
+            "caught" : 184,
+            "spans" : 383
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 29601,
+        "reviewFindings" : 402,
+        "words" : 10525
+      },
+      "tweets" : {
+        "changedWords" : 402,
+        "documents" : 804,
+        "documentsWithLeft" : 115,
+        "labels" : {
+          "LOCATION" : {
+            "caught" : 46,
+            "spans" : 81
+          },
+          "PERSON" : {
+            "caught" : 116,
+            "spans" : 171
+          },
+          "USERNAME" : {
+            "caught" : 71,
+            "spans" : 122
+          }
+        },
+        "paths" : 3,
+        "plainWords" : 31194,
+        "reviewFindings" : 636,
+        "words" : 11206
+      }
+    }
+  }
+}

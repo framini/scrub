@@ -42,14 +42,15 @@ struct RuleRegressions {
     // MARK: Links
 
     @Test func noWordInsideALinkIsANameOrHandle() throws {
-        // "t.co" was read as a handle and the link broken; a name in a path or
-        // host is part of an address, whoever is named elsewhere.
+        // "t.co" was read as a handle and the link broken. A person's name that
+        // is a whole segment of a link's path is theirs, and takes their stand-in
+        // in place; the rest of the link stays as written (see `URLs`).
         try Self.check(Case(prose: "Clip from Thursday's call is up http://t.co/Qx7mPvL2 and Ama Okafor walks through it. Slides: https://www.corvane.test/team/ama-okafor/slides, mirror at files.corvane.test/okafor/deck.pdf",
-                            gone: ["Okafor"], kept: ["http://t.co/Qx7mPvL2", "https://www.corvane.test/team/ama-okafor/slides", "files.corvane.test/okafor/deck.pdf"]))
+                            gone: ["Okafor"], kept: ["http://t.co/Qx7mPvL2", "https://www.corvane.test/team", "slides", "files.corvane.test", "deck.pdf"]))
         try Self.check(Case(prose: "lol this is fab!! http://t.co/rT4kWb9Z via @tamsin_vale", kept: ["http://t.co/rT4kWb9Z"]))
-        // A handle found in the text stays a handle there, and the same handle in a profile link stays as linked.
+        // A handle in a profile link is the person's, and so is the same handle in the text.
         try Self.check(Case(prose: "Ping marisol.quent42 about the refund, her profile is https://social.corvane.test/u/marisol.quent42 if you need it",
-                            gone: [], kept: ["https://social.corvane.test/u/marisol.quent42"]))
+                            gone: ["marisol.quent42"], entity: "USERNAME", kept: ["https://social.corvane.test/u", "Ping", "refund"]))
     }
 
     @Test func linksAreFoundWhereverTheyAreWritten() {

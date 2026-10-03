@@ -10,11 +10,24 @@ public final class Detector {
     private let addresses: Bool
     /// Whether the learned scorer judges people only a model read (see `PersonScorer.learned`).
     private let learned: Bool
+    /// The name model, unless this scrub runs without it (see `Coverage`).
+    private let names: NameModel?
     /// When set, every person only a model read is written here with what is known about it.
     var personLog: PersonLog?
-    public init() { isCancelled = { Task.isCancelled }; addresses = AddressModel.active; learned = PersonScorer.learned }
-    init(isCancelled: @escaping @Sendable () -> Bool, addresses: Bool = AddressModel.active, learned: Bool = PersonScorer.learned) {
-        self.isCancelled = isCancelled; self.addresses = addresses; self.learned = learned
+    /// The links `found` read in the text `base` judges, so `Links.outside` needn't read them again.
+    private var foundLinks: [Range<Int>]?
+    /// The people only a model read that the last `base` call did not keep
+    /// but that are too likely to ignore (see `PersonScorer.reviewFrom`):
+    /// left as written, and put to a person in review.
+    private(set) var doubts: [Span] = []
+    public init() {
+        isCancelled = { Task.isCancelled }
+        addresses = AddressModel.active && !Coverage.withheld.contains(.addressModel)
+        learned = PersonScorer.learned
+        names = Coverage.withheld.contains(.nameModel) ? nil : NameModel.shared
+    }
+    init(isCancelled: @escaping @Sendable () -> Bool, addresses: Bool = AddressModel.active, learned: Bool = PersonScorer.learned, names: Bool = true) {
+        self.isCancelled = isCancelled; self.addresses = addresses; self.learned = learned; self.names = names ? NameModel.shared : nil
     }
     public func find(_ text: String, key: String? = nil, gazetteer: [String: Set<String>] = [:], contextWords: Set<String> = []) -> [Span] {
         find(text, key: key, matcher: GazetteerMatcher(gazetteer), contextWords: contextWords)
@@ -28,13 +41,41 @@ public final class Detector {
     /// `context` holds the context model's reading of the text, whose findings fill only what nothing else found.
     func base(_ text: String, key: String? = nil, contextWords: Set<String> = [], modelled: Bool = true, context: ContextStage.Reading? = nil) -> [Span] {
         autoreleasepool {
+            doubts = []
+            foundLinks = nil
             // A person a reading detector found, cut to what a name can hold (see NameShape).
             let spans = found(text, key: key, contextWords: contextWords, modelled: modelled, context: context).compactMap { span in
                 span.entity == "PERSON" && span.score < 0.95 ? NameShape.trimmed(span, in: text) : span
             }
             // "RFC4716" names a standard, and "t.co/x" a link: neither is anyone's.
-            return Standards.outside(Links.outside(spans, in: text), in: text)
+            // A secret under a query key ends with its parameter, whichever detector read it.
+            let ns = text as NSString
+            let cut = spans.map { span -> Span in
+                guard span.entity == "SECRET", span.url == nil, let end = URLs.queryValueEnd(ns, span.range) else { return span }
+                return Span(range: span.range.lowerBound..<end, entity: span.entity, score: span.score)
+            }
+            let kept = Standards.outside(Links.outside(cut, in: text, links: foundLinks), in: text)
+            if !doubts.isEmpty { doubts = Self.doubted(doubts, besides: kept, in: text, links: foundLinks) }
+            return kept
         }
+    }
+    /// What `base` finds, and the people it doubts.
+    func read(_ text: String, key: String? = nil, contextWords: Set<String> = [], context: ContextStage.Reading? = nil) -> (spans: [Span], doubts: [Span]) {
+        let spans = base(text, key: key, contextWords: contextWords, context: context)
+        return (spans, doubts)
+    }
+    /// Doubted people cut to what a name holds, outside every finding and
+    /// link, once each: where two models doubt one name, the likelier guess.
+    private static func doubted(_ doubts: [Span], besides kept: [Span], in text: String, links: [Range<Int>]?) -> [Span] {
+        var taken = IndexSet()
+        for range in kept.map(\.range) + (links ?? Links.ranges(in: text)) where !range.isEmpty { taken.insert(integersIn: range) }
+        var result: [Span] = []
+        for doubt in doubts.compactMap({ NameShape.trimmed($0, in: text) }).sorted(by: { $0.score != $1.score ? $0.score > $1.score : $0.range.lowerBound < $1.range.lowerBound }) {
+            guard !doubt.range.isEmpty, !taken.intersects(integersIn: doubt.range) else { continue }
+            taken.insert(integersIn: doubt.range)
+            result.append(doubt)
+        }
+        return result.sorted { $0.range.lowerBound < $1.range.lowerBound }
     }
     private func found(_ text: String, key: String?, contextWords: Set<String>, modelled: Bool, context: ContextStage.Reading?) -> [Span] {
         do {
@@ -48,17 +89,25 @@ public final class Detector {
             var spans = Patterns.find(text, contextWords: Set(KeyHints.words(key)).union(contextWords), isCancelled: isCancelled).compactMap { span in
                 span.entity == "ADDRESS" ? Self.addressRange(span.range, in: text as NSString).map { Span(range: $0, entity: span.entity, score: span.score) } : span
             }
+            spans.append(contentsOf: Self.spelledByEmail(spans, in: text, isCancelled: isCancelled))
+            spans.append(contentsOf: RecordIDs.spans(in: text))
             spans.append(contentsOf: system(text))
             var organisations: [Range<Int>] = []
             spans.append(contentsOf: NameTagger.find(text, using: tagger, organisations: &organisations, isCancelled: isCancelled))
-            let nameModel = modelled ? NameModel.shared : nil
+            let nameModel = modelled ? names : nil
             let reading = nameModel?.read(text, isCancelled: isCancelled)
             let named = nameModel.flatMap { model in reading.map { model.find(text, reading: $0) } } ?? []
-            let located = modelled && addresses ? AddressModel.shared?.find(text, isCancelled: isCancelled) ?? [] : []
+            let located = modelled && addresses ? AddressModel.find(text, isCancelled: isCancelled) : []
             spans = Self.addressed(spans, in: text)
             spans.removeAll { Self.namesNoOne($0, in: text) }
             // A place right after a title or a rank is the person it names: "Private Ellery", "Ms Paris".
             spans = spans.map { span in span.entity == "LOCATION" && Self.titled(span.range, in: text) ? Span(range: span.range, entity: "PERSON", score: span.score) : span }
+            // The personal parts of links: a query value under a personal key, a
+            // token, a person's segment of a path, a link's user name.
+            // Only a link with a path or a query has parts that can name someone.
+            if text.contains("://") || text.contains("www.") || text.contains(".") && (text.contains("/") || text.contains("?")) { foundLinks = Links.ranges(in: text) }
+            let linked = foundLinks.map { URLs.scan(text, links: $0) } ?? []
+            if !linked.isEmpty { spans.append(contentsOf: linked) }
             // A timestamp, ID or setting is read as written: its date is no birth
             // date, its digits no phone number, its region no place.
             if KeyHints.isStructural(key) { return spans.filter(Self.certain) }
@@ -108,6 +157,8 @@ public final class Detector {
                 if scoring ? hand && probability >= PersonScorer.keepFrom : hand {
                     spans.append(span)
                     if scoring { sure[span.range] = PersonScorer.confidence(probability) }
+                } else if scoring, hand, PersonScorer.doubtful(signals, probability) {
+                    doubts.append(Span(range: span.range, entity: "PERSON", score: probability))
                 }
             }
             // A kept guess carries the scorer's confidence; until then it keeps its model's score, so the address model and the context model's longer reading can still take it in.
@@ -145,7 +196,11 @@ public final class Detector {
                 let signals = PersonScorer.signals(person.range, in: text, reading: reading, people: people)
                 let probability = PersonScorer.probability(signals), hand = PersonScorer.agrees(signals), ordinary = NameShape.ordinaryGuess(guess, in: text)
                 personLog?.candidates.append(.init(range: person.range, source: "context", signals: signals, probability: probability, hand: hand, free: free, ordinary: ordinary))
-                guard free, hand, !ordinary, !scoring || probability >= PersonScorer.keepFrom else { continue }
+                guard free, hand, !ordinary, !scoring || probability >= PersonScorer.keepFrom else {
+                    // Nothing else agrees, or the scorer doubts it: not sure enough to replace, too likely to ignore.
+                    if scoring, free, !ordinary, PersonScorer.doubtful(signals, probability) { doubts.append(Span(range: person.range, entity: "PERSON", score: probability)) }
+                    continue
+                }
                 guesses.append(guess)
                 if scoring { sure[person.range] = PersonScorer.confidence(probability) }
             }
@@ -172,10 +227,63 @@ public final class Detector {
             return scored(spans)
         }
     }
+    /// A name written beside the email it spells, in any case: "BRISA
+    /// VANTONGEREN wrote from brisa.vantongeren@…". The local part's words,
+    /// in order, written as words; one of them must be a name or no ordinary
+    /// word, so "support.team" spells no one.
+    private static let letters = CharacterSet.letters
+    static func spelledByEmail(_ spans: [Span], in text: String, isCancelled: () -> Bool = { false }) -> [Span] {
+        let emails = spans.filter { $0.entity == "EMAIL_ADDRESS" }
+        guard !emails.isEmpty else { return [] }
+        var spelled: [[String]] = []
+        var seen: Set<String> = []
+        for email in emails {
+            let local = TextRanges.substring(text, email.range).prefix { $0 != "@" }.lowercased()
+            let parts = local.split(whereSeparator: { ".-_".contains($0) }).map(String.init)
+            guard (2...3).contains(parts.count), parts.allSatisfy({ $0.count >= 2 && $0.allSatisfy(\.isLetter) }), seen.insert(local).inserted,
+                  parts.contains(where: { NameLists.isName($0) || !NameLists.isOrdinary($0) }) else { continue }
+            spelled.append(parts)
+        }
+        guard !spelled.isEmpty else { return [] }
+        // Every word's place once; only a word as long as some email's first word is read: each
+        // email's first word is looked up, not searched for.
+        let ns = text as NSString
+        let lengths = Set(spelled.map { ($0[0] as NSString).length })
+        var words: [Range<Int>] = []
+        var at: [String: [Int]] = [:]
+        var start = -1
+        for index in 0...ns.length {
+            if index.isMultiple(of: 4096) && isCancelled() { return [] }
+            let letter = index < ns.length && Unicode.Scalar(ns.character(at: index)).map(Self.letters.contains) == true
+            if letter, start < 0 { start = index }
+            if !letter, start >= 0 {
+                if lengths.contains(index - start) { at[ns.substring(with: NSRange(location: start, length: index - start)).lowercased(), default: []].append(words.count) }
+                words.append(start..<index)
+                start = -1
+            }
+        }
+        func word(_ range: Range<Int>) -> String { ns.substring(with: NSRange(location: range.lowerBound, length: range.count)).lowercased() }
+        var found: [Span] = []
+        for parts in spelled {
+            for first in at[parts[0]] ?? [] where first + parts.count <= words.count {
+                let run = words[first..<(first + parts.count)].map { (word: word($0), range: $0) }
+                guard zip(run, parts).allSatisfy({ $0.word == $1 }) else { continue }
+                // Written as words: only spaces between them, and not inside an email or handle.
+                let between = zip(run, run.dropFirst()).allSatisfy { a, b in ns.substring(with: NSRange(location: a.range.upperBound, length: b.range.lowerBound - a.range.upperBound)).allSatisfy { $0 == " " || $0 == "\t" } }
+                let range = run.first!.range.lowerBound..<run.last!.range.upperBound
+                let edge = { (index: Int) in index >= 0 && index < ns.length && "@._".utf16.contains(ns.character(at: index)) }
+                guard between, !edge(range.lowerBound - 1), !edge(range.upperBound), !emails.contains(where: { $0.range.overlaps(range) }) else { continue }
+                found.append(Span(range: range, entity: "PERSON", score: 0.9))
+            }
+        }
+        return found
+    }
     /// Found by what the value is, whatever it sits under: an email, a card that
     /// passes its check digit, an IBAN, an IP address, a key with a known prefix.
     private static func certain(_ span: Span) -> Bool {
         ["EMAIL_ADDRESS", "CREDIT_CARD", "IBAN_CODE", "IP_ADDRESS", "SECRET"].contains(span.entity) || span.entity == "US_SSN" && span.score >= 0.85
+            // A link's part read by its key or its collection, and a person's ID by its prefix ("cus_…").
+            || span.url != nil || span.entity == "RECORD_ID"
     }
     private static let titles: Set<String> = ["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "madam"]
     /// A title alone ("Mr.", "Ms") or before a role ("Madam Chair", "Mr Justice") names no one,
@@ -221,7 +329,7 @@ public final class Detector {
                 if matcher.unlisted[match.index] && !NameCues.namedWord(match.range, in: text) { continue }
                 // "Okafor, Ama" is one person unless it is two names' ends in a list: "Ama Okafor, Ama Lind".
                 if matcher.lastFirst[match.index] && Self.withinList(match.range, ns) { continue }
-                spans.append(Span(range: match.range, entity: matcher.entities[match.index], score: 0.95))
+                spans.append(Span(range: match.range, entity: matcher.entities[match.index], score: GazetteerMatcher.score))
             }
             return Self.resolve(Links.outside(spans, in: text))
         }
@@ -393,7 +501,7 @@ public final class Detector {
     }
 
     /// The range without punctuation or spaces at its ends, if it still holds
-    /// an address: a digit and two words.
+    /// an address: two words, and a digit or two pieces ("Hauptstraße, Berlin-Mitte").
     private static func trimmed(_ range: Range<Int>, in ns: NSString) -> Range<Int>? {
         var lower = range.lowerBound, upper = range.upperBound
         let edge = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters).subtracting(CharacterSet(charactersIn: "#)"))
@@ -402,7 +510,7 @@ public final class Detector {
         guard lower < upper else { return nil }
         let value = ns.substring(with: NSRange(location: lower, length: upper - lower))
         let words = value.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).filter { $0.contains(where: \.isLetter) }
-        return words.count >= 2 && value.contains(where: \.isNumber) ? lower..<upper : nil
+        return words.count >= 2 && (value.contains(where: \.isNumber) || AddressBlock.pieces(value).count >= 2) ? lower..<upper : nil
     }
     private static let timeZone = TextPattern(#"^\s*(?i:africa|america|antarctica|arctic|asia|atlantic|australia|europe|indian|pacific|etc)/[A-Za-z_+-]+(?:/[A-Za-z_+-]+)?\s*$"#)
     private static let decimal = TextPattern(#"^[-+]?\d+\.\d+$"#)
@@ -535,6 +643,8 @@ public final class Detector {
 
 struct GazetteerMatcher {
     static let supportedEntities = ["FIRST_NAME", "LAST_NAME", "PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"]
+    /// What a value found again by its name carries until it takes the confidence of where it was learned (`Job.here`).
+    static let score = 0.95
     let matcher: Matcher
     let entities: [String]
     let capitalOnly: [Bool]

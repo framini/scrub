@@ -35,6 +35,9 @@ enum ProseLabels {
     /// must be about someone.
     private static let birthYear = TextPattern(#"\b(born(?:[ \t]+in)?|b\.)[ \t]+((?:18|19|20)\d{2}(?:(?:[ \t]*,[ \t]*(?:and[ \t]+)?|[ \t]+and[ \t]+)(?:18|19|20)\d{2})*)(?![\w/.\-]*\d)"#, options: [.caseInsensitive])
     private static let year4 = TextPattern(#"(?:18|19|20)\d{2}"#)
+    /// An age said as one: "aged 38", "age: 38", "38 years old", "a 38-year-old", "38 y/o".
+    /// It moves only with a birth date near it (see `StandIns.age`), so one alone stays.
+    private static let age = TextPattern(#"(?i)\b(?:aged|age:?)[ \t]+(\d{1,3})\b|\b(\d{1,3})(?:[ -]years?[ -]old\b|[ \t]?y/?o\b)"#)
     /// An extension written after a number or alone: "x41872", "ext. 5-3310", "extension 4471".
     private static let phoneExtension = TextPattern(#"(?<![\p{L}\p{N}_./\-])((?i:ext)\.?[ \t]*|(?i:extension)[ \t]+|[xX]-?)(\d(?:-?\d){3,5})(?![\p{L}\p{N}-])"#)
     private static let someone: Set<String> = ["i", "he", "she", "they", "we", "who", "whom", "her", "his", "my", "our", "their", "both", "each", "applicant", "applicants", "patient", "patients", "client", "clients", "claimant", "claimants", "defendant", "defendants", "plaintiff", "appellant", "petitioner", "victim", "victims", "son", "daughter", "child", "children", "wife", "husband", "mother", "father", "brother", "sister", "baby", "twins", "man", "woman", "boy", "girl", "author", "member", "employee", "resident", "citizen", "national", "nationals", "mr", "mrs", "ms", "miss", "dr"]
@@ -73,6 +76,14 @@ enum ProseLabels {
             for year in TextRanges.matches(year4, in: ns.substring(with: years)) {
                 found.spans.append(Span(range: (years.location + year.range.location)..<(years.location + NSMaxRange(year.range)), entity: "DATE_OF_BIRTH", score: 0.9))
             }
+        }
+        // Every age said as one holds "age", "year", or "y/o" or "yo" after a number: read only around those.
+        let ageAnchors = TextRanges.occurrences(of: "age", in: ns) + TextRanges.occurrences(of: "year", in: ns) + TextRanges.occurrences(of: "y/o", in: ns)
+            + TextRanges.occurrences(of: "yo", in: ns).filter { $0 > 0 && ([32, 9].contains(ns.character(at: $0 - 1)) || (48...57).contains(ns.character(at: $0 - 1))) }
+        for match in TextRanges.matches(age, in: text, around: ageAnchors, before: 8, after: 64, isCancelled: isCancelled) {
+            let group = match.range(at: 1).location != NSNotFound ? match.range(at: 1) : match.range(at: 2)
+            guard let years = Int(ns.substring(with: group)), (0...120).contains(years) else { continue }
+            found.spans.append(Span(range: range(group), entity: "AGE", score: 0.9))
         }
         for match in TextRanges.matches(phoneExtension, in: text, isCancelled: isCancelled) {
             found.labels.append(range(match.range(at: 1)))

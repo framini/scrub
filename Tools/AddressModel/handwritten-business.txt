@@ -1,0 +1,98 @@
+# Handwritten development cases: addresses in US business mail as it is often written (quoted replies, tabs,
+# full state names, ZIP+4, building names, mail codes, all capitals), and business-mail look-alikes.
+# Invented people, companies, streets and numbers only. Cases are separated by "===="; addresses are marked ⟦…⟧.
+Thanks,
+Darlene Whitcomb
+Senior Counsel
+Corvane Energy Services
+⟦1500 Travis Street, Suite 2210
+Houston, Texas 77002-4410⟧
+(713) 555-0182
+====
+> Please send the executed copies to:
+> Marcus Feldt
+> ⟦Four Brazos Plaza, 31st Floor
+> 700 Milam
+> Houston, TX 77002⟧
+====
+Gary Pollan
+Vantor Gas Marketing, L.P.
+⟦333 Clay St., Ste. 1600
+Houston, Texas  77002⟧
+Phone: 713.555.0143
+====
+Please overnight the originals to my attention at ⟦One Shell Square, 701 Poydras Street, New Orleans, LA 70139⟧.
+====
+Regards,
+Theresa Okafor
+Manager, Contract Administration
+⟦PO Box 1188
+Houston TX 77251-1188⟧
+====
+Mailing address for the conference:
+	Halcyon Utilities
+	Attn: Lorna Briggs
+	⟦4210 Westheimer Rd., Suite 300
+	Houston, TX 77027⟧
+====
+KESTREL PIPELINE COMPANY
+⟦2200 ROSS AVENUE, SUITE 4100
+DALLAS, TEXAS 75201⟧
+TEL 214-555-0110
+====
+Our new office will be located at ⟦1221 Lamar, Suite 1050, Houston, Texas 77010⟧ effective March 1.
+====
+Brent Lowery | Mail Code TW 1207 | ⟦2700 Quarry Bend Blvd | Tulsa, OK 74103⟧
+====
+Juniper School of Design
+⟦4180 Alder Crest Drive
+Eugene, OR 97403-1211
+USA⟧
+====
+Please mail the check to:
+Wrenfield Capital
+Attn: Accounts Receivable, ⟦101 California Street, 38th Floor, San Francisco, California 94111⟧
+====
+Sharon Pike
+Legal Department
+⟦2650 Larkin, 22nd Floor, Tax
+Denver, Colorado 80202-5531⟧
+====
+The deposition will be held at the offices of Marlowe & Tate, ⟦811 Main Street, Suite 3400, Houston, Texas⟧, on May 4.
+====
+-----Original Message-----
+From: Pruitt, Delia
+Sent: Tuesday, March 13, 2001 4:12 PM
+To: Okonkwo, Tunde
+Subject: RE: delivery point
+
+Tunde, the meter is now billed to ⟦Sablewood Field Office, 9 Ranch Road 1431, Marble Falls, TX 78654⟧.
+====
+Calloway Partners LLP
+⟦1001 Fannin, Suite 2500
+Houston, Texas 77002-6760⟧
+Tel: (713) 555-0167 Fax: (713) 555-0168
+www.callowaypartners.example
+====
+Return the signed form to Halcyon HR, ⟦P.O. Box 4324, Omaha, NE 68103⟧, by Friday.
+====
+Diane Mercer
+Ardent Power Marketing
+⟦12 Greenway Plaza, Suite 1200
+Houston, TX 77046⟧
+====
+Meeting: Thursday 10:30 in EB 30C1, dial-in 1-800-555-0144, passcode 448812#
+====
+Please reference Contract No. 96004528 and Deal 712934 on all invoices.
+====
+The Q3 numbers: 4,210 MMBtu/d at Katy, 12,000 at Henry Hub, 3,500 at Waha.
+====
+Ext. 3-5521 | Cell 713-555-0190 | Pager 888-555-0122
+====
+Fwd: Agenda for the 2001 Texas Energy Conference, Hyatt Regency Ballroom B, 2nd Floor
+====
+Run 14: 2 compressors down at Station 6, back up by 11 PM CST.
+====
+Ref: Docket No. RP01-245-000, Order 637 compliance filing
+====
+EOL ID 1092243 for Transco Zone 6 NY, 25,000/d, Mar-01

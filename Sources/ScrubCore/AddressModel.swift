@@ -4,15 +4,21 @@ import Foundation
 import os
 import Synchronization
 
-/// A small network that reads text around lines with numbers in them and
-/// marks the postal addresses there, each as one unit: its unit and building
-/// lines, street, locality, postcode and country. It catches what the street
-/// pattern and the system detector miss: a signature's address in another
-/// country's format, a flat over its street, a street in prose with no
-/// postcode. Tools/AddressModel trains it; this mirrors model.py exactly, so
-/// change both together.
+/// A small network that reads text around candidate lines and marks the
+/// postal addresses there, each as one unit: its unit and building lines,
+/// street, locality, postcode and country. It catches what the street pattern
+/// and the system detector miss: a signature's address in another country's
+/// format, a flat over its street, a street in prose with no postcode.
+///
+/// Scrub reads with two of them and keeps what either finds. `shared`, the
+/// first, reads the lines with a number. `wide`, trained later, also reads
+/// addresses written all in lowercase and addresses with no number ("Flat B,
+/// The Old Rectory, Little Hadham", "Hauptstraße, Berlin-Mitte"); together
+/// they miss less than either alone, and the first's findings stay as they were.
+/// Tools/AddressModel trains them; this mirrors model.py exactly, so change both together.
 final class AddressModel: Sendable {
-    static let shared: AddressModel? = load()
+    static let shared: AddressModel? = load(Weights.first)
+    static let wide: AddressModel? = load(Weights.wide)
     /// How likely a token must be to sit inside an address, as the summed
     /// probability of beginning and continuing one.
     static let threshold: Float = 0.5
@@ -24,6 +30,33 @@ final class AddressModel: Sendable {
     /// started in that scope runs without the model on every thread, and
     /// every other scrub runs with it.
     @TaskLocal static var active = true
+
+    /// A weight file and the SHA-256 it must hash to. A file that differs is
+    /// not loaded: Scrub then runs without that model, and says why in the log.
+    struct Weights: Sendable {
+        let name: String
+        let checksum: String
+        /// Whether it reads lines with no number and addresses with none.
+        let numberless: Bool
+
+        static let first = Weights(name: "AddressModel", checksum: "68a0742d13a305b93762ffab2f076b956de7cfa8f8b805fa2cd81a18b7b07d59", numberless: false)
+        static let wide = Weights(name: "AddressModelWide", checksum: "eda633faf260ec950798faf4458914484796edec0a6b5f0f03a0c2b307e8cbdf", numberless: true)
+    }
+
+    /// The postal addresses either model reads in `text`, in UTF-16 offsets,
+    /// those that overlap joined into one.
+    static func find(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
+        let found = [shared, wide].compactMap { $0?.find(text, isCancelled: isCancelled) }.flatMap { $0 }.sorted { $0.range.lowerBound < $1.range.lowerBound }
+        var joined: [Span] = []
+        for span in found {
+            if let last = joined.last, span.range.lowerBound < last.range.upperBound {
+                joined[joined.count - 1] = Span(range: last.range.lowerBound..<max(last.range.upperBound, span.range.upperBound), entity: "ADDRESS", score: score)
+            } else {
+                joined.append(span)
+            }
+        }
+        return joined
+    }
 
     private let buckets: Int
     private let embed: Int
@@ -44,29 +77,29 @@ final class AddressModel: Sendable {
     private let known = Mutex<[String: [Float]]>([:])
     private static let knownLimit = 100_000
 
-    /// The SHA-256 of the shipped weights. A file that differs is not loaded:
-    /// Scrub then runs without the model, and says why in the log.
-    static let checksum = "68a0742d13a305b93762ffab2f076b956de7cfa8f8b805fa2cd81a18b7b07d59"
+    /// Whether it reads lines with no number and addresses with none (see `Weights`).
+    let numberless: Bool
     private static let log = Logger(subsystem: "Scrub", category: "AddressModel")
 
-    private static func load() -> AddressModel? {
-        guard let url = ModelResources.bundle?.url(forResource: "AddressModel", withExtension: "bin"), let data = try? Data(contentsOf: url) else {
-            log.error("Address model not loaded: resource missing")
+    private static func load(_ weights: Weights) -> AddressModel? {
+        guard let url = ModelResources.bundle?.url(forResource: weights.name, withExtension: "bin"), let data = try? Data(contentsOf: url) else {
+            log.error("Address model \(weights.name, privacy: .public) not loaded: resource missing")
             return nil
         }
-        return verified(data)
+        return verified(data, weights: weights)
     }
 
-    /// The model in `data`, or nil when its bytes are not the ones `checksum` names.
-    static func verified(_ data: Data, checksum: String = checksum) -> AddressModel? {
-        guard SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == checksum else {
-            log.error("Address model not loaded: its weights do not match the expected checksum")
+    /// The model in `data`, or nil when its bytes are not the ones the weights' checksum names.
+    static func verified(_ data: Data, weights: Weights = .first, checksum: String? = nil) -> AddressModel? {
+        guard SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == checksum ?? weights.checksum else {
+            log.error("Address model \(weights.name, privacy: .public) not loaded: its weights do not match the expected checksum")
             return nil
         }
-        return AddressModel(data)
+        return AddressModel(data, numberless: weights.numberless)
     }
 
-    init?(_ data: Data) {
+    init?(_ data: Data, numberless: Bool = false) {
+        self.numberless = numberless
         var reader = Reader(data: data)
         guard reader.bytes(4) == Data("SAM1".utf8) else { return nil }
         let sizes = (0..<7).map { _ in Int(reader.uint32()) }
@@ -85,41 +118,45 @@ final class AddressModel: Sendable {
         (self.convs, self.convBiases) = (convs, convBiases)
         out = reader.floats(hidden * labels)
         outBias = reader.floats(labels)
-        guard reader.isValid, reader.offset == data.count, shapes == Self.shapeCount else { return nil }
+        // The token's own shape, and three or four of its line's (the wide model reads whether its line has a capital).
+        guard reader.isValid, reader.offset == data.count, [Self.shapeCount + 3, Self.shapeCount + 4].contains(shapes) else { return nil }
     }
 
     // MARK: Finding addresses
 
     /// Postal addresses in `text`, in UTF-16 offsets. Only the lines around
-    /// one with a digit and a word are read; text with no digit holds none.
+    /// a candidate line are read (see `windows`): text with no digit and no
+    /// kind of street, building or unit costs a scan of its words.
     func find(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
-        guard !isCancelled(), text.utf16.contains(where: { (48...57).contains($0) }) else { return [] }
+        guard !isCancelled() else { return [] }
         var spans: [Span] = []
-        for window in Self.windows(text) {
+        for window in Self.windows(text, numberless: numberless) {
             if isCancelled() { return [] }
             let part = TextRanges.substring(text, window)
             let tokens = NameModel.tokens(part)
-            guard tokens.contains(where: { $0.scalars.contains(where: Self.isDigit) }) else { continue }
+            guard tokens.contains(where: \.isWord) else { continue }
             let probabilities = self.probabilities(tokens, isCancelled: isCancelled)
             guard probabilities.count == tokens.count else { return [] }
-            for range in Self.decode(tokens, probabilities).compactMap({ Self.refined($0, tokens) }) {
+            for range in Self.decode(tokens, probabilities, numberless: numberless).compactMap({ Self.refined($0, tokens) }) where Self.accepts(TextRanges.substring(part, range)) {
                 spans.append(Span(range: (range.lowerBound + window.lowerBound)..<(range.upperBound + window.lowerBound), entity: "ADDRESS", score: Self.score))
             }
         }
         return spans
     }
 
-    /// The stretches worth reading: every line with a decimal digit and a
-    /// word of two letters, with the two lines either side (a city or a
-    /// country on a line of its own), joined where they meet.
-    static func windows(_ text: String) -> [Range<Int>] {
+    /// The stretches worth reading: every candidate line with the two lines
+    /// either side (a city or a country on a line of its own), joined where
+    /// they meet. A line is a candidate when it holds a decimal digit and a
+    /// word of two letters, or, with no digit, a cue only an address line has
+    /// (`numberlessCue`).
+    static func windows(_ text: String, numberless: Bool = true) -> [Range<Int>] {
         let ns = text as NSString
         var lines: [(range: Range<Int>, candidate: Bool)] = []
         var start = 0
         while start < ns.length {
             let line = ns.lineRange(for: NSRange(location: start, length: 0))
             let range = line.location..<NSMaxRange(line)
-            lines.append((range, candidate(ns, range)))
+            lines.append((range, candidate(ns, range, numberless: numberless)))
             start = NSMaxRange(line)
         }
         var windows: [Range<Int>] = []
@@ -134,7 +171,7 @@ final class AddressModel: Sendable {
         return windows
     }
 
-    private static func candidate(_ ns: NSString, _ range: Range<Int>) -> Bool {
+    private static func candidate(_ ns: NSString, _ range: Range<Int>, numberless: Bool) -> Bool {
         var digit = false, letters = 0, best = 0
         for index in range {
             let unit = ns.character(at: index)
@@ -142,15 +179,67 @@ final class AddressModel: Sendable {
             if let scalar = Unicode.Scalar(unit), scalar.properties.isAlphabetic { letters += 1; best = max(best, letters) } else if !(0xD800...0xDFFF).contains(unit) { letters = 0 }
             if digit && best >= 2 { return true }
         }
-        return digit && best >= 2
+        if digit { return best >= 2 }
+        return numberless && best >= 3 && numberlessCue(ns.substring(with: NSRange(location: range.lowerBound, length: range.count)))
     }
+
+    /// Whether a line with no number holds a cue only an address line has:
+    /// a word ending in a compound kind of street ("Hauptstraße", "Kerkstraat",
+    /// "Strandvejen"), a foreign kind of street opening a name ("rue des
+    /// Lilas", "calle Mayor"; "Via", "Avenue" and the like before a capital),
+    /// a capitalised kind of street or building after a capitalised word
+    /// ("Mill Lane", "The Old Rectory"), or a unit with a letter ("Flat B").
+    /// Pairs count only when spaces alone part them. It passes about one
+    /// prose line in a thousand (Tools/AddressModel/prefilter.py mirrors it).
+    static func numberlessCue(_ line: String) -> Bool {
+        var words: [(text: String, start: String.Index, end: String.Index)] = []
+        var index = line.startIndex
+        while index < line.endIndex {
+            guard line[index].isLetter else { index = line.index(after: index); continue }
+            var end = line.index(after: index)
+            while end < line.endIndex {
+                if line[end].isLetter { end = line.index(after: end); continue }
+                let next = line.index(after: end)
+                if "'’".contains(line[end]), next < line.endIndex, line[next].isLetter { end = next; continue }
+                break
+            }
+            words.append((String(line[index..<end]), index, end))
+            index = end
+        }
+        func joined(_ a: Int, _ b: Int) -> Bool { line[words[a].end..<words[b].start].allSatisfy(\.isWhitespace) }
+        func capital(_ word: String) -> Bool { word.first?.isUppercase == true }
+        for (position, word) in words.enumerated() {
+            let lower = word.text.lowercased()
+            if !notSuffixed.contains(lower), cueSuffixes.contains(where: { lower.hasSuffix($0) && lower.count > $0.count + 2 }) { return true }
+            let next = position + 1 < words.count && joined(position, position + 1) ? words[position + 1].text : nil
+            if let next, leadKinds.contains(lower), !leadBeforeCapital.contains(lower) || capital(next) { return true }
+            if cueKinds.contains(lower), capital(word.text), position > 0, joined(position - 1, position), capital(words[position - 1].text) { return true }
+            if let next, cueUnits.contains(lower), next.count == 1, next.uppercased() == next, next.lowercased() != next { return true }
+        }
+        return false
+    }
+    private static let cueSuffixes = ["straße", "strasse", "gasse", "platz", "allee", "ufer", "damm", "steig", "pfad", "straat", "laan", "gracht", "plein", "kade", "singel",
+                                      "dijk", "steeg", "gatan", "vägen", "gränd", "torget", "gade", "gaden", "vej", "vejen", "stræde", "torvet", "veien", "vegen", "gata", "katu",
+                                      "kuja", "polku", "weg"]
+    /// Words ending so that are no street.
+    private static let notSuffixed: Set<String> = ["brigade", "brigades", "renegade", "renegades", "escapade", "promenade"]
+    private static let leadKinds: Set<String> = ["rue", "allée", "impasse", "chemin", "quai", "viale", "piazza", "piazzale", "vicolo", "strada", "calle", "avenida", "paseo", "rua",
+                                                 "travessa", "praça", "estrada", "alameda", "ulica", "aleja", "carrer", "chaussée", "rambla", "largo", "corso", "camino", "ronda", "via",
+                                                 "avenue", "boulevard", "plaza", "place", "route"]
+    private static let leadBeforeCapital: Set<String> = ["via", "avenue", "boulevard", "plaza", "place", "route", "largo", "corso", "camino", "ronda"]
+    private static let cueKinds: Set<String> = ["street", "road", "lane", "avenue", "drive", "close", "crescent", "way", "place", "terrace", "court", "highway", "square", "gardens",
+                                                "grove", "mews", "rise", "walk", "parade", "quay", "row", "hill", "view", "green", "vale", "chase", "wharf", "boulevard", "circle",
+                                                "trail", "parkway", "esplanade", "yard", "path", "alley", "house", "cottage", "lodge", "farm", "barn", "manor", "rectory", "vicarage",
+                                                "granary", "forge", "mill", "hall", "mansions", "tower", "building", "estate", "park"]
+    private static let cueUnits: Set<String> = ["flat", "apt", "apartment", "unit", "suite", "appt", "bâtiment", "escalier", "piso", "wohnung", "top"]
 
     /// Address spans from per-token probabilities of O, B and I, in the
     /// window's UTF-16 offsets. A run of tokens inside an address is one, split
     /// where a token is likelier to begin an address than continue it; its
     /// ends lose punctuation and line breaks, but a closing bracket whose
-    /// opening one is inside stays. An address holds a digit and two words.
-    static func decode(_ tokens: [NameModel.Token], _ probabilities: [[Float]]) -> [Range<Int>] {
+    /// opening one is inside stays. An address holds two words and a digit,
+    /// or two pieces a comma, semicolon or line break parts ("Hauptstraße, Berlin-Mitte").
+    static func decode(_ tokens: [NameModel.Token], _ probabilities: [[Float]], numberless: Bool = false) -> [Range<Int>] {
         var runs: [(Int, Int)] = [], current: (Int, Int)?
         for (index, p) in probabilities.enumerated() {
             let inside = p[1] + p[2] >= threshold
@@ -176,7 +265,7 @@ final class AddressModel: Sendable {
             }
             guard first <= last else { continue }
             let span = tokens[first...last]
-            guard span.filter({ $0.scalars.contains(where: isLetter) }).count >= 2, span.contains(where: { $0.scalars.contains(where: isDigit) }) else { continue }
+            guard span.filter({ $0.scalars.contains(where: isLetter) }).count >= 2, span.contains(where: { $0.scalars.contains(where: isDigit) }) || numberless && parted(span) else { continue }
             result.append(tokens[first].range.lowerBound..<tokens[last].range.upperBound)
         }
         return result
@@ -194,22 +283,101 @@ final class AddressModel: Sendable {
         func lowercaseWord(_ index: Int) -> Bool { tokens[index].isWord && tokens[index].scalars.allSatisfy { isLetter($0) || $0 == "'" || $0 == "’" } && tokens[index].scalars.first?.properties.isLowercase == true }
         func marked(_ index: Int) -> Bool { tokens[index].scalars.contains(where: isDigit) || tokens[index].scalars.first?.properties.isUppercase == true }
         // The last piece: what follows the last comma or line break.
-        let pieceStart = ((first...last).last { [",", "\n", ";"].contains(text($0)) }).map { $0 + 1 } ?? first
+        var pieceStart = ((first...last).last { [",", "\n", ";"].contains(text($0)) }).map { $0 + 1 } ?? first
+        // In a written address, a last piece of lowercase words alone is the sentence going on
+        // ("Via Garibaldi, Torino, davanti al bar").
+        if pieceStart - 2 >= first, (first..<pieceStart).contains(where: { tokens[$0].scalars.first?.properties.isUppercase == true }),
+           (pieceStart...last).allSatisfy({ lowercaseWord($0) || !tokens[$0].isWord && text($0) != "\n" }) {
+            last = pieceStart - 2
+            while last > first, !tokens[last].isWord { last -= 1 }
+            pieceStart = ((first...last).last { [",", "\n", ";"].contains(text($0)) }).map { $0 + 1 } ?? first
+        }
         if let anchor = (pieceStart...last).last(where: marked), anchor < last,
            (anchor + 1...last).allSatisfy({ lowercaseWord($0) || !tokens[$0].isWord && text($0) != "\n" }),
            (pieceStart...anchor).contains(where: { tokens[$0].scalars.first?.properties.isUppercase == true }) {
             last = anchor
         }
-        while first < last, lowercaseWord(first), !leadWords.contains(text(first).lowercased()), (first + 1...last).contains(where: marked) {
+        // A time's minutes are no house number: "10:15 in Room 2.07" is no address.
+        if first >= 2, text(first - 1) == ":" || text(first - 1) == ".", tokens[first - 2].scalars.contains(where: isDigit), tokens[first].scalars.first.map(isDigit) == true,
+           tokens[first - 1].range.lowerBound == tokens[first - 2].range.upperBound, tokens[first].range.lowerBound == tokens[first - 1].range.upperBound { return nil }
+        // Written all in lowercase, only the sentence's small words before it go ("der gartenstraße 3, …", "nu kerkstraat 41, …").
+        let cased = tokens[first...last].contains { $0.scalars.contains { $0.properties.isUppercase } }
+        while first < last, lowercaseWord(first), !leadWords.contains(text(first).lowercased()), cased || leadInWords.contains(text(first).lowercased()), (first + 1...last).contains(where: marked) {
             first += 1
             while first < last, !tokens[first].isWord { first += 1 }
         }
         // ")" closes "(FI)"; "." ends "St." only when the model kept it, which decode never does.
         while last > first, !tokens[last].isWord, text(last) != ")" { last -= 1 }
+        // All in lowercase, no capital marks where it ends: it ends with its last
+        // piece's postcode, number or known place, and the words after that are the sentence's
+        // ("… 10115 berlin seit märz", "… 31000 toulouse la semaine dernière"); a last
+        // piece of such words alone (", danke") is none of it.
+        if first <= last, !tokens[first...last].contains(where: { $0.scalars.contains { $0.properties.isUppercase } }) {
+            func lastPiece() -> Int { ((first...last).last { [",", "\n", ";"].contains(text($0)) }).map { $0 + 1 } ?? first }
+            var start = lastPiece()
+            while start - 2 >= first, start <= last, (start...last).allSatisfy({ !tokens[$0].isWord || tailWords.contains(text($0)) }) {
+                last = start - 2
+                while last > first, !tokens[last].isWord { last -= 1 }
+                start = lastPiece()
+            }
+            if start <= last, let anchor = (start...last).last(where: { tokens[$0].scalars.contains(where: isDigit) || knownPlaceEnd($0, tokens, from: start) }), anchor < last {
+                var end = anchor
+                // A city after its postcode ("10115 berlin", "3511 lx utrecht"): the words up to the first that only a sentence holds.
+                if tokens[anchor].scalars.contains(where: isDigit) {
+                    while end + 1 <= last, tokens[end + 1].isWord, !tailWords.contains(text(end + 1)), end - anchor < 3 { end += 1 }
+                }
+                if end < last, (end + 1...last).contains(where: { tokens[$0].isWord && tailWords.contains(text($0)) }) { last = end }
+            }
+        }
         let words = tokens[first...last].filter { $0.scalars.contains(where: isLetter) }
-        guard words.count >= 2, tokens[first...last].contains(where: { $0.scalars.contains(where: isDigit) }) else { return nil }
+        guard words.count >= 2, tokens[first...last].contains(where: { $0.scalars.contains(where: isDigit) }) || parted(tokens[first...last]) else { return nil }
         return tokens[first].range.lowerBound..<tokens[last].range.upperBound
     }
+
+    /// Whether a comma, semicolon or line break parts the tokens into pieces.
+    static func parted(_ tokens: ArraySlice<NameModel.Token>) -> Bool {
+        tokens.contains { $0.scalars == [","] || $0.scalars == [";"] || $0.scalars == ["\n"] }
+    }
+
+    /// Whether the token ends a place Scrub knows by name, of up to three words, within the piece.
+    private static func knownPlaceEnd(_ index: Int, _ tokens: [NameModel.Token], from start: Int) -> Bool {
+        guard tokens[index].isWord else { return false }
+        var words: [String] = [], position = index
+        while position >= start, words.count < 3, tokens[position].isWord {
+            words.insert(String(String.UnicodeScalarView(tokens[position].scalars)), at: 0)
+            if AddressBlock.isKnownPlace(words.joined(separator: " ")) { return true }
+            position -= 1
+        }
+        return false
+    }
+    /// Small words that lead a sentence into an address written in lowercase.
+    private static let leadInWords: Set<String> = ["der", "die", "das", "den", "dem", "an", "in", "im", "am", "zu", "nach", "at", "to", "on", "is", "nu", "naar", "op", "aan",
+                                                   "au", "à", "a", "en", "na", "no", "em", "para", "alla", "il", "på", "til", "till", "i", "w", "from"]
+    /// Words that carry on a sentence after an address, never a place's name.
+    private static let tailWords: Set<String> = ["seit", "ab", "bis", "bitte", "danke", "und", "la", "le", "les", "depuis", "dès", "svp", "merci", "et", "desde", "gracias", "y",
+                                                 "dal", "dalla", "dopo", "grazie", "vanaf", "sinds", "bedankt", "en", "från", "fra", "tack", "tak", "och", "og", "from", "since", "until",
+                                                 "after", "before", "on", "at", "is", "was", "the", "and", "pls", "please", "thx", "thanks", "asap", "fyi", "for", "last", "next", "tomorrow",
+                                                 "today", "now", "jetzt", "nu", "not", "but", "so", "if", "c'est", "est", "é", "è", "es", "ist", "er", "a", "à"]
+
+    /// The rules a span the model read must meet. One with no number needs a
+    /// kind of street, a building or a unit in one piece and another piece
+    /// beside it ("Flat B, The Old Rectory, Little Hadham"); in lowercase, a
+    /// place Scrub knows besides. One written all in lowercase needs a
+    /// postcode, a unit or box with its number, or a place Scrub knows
+    /// ("14 rookery lane, leeds ls6 2ab"), so "take bus 14 to market street" stays.
+    static func accepts(_ value: String) -> Bool {
+        let digit = value.contains(where: \.isNumber), lower = !value.contains(where: \.isUppercase)
+        let pieces = AddressBlock.pieces(value)
+        if !digit {
+            guard pieces.count >= 2, pieces.allSatisfy({ $0.contains(where: \.isLetter) && $0.split(separator: " ").count <= 6 }),
+                  pieces.contains(where: { AddressBlock.isStreet($0) || AddressBlock.namesStreet($0) || AddressBlock.namesBuilding($0) || AddressBlock.isUnit($0) }) else { return false }
+            return !lower || pieces.contains(where: AddressBlock.knownPlace)
+        }
+        guard lower else { return true }
+        return !TextRanges.matches(lowercasePostcode, in: value).isEmpty || !TextRanges.matches(numberedUnit, in: value).isEmpty || pieces.contains(where: AddressBlock.knownPlace)
+    }
+    private static let lowercasePostcode = TextPattern(AddressBlock.postcode.regex?.pattern ?? "$^", options: .caseInsensitive)
+    private static let numberedUnit = TextPattern(#"(?i)(?<![\p{L}])(?:flat|apt|apartment|unit|suite|ste|room|floor|level|appt|piso|wohnung|top|p\.?\s?o\.?\s?box|box|postfach|postbus|apartado)\.?\s*#?\s*\d"#)
     /// Lowercase words that open an address: a kind of street or a box.
     private static let leadWords: Set<String> = ["rue", "avenue", "allée", "chemin", "impasse", "quai", "place", "route", "boulevard", "via", "viale", "piazza", "corso",
                                                  "calle", "avenida", "rua", "travessa", "ul", "al", "os", "pl", "po", "p", "box", "c", "flat", "apt", "suite", "unit",
@@ -234,7 +402,7 @@ final class AddressModel: Sendable {
         let margin = reach + 2
         let step = 2048
         var result = [[Float]](repeating: [], count: tokens.count)
-        let lines = Self.lineShapes(tokens)
+        let lines = Self.lineShapes(tokens).map { Array($0.prefix(shapes - Self.shapeCount)) }
         var start = 0
         while start < tokens.count {
             if isCancelled() { return [] }
@@ -361,8 +529,8 @@ final class AddressModel: Sendable {
         return rows
     }
 
-    /// The token's own shape; three more features, of its line, follow (see `lineShapes`).
-    static let shapeCount = 18
+    /// The token's own shape; three or four more features, of its line, follow (see `lineShapes`).
+    static let shapeCount = 15
     static func shape(_ scalars: [Unicode.Scalar]) -> [Float] {
         let letters = scalars.filter(isLetter)
         let upper = letters.filter(\.properties.isUppercase)
@@ -389,9 +557,10 @@ final class AddressModel: Sendable {
     }
 
     /// For each token: whether it opens its line, whether its line holds a
-    /// digit, and whether it holds a comma. A line ends with its newline token.
+    /// digit, a comma, and a capital letter (in text written all in
+    /// lowercase, a lowercase word tells nothing). A line ends with its newline token.
     static func lineShapes(_ tokens: [NameModel.Token]) -> [[Float]] {
-        var result = [[Float]](repeating: [0, 0, 0], count: tokens.count)
+        var result = [[Float]](repeating: [0, 0, 0, 0], count: tokens.count)
         var start = 0
         while start < tokens.count {
             var end = start
@@ -400,8 +569,9 @@ final class AddressModel: Sendable {
             let words = tokens[start..<min(end, tokens.count)]
             let digit: Float = words.contains { $0.scalars.contains(where: isDigit) } ? 1 : 0
             let comma: Float = words.contains { $0.scalars == [","] } ? 1 : 0
+            let capital: Float = words.contains { $0.scalars.contains { $0.properties.isUppercase } } ? 1 : 0
             for index in start...last {
-                result[index] = [index == start && tokens[index].scalars != ["\n"] ? 1 : 0, digit, comma]
+                result[index] = [index == start && tokens[index].scalars != ["\n"] ? 1 : 0, digit, comma, capital]
             }
             start = end + 1
         }

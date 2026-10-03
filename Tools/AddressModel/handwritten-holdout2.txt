@@ -1,0 +1,94 @@
+# Second handwritten held-out set, written before any of the new model's runs and scored once, at the end.
+# Lowercase, numberless and multilingual addresses and their look-alikes. Invented people, streets and numbers only.
+# Cases are separated by "===="; addresses are marked ⟦…⟧.
+pls send the invoice to ⟦schillerstraße 44, 70173 stuttgart⟧ not the old one
+====
+mein büro ist jetzt in der ⟦bergmannstraße 9, 10961 berlin⟧
+====
+new address fyi: ⟦62 larkspur ln, eugene or 97401⟧
+====
+can u drop it at ⟦flat 12, 4 tolworth mews, brighton bn2 1hq⟧ tomorrow
+====
+⟦18 quai des chartrons, 33000 bordeaux⟧ c'est chez ma sœur
+====
+el paquete va a ⟦calle san bernardo 61, 28015 madrid⟧
+====
+consegna in ⟦viale monza 140, 20127 milano⟧ dopo le 18
+====
+⟦herengracht 233, 1016 bg amsterdam⟧ is ons kantoor
+====
+{"remarks": "now at ⟦birkenweg 3, 3007 bern⟧"}
+====
+Yours sincerely,
+Gwendolyn Tregarthen
+⟦Pear Tree Cottage, Back Lane, Great Bardfield, Essex⟧
+====
+Please post it to ⟦The Coach House, Elm Road, Little Shelford⟧.
+====
+Wir wohnen jetzt ⟦Kirchgasse, Zürich-Altstetten⟧.
+====
+Our cottage: ⟦Rowan Lodge
+Glen Road
+Ballater
+Aberdeenshire⟧
+====
+Envoyez-le ⟦place du Marché, Annecy⟧.
+====
+name,address
+Bettina Krol,"⟦Feldweg, Rostock⟧"
+====
+Saluti,
+Chiara Bellandi
+⟦Via della Spiga 12, 20121 Milano (MI)⟧
+====
+Met vriendelijke groet,
+Pieter Bos
+⟦Oudegracht 158, 3511 AZ Utrecht⟧
+====
+Med vänliga hälsningar
+Linnea Åberg
+⟦Sveavägen 31, 113 59 Stockholm⟧
+====
+Atentamente,
+Javier Ortuño
+⟦C/ de Pelai 8, 4º 2ª, 08001 Barcelona⟧
+====
+<morada>⟦Avenida da Liberdade 190, 1250-147 Lisboa⟧</morada>
+====
+Med vennlig hilsen
+Ola Haugen
+⟦Kirkeveien 64, 0364 Oslo⟧
+====
+Cordialement,
+Anouk Lefèvre
+⟦12 boulevard Carnot, 06400 Cannes⟧
+====
+the main road was shut for 3 hours after the crash
+====
+park lane is the dark blue one on the board, 350 to buy
+====
+release 4.1 lands on 12 june with the new street view
+====
+Carnaby Street Holdings Ltd filed 3 accounts late.
+====
+The Old Bailey heard the case for 6 days.
+====
+Kingsway Partners hired 14 new associates.
+====
+§ 433 BGB regelt den Kaufvertrag.
+====
+Il treno 9542 per Roma parte dal binario 11.
+====
+Fleet Street was once home to the newspapers.
+====
+Die Hauptstraße bleibt bis Freitag gesperrt.
+====
+see strftime(3) and section 7 of the manual
+====
+Calle 13 actuó en Madrid el 5 de julio.
+====
+Rose Cottage Bakery opens at 8 every day.
+====
+The Grange Hotel has 40 rooms and a spa.
+====
+Order 77812: 3 x Bristol Street Map, 2 x Park Avenue Poster

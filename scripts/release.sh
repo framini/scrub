@@ -10,6 +10,10 @@ PROFILE="${SCRUB_NOTARY_PROFILE:-scrub-notary}"
 APP=build/Scrub.app
 DMG=build/Scrub.dmg
 
+# The real-text gate first, the ordinary sets and then the holdout (see scripts/eval-gate.sh).
+scripts/eval-gate.sh
+scripts/eval-gate.sh --holdout
+
 notarize() {
   xcrun notarytool submit "$1" --keychain-profile "$PROFILE" --wait | tee build/notary.log
   grep -q "status: Accepted" build/notary.log

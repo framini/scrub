@@ -37,12 +37,12 @@ private let note = "Ms Odalys Ferriter called about the refund. Brightwater from
     model.copy()
     #expect(model.reviewing && board.string(forType: .string) == nil)
 
-    model.finishReview(skipping: [place.id])
+    model.finishReview(Choices(left: [place.id]))
     try await settled(model)
     let copied = try #require(board.string(forType: .string))
     #expect(copied.components(separatedBy: "Brightwater").count == 3 && !copied.contains("Ferriter"), "\(copied)")
     guard case .finished(let after) = model.state else { Issue.record("not finished"); return }
-    #expect(after.reviewed && after.skipped == [place.id] && !model.reviewing)
+    #expect(after.reviewed && after.choices.left == [place.id] && !model.reviewing)
 }
 
 @MainActor
@@ -51,7 +51,7 @@ private let note = "Ms Odalys Ferriter called about the refund. Brightwater from
     guard case .finished(let done) = model.state else { Issue.record("not finished"); return }
     model.copy()
     #expect(model.reviewing)
-    model.finishReview(skipping: [])
+    model.finishReview(Choices(left: []))
     try await settled(model)
     #expect(board.string(forType: .string) == String(decoding: done.result.output, as: UTF8.self))
     // Checked once, Copy no longer asks.
@@ -75,22 +75,22 @@ private let note = "Ms Odalys Ferriter called about the refund. Brightwater from
 /// it; leaving it copies the scrub as made, and replacing it copies its stand-in.
 @MainActor
 @Test func aSuspectStartsLeftAsWrittenAndCanBeReplaced() async throws {
-    let (model, board) = try await finished("Odalys Ferriter asked us to fix her profile at https://forum.example/u/odalysf today.")
+    let (model, board) = try await finished("Odalys Ferriter asked us to fix her blog at https://odalysf.blog.example/about today.")
     guard case .finished(let done) = model.state else { Issue.record("not finished"); return }
     let suspect = try #require(done.result.uncertain.first { $0.suspected && $0.original == "odalysf" })
-    #expect(done.skipped == [suspect.id] && done.needsReview)
+    #expect(done.choices.left == [suspect.id] && done.needsReview)
 
     board.clearContents()
     model.copy()
     #expect(model.reviewing)
-    model.finishReview(skipping: done.skipped)
+    model.finishReview(done.choices)
     try await settled(model)
     #expect(board.string(forType: .string) == String(decoding: done.result.output, as: UTF8.self))
 
-    model.finishReview(skipping: [])
+    model.finishReview(Choices(left: []))
     try await settled(model)
     guard case .finished(let after) = model.state else { Issue.record("not finished"); return }
     let output = String(decoding: after.result.output, as: UTF8.self)
-    #expect(!output.contains("odalysf") && output.contains("/u/\(suspect.standIn) today"), "\(output)")
-    #expect(after.skipped.isEmpty && after.result.leftAsWritten.isEmpty)
+    #expect(!output.contains("odalysf") && output.contains("https://\(suspect.standIn).blog.example/about today"), "\(output)")
+    #expect(after.choices.left.isEmpty && after.result.leftAsWritten.isEmpty)
 }

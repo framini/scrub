@@ -50,10 +50,12 @@ def house(rng, low=1, high=9999):
 
 
 class Addresses:
-    def __init__(self, rng, holdout=False):
+    def __init__(self, rng, holdout=False, extra=False, firms=False):
         self.rng = rng
+        # The newer forms: buildings named by a number in words, more country lines.
+        self.extra = extra
         self.holdout = holdout
-        self.loc = load_localities(holdout)
+        self.loc = load_localities(holdout, firms=firms)
         self.us_streets = load_us_streets(holdout)
         self.first, self.last, self.words = load_names(holdout)
         self.states = {s.split(" ", 1)[0]: s.split(" ", 1)[1] for s in US_STATES.split("|")}
@@ -91,10 +93,12 @@ class Addresses:
                  "BR": ["Brazil", "Brasil"], "JP": ["Japan"]}
         return self.pick(names[country])
 
-    def make(self, country=None):
+    def make(self, country=None, numberless=0.0):
         country = country or self.rng.choices(self.countries, self.weights)[0]
+        if numberless and country in NUMBERLESS and self.chance(numberless):
+            return self.make_numberless(country)
         address = getattr(self, "make_" + country.lower())()
-        if address.kind == "full" and country not in ("SG",) and self.chance(0.18):
+        if address.kind == "full" and country not in ("SG",) and self.chance(0.25 if self.extra else 0.18):
             address.lines.append([self.country_name(country)])
         return address
 
@@ -147,6 +151,9 @@ class Addresses:
                 lines.append([unit])
         if self.chance(0.1):
             building = self.pick(self.last) + " " + self.pick(["Building", "Plaza", "Tower", "Center", "Hall", "Commons", "House", "Centre", "Pavilion"])
+            if self.extra and self.chance(0.4):
+                # "Three Harbor Center", "One Kessler Square": a building named by its number in words.
+                building = f"{self.pick(['One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Eight', 'Ten'])} {self.pick(self.last)} {self.pick(['Plaza', 'Center', 'Square', 'Place', 'Tower', 'Centre'])}"
             lines.insert(0, [self.pick([f"Room {self.rng.randint(1, 9)}.{self.rng.randint(1, 40):02d}", f"Room {self.rng.randint(100, 999)}", f"Floor {self.rng.randint(2, 30)}", f"Level {self.rng.randint(2, 30)}", f"Suite {self.rng.randint(100, 999)}", ""]), building])
         if r < 0.17:
             return Address(lines, "US", "street")
@@ -526,3 +533,78 @@ class Addresses:
         lines = self.pick([[[f"{chome} {area}", self.pick(JP_WARDS)], [f"{city} {postal}"]], [[f"{chome} {area}", self.pick(JP_WARDS), f"{city} {postal}"]],
                            [[f"{self.stem(GB_WORDS)} Building {self.rng.randint(2, 12)}F"], [f"{chome} {area}", self.pick(JP_WARDS)], [f"{city}-shi" if self.chance(0.3) else city, postal]]])
         return Address(lines, "JP")
+
+
+    # -- with no number at all
+    def numberless_street(self, country):
+        """A street's name as written with no house number."""
+        if country in ("GB", "IE", "AU", "NZ", "ZA", "US", "CA"):
+            return self.pick([f"{self.stem(GB_WORDS)} {self.pick(GB_TYPES)}", "High Street", "Church Lane", "Station Road", "Main Street", "Mill Lane",
+                              "Back Lane", "The Green", "School Lane", "Chapel Road"]) if country != "US" else f"{self.pick(self.us_streets)[2]} {self.pick(['Street', 'Road', 'Avenue', 'Lane', 'Drive'])}"
+        if country in ("DE", "AT", "CH"):
+            return self.de_street(country == "CH").rsplit(" ", 1)[0] if self.chance(0.85) else f"{self.pick(['Am', 'Im', 'An der', 'Auf dem'])} {self.stem(DE_WORDS)}{self.pick(['hof', 'feld', 'berg', 'garten'])}"
+        if country in ("FR", "BE"):
+            link = self.pick(FR_LINK)
+            sep = "" if link.endswith("-") or link.endswith("'") or not link else " "
+            return f"{self.pick(['rue', 'Rue', 'avenue', 'Avenue', 'place', 'Place', 'chemin', 'impasse', 'allée', 'boulevard', 'quai'])} {link}{sep}{self.stem(FR_WORDS)}".replace("  ", " ")
+        if country == "IT":
+            return f"{self.pick(IT_TYPES)} {self.pick(['', '', 'della ', 'dei ', 'San '])}{self.stem(IT_WORDS)}"
+        if country == "ES":
+            return f"{self.pick(['Calle', 'Avenida', 'Plaza', 'Paseo', 'Camino', 'Carrer', 'Rambla', 'Ronda'])} {self.pick(['', '', 'de ', 'del ', 'de la '])}{self.stem(ES_WORDS)}"
+        if country in ("PT", "BR"):
+            return f"{self.pick(['Rua', 'Avenida', 'Travessa', 'Largo', 'Praça', 'Alameda', 'Estrada'])} {self.pick(['', '', 'da ', 'do ', 'das ', 'dos ', 'de '])}{self.stem(PT_WORDS)}"
+        if country == "NL":
+            return f"{self.stem(NL_WORDS)}{self.pick(NL_TYPES)}"
+        if country == "SE":
+            return f"{self.stem(SE_WORDS)}{self.pick(SE_TYPES)}"
+        if country == "DK":
+            return f"{self.stem(SE_WORDS)}{self.pick(DK_TYPES)}"
+        if country == "NO":
+            return f"{self.stem(SE_WORDS)}{self.pick(NO_TYPES)}"
+        if country == "FI":
+            return f"{self.stem(FI_WORDS)}{self.pick(FI_TYPES)}"
+        return f"{self.pick(['ul.', 'al.', ''])} {self.pick(PL_WORDS)}".strip()
+
+    def make_numberless(self, country):
+        """An address with no number: a house's name over its street and
+        village, or a street and its town ("Hauptstraße, Berlin-Mitte")."""
+        loc = self.place(country)
+        town = loc.place
+        if country in ("GB", "IE") and self.chance(0.75):
+            lines = []
+            if self.chance(0.25):
+                lines.append([self.pick([f"Flat {self.pick('ABCDEF')}", f"Apartment {self.pick('ABCD')}", "Ground Floor Flat", "Top Flat", "Basement Flat", "First Floor Flat"])])
+            house = self.pick(HOUSE_NAMES) if self.chance(0.5) else f"{self.stem(GB_WORDS)} {self.pick(HOUSE_KINDS)}"
+            if lines and self.chance(0.6):
+                lines[-1].append(house)
+            else:
+                lines.append([house])
+            if self.chance(0.6):
+                lines.append([self.numberless_street(country)])
+            if self.chance(0.4):
+                lines.append([self.pick(self.loc[country]).place])
+            lines.append([town])
+            if country == "GB":
+                if self.chance(0.5):
+                    lines.append([self.pick(GB_COUNTIES)])
+            elif self.chance(0.8):
+                lines.append([self.pick(["Co. ", "County ", "Co "]) + self.pick(IE_COUNTIES)])
+            if self.chance(0.15):
+                lines.append([self.country_name(country)])
+            return Address(lines, country, "nonum")
+        street = self.numberless_street(country)
+        if country in DISTRICTS and self.chance(0.3):
+            town = f"{town}{self.pick(['-', ' '])}{self.pick(DISTRICTS[country])}"
+        lines = [[street], [town]]
+        if country in ("US",):
+            lines = [[street], [town, loc.region_code if self.chance(0.7) else loc.region]]
+        elif country in ("GB",) and self.chance(0.4):
+            lines.append([self.pick(GB_COUNTIES)])
+        elif country == "IE":
+            lines.append([self.pick(["Co. ", "County "]) + self.pick(IE_COUNTIES)])
+        if self.chance(0.25):
+            lines.append([self.country_name(country)])
+        return Address(lines, country, "nonum")
+
+
+NUMBERLESS = ["GB", "IE", "US", "DE", "AT", "CH", "FR", "BE", "IT", "ES", "PT", "BR", "NL", "SE", "DK", "NO", "FI", "PL", "AU", "NZ"]

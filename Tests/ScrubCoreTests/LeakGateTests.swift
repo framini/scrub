@@ -188,12 +188,26 @@ import Testing
         }
     }
 
-    /// A handle inside a link is not rewritten without a person's say: the
-    /// link stays as written, review asks about it with the stand-in it
-    /// would take, and choosing to replace it writes that stand-in and
-    /// leaves every other one as it was.
-    @Test(arguments: Path.allCases) func aVariantInALinkIsAskedAbout(path: Path) throws {
+    /// A handle that is a whole part of a link (a path segment under a
+    /// person's collection) is replaced in place, and the link still reads.
+    @Test(arguments: Path.allCases) func aVariantThatIsAPartOfALinkIsReplacedInPlace(path: Path) throws {
         let note = "Her profile is https://forum.example/u/odalysf for now."
+        for seed in UInt64(1)...2 {
+            let (data, name) = Self.document(Record(), note: note, path)
+            let result = try Scrubber.scrub(data, name: name, forceFullDetection: false, seed: seed)
+            let read = try Self.read(result.output, path)
+            let handle = Self.lower(read.first) + Self.lower(read.last).prefix(1)
+            #expect(read.note == "Her profile is https://forum.example/u/\(handle) for now.", "[\(path) seed \(seed)] \(read.note.debugDescription)")
+            #expect(result.unresolved.isEmpty && result.leftAsWritten.isEmpty, "[\(path) seed \(seed)] \(result.findings.filter(\.suspected))")
+        }
+    }
+
+    /// A handle inside a part of a link (a host name) is not rewritten
+    /// without a person's say: the link stays as written, review asks about
+    /// it with the stand-in it would take, and choosing to replace it writes
+    /// that stand-in and leaves every other one as it was.
+    @Test(arguments: Path.allCases) func aVariantInALinkIsAskedAbout(path: Path) throws {
+        let note = "Her blog is https://odalysf.blog.example/about for now."
         for seed in UInt64(1)...2 {
             let (data, name) = Self.document(Record(), note: note, path)
             let result = try Scrubber.scrub(data, name: name, forceFullDetection: false, seed: seed)
@@ -209,7 +223,7 @@ import Testing
             #expect(try result.skipping(result.leftAsWritten).output == result.output, "\(label)")
             let replaced = try result.skipping([])
             let after = try Self.read(replaced.output, path)
-            #expect(after.note == "Her profile is https://forum.example/u/\(suspect.standIn) for now.", "\(after.note): \(label)")
+            #expect(after.note == "Her blog is https://\(suspect.standIn).blog.example/about for now.", "\(after.note): \(label)")
             #expect(after.name == read.name && after.phone == read.phone && after.email == read.email, "\(label)")
             #expect(replaced.counts["USERNAME", default: 0] == result.counts["USERNAME", default: 0] + 1, "\(replaced.counts) \(result.counts): \(label)")
             #expect(replaced.unresolved.isEmpty && replaced.leftAsWritten.isEmpty, "\(label)")

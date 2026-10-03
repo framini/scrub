@@ -19,6 +19,8 @@ enum KeyedValues {
         var names: [(Span, String)] = []
         var fields: [(String, String)] = []
         var unnamed: [(Range<Int>, String, String)] = []
+        /// Values under a plain "id", which are a person's when the object holds their name or email.
+        var ids: [Range<Int>] = []
         /// Bare numbers in an array, read when it closes: a point's order is only known then.
         var numbers: [Range<Int>] = []
     }
@@ -83,7 +85,14 @@ enum KeyedValues {
                     }
                 }
             }
-            for (span, value) in level.names where KeyHints.bareNameIsPerson(value, siblings: level.keys, parent: level.key) { found.spans.append(span) }
+            for (span, value) in level.names where KeyHints.bareNameIsPerson(value, siblings: level.keys, parent: level.key, inObject: level.id > 0) { found.spans.append(span) }
+            // A person's own object: its "id" is theirs (see `RecordIDs`).
+            let named = RecordIDs.isPersonCollection(KeyHints.words(level.key).last) || level.fields.contains(where: { RecordIDs.namesPersonType(key: $0.0, value: $0.1) })
+            let beside = level.keys.contains(where: { ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS"].contains(KeyHints.hint($0) ?? "") })
+            // At the top, outside any brackets (YAML, a log line), only with a few fields around.
+            if !level.ids.isEmpty, named || beside, level.id > 0 || level.keys.count >= 3 {
+                for range in level.ids where named || !RecordIDs.isUUID(string(range)) { found.spans.append(Span(range: range, entity: "RECORD_ID", score: 1)) }
+            }
             // Outside brackets every key in the text is a "sibling"; a form field's name must share its object.
             for (range, key, value) in level.unnamed where level.id > 0 {
                 if let field = KeyHints.namedField(key, siblings: level.fields), let entity = KeyHints.hint(field), KeyHints.fits(field, value) {
@@ -140,6 +149,7 @@ enum KeyedValues {
             pending = nil
             guard !trimmed.isEmpty else { return }
             if let own, trimmed.utf16.count <= 80 { levels[levels.count - 1].fields.append((own, trimmed)) }
+            if let own, ["id", "uid"].contains(KeyHints.words(own).joined()), RecordIDs.plainID(trimmed) { levels[levels.count - 1].ids.append(content) }
             if let key { found.fields.append((key, content, levels[levels.count - 1].id)) }
             if KeyHints.hint(key) == nil, KeyHints.isStructural(key) {
                 found.structural.append(content)
@@ -178,6 +188,9 @@ enum KeyedValues {
                 else { found.spans.append(span) }
             } else if let own, KeyHints.fieldValueKeys.contains(KeyHints.words(own).joined()) {
                 levels[levels.count - 1].unnamed.append((content, own, taken))
+            } else if KeyHints.hint(key) == nil, RecordIDs.identifying(key: key, value: taken) {
+                // "customer_id": "cus_4TUvJh" in a pasted body: the person's ID, as in a file.
+                found.spans.append(Span(range: content, entity: "RECORD_ID", score: 1))
             } else if KeyHints.isRole(key), let name = Detector.writtenName(taken) {
                 // "Customer: Priyanka Szymanski", "assignee": "Dana Whitfield": a name written as one.
                 found.spans.append(Span(range: (content.lowerBound + name.lowerBound)..<(content.lowerBound + name.upperBound), entity: "PERSON", score: 0.9))

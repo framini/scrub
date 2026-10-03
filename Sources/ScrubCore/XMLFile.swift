@@ -100,6 +100,7 @@ public enum XMLFile: FileFormat {
         for child in document.children ?? [] { try walk(child, records: [], keys: [], parentKey: nil) }
         progress(.finding, 0, leaves.count)
         let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
+        let records = leaves.map(\.lastRecord)
         progress(.finding, leaves.count, leaves.count)
         // Element and attribute names first; then the values, written again whenever a review takes findings back.
         var markedValues: [(String, String)] = []
@@ -190,7 +191,7 @@ public enum XMLFile: FileFormat {
             return ScrubResult(format: "xml", output: Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: counts, unresolved: unresolved)
         }
         var result = try render(values, counts: job.counts)
-        result.review = Review(values: values, counts: job.counts, render: render)
+        result.review = Review(values: values, counts: job.counts, records: records, render: render)
         progress(.checking, 1, 1)
         return result
     }

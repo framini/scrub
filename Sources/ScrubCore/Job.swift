@@ -18,6 +18,13 @@ public final class Job {
         if confidences[key].map({ $0 < confidence }) ?? true { confidences[key] = min(confidence, 1) }
     }
     func confidence(of original: String) -> Double? { confidences[original.lowercased()] }
+    /// How sure Scrub is of one place: what a detector read there, or for a
+    /// value found again by the name lists or the sweep for originals, as
+    /// sure as where it was learned. Review takes a finding's least sure place.
+    func here(_ span: Span, _ original: String) -> Double {
+        let learned = span.score == GazetteerMatcher.score || span.score > 1
+        return min(learned ? confidence(of: original) ?? span.score : span.score, 1)
+    }
     /// What each original was surest read as anywhere in the document: a login
     /// under its key is a username, though a model reads it in a note as a
     /// secret. Ties go to a whole field, then to the first reading.
@@ -68,14 +75,15 @@ public final class Job {
         for (text, spans) in fields {
             let length = (text as NSString).length
             for span in spans {
-                let value = TextRanges.substring(text, span.range)
+                // A link's part is the value it spells: "Odalys+Ferriter" is Odalys Ferriter.
+                let value = span.url.map { URLs.decode(TextRanges.substring(text, span.range), $0) } ?? TextRanges.substring(text, span.range)
                 standIns.avoid(value)
                 if span.entity == "PHONE_NUMBER" { standIns.notePhone(value) }
                 note(value, confidence: span.score)
                 noteKind(value, span, whole: span.range == 0..<length)
             }
             for span in spans where GazetteerMatcher.supportedEntities.contains(span.entity) {
-                let value = TextRanges.substring(text, span.range)
+                let value = span.url.map { URLs.decode(TextRanges.substring(text, span.range), $0) } ?? TextRanges.substring(text, span.range)
                 // Replaced wherever it appears, so a name must at least have letters.
                 if span.entity != "PHONE_NUMBER", !value.contains(where: \.isLetter) { continue }
                 gazetteer[span.entity, default: []].insert(value)
@@ -136,15 +144,37 @@ public final class Job {
             for span in spans {
                 let original = TextRanges.substring(text, span.range)
                 sensitiveOriginals.append(SensitiveOriginal(original: original, entity: span.entity))
+                // Written plainly elsewhere, a link's value is found by what it spells.
+                if let part = span.url, case let plain = URLs.decode(original, part), plain != original { sensitiveOriginals.append(SensitiveOriginal(original: plain, entity: span.entity)) }
             }
         }
     }
     public func replacement(for entity: String, original: String) -> String {
         replacement(for: entity, original: original, persona: nil)
     }
-    func replacement(for entity: String, original: String, persona: Persona?, address: AddressParts? = nil) -> String {
+    /// Where the value being scrubbed sits: its index among the document's
+    /// values and the records around it, innermost first (see `StandIns.scopes`).
+    private var spot: (value: String, records: [String])?
+    private var looseValues = 0
+    func enter(value: Int, records: [Int]) { spot = ("v\(value)", records.map { "r\($0)" }) }
+    /// The key of the value being scrubbed, or a fresh one outside a document.
+    private func valueKey() -> String {
+        if let spot { return spot.value }
+        looseValues += 1
+        return "v-\(looseValues)"
+    }
+    /// Where each place in the text of the value being scrubbed sits.
+    func spots(_ text: String) -> Spots { Spots(text, value: valueKey()) }
+    /// Whether the last stand-in drawn was read off one of several values
+    /// that disagree (an age two birth dates fit), so review should ask.
+    private(set) var lastUnclear = false
+    /// `local` names where in its value the original sits (see `Spots`).
+    func replacement(for entity: String, original: String, persona: Persona?, address: AddressParts? = nil, local: [String] = []) -> String {
         let actual = kind(of: original, read: entity)
+        standIns.scopes = local + (spot?.records ?? [])
+        standIns.unclear = false
         let fake = standIns.replace(actual, original, persona: persona, address: address)
+        lastUnclear = standIns.unclear
         if fake == original { return fake }
         if recordsReplacements { replacements.append(Replacement(original: original, fake: fake, entity: actual)) }
         emitted.insert(fake.lowercased())
@@ -188,7 +218,10 @@ public final class Job {
         if entity == "LAST_DIGITS" { standIns.noteEnding(original) }
     }
     func numericLexeme(_ original: String, entity: String, address: AddressParts? = nil) -> String {
+        standIns.scopes = (spot.map { [$0.value] } ?? []) + (spot?.records ?? [])
+        standIns.unclear = false
         let fake = standIns.numericLexeme(original, entity: entity, address: address)
+        lastUnclear = standIns.unclear
         if fake == original { return fake }
         if recordsReplacements { replacements.append(Replacement(original: original, fake: fake, entity: entity)) }
         emitted.insert(fake.lowercased())
@@ -342,6 +375,12 @@ public final class Job {
         try apply(text, spans: spans, owner: nil)
     }
     func apply(_ text: String, spans: [Span], owner: Persona?, address: AddressParts? = nil) throws -> (String, [Mark]) {
+        var held: [Mark] = []
+        return try apply(text, spans: spans, owner: owner, address: address, held: &held)
+    }
+    /// `held` marks places left as written in `text`; they come back where
+    /// they stand in the output, without any a replacement covers.
+    func apply(_ text: String, spans: [Span], owner: Persona?, address: AddressParts? = nil, held: inout [Mark]) throws -> (String, [Mark]) {
         let ordered = spans.sorted { $0.range.lowerBound < $1.range.lowerBound }
         var fakes = Array(repeating: "", count: ordered.count)
         var addresses: [AddressParts?], owners: [Persona?]
@@ -358,16 +397,30 @@ public final class Job {
         let handle = { (index: Int) in ordered[index].entity == "USERNAME" && !later(index) }
         for span in ordered where span.entity == "LAST_DIGITS" { standIns.noteEnding(TextRanges.substring(text, span.range)) }
         let drawOrder = ordered.indices.reversed().filter { !later($0) && !handle($0) } + ordered.indices.reversed().filter(handle) + ordered.indices.reversed().filter(later)
+        // Numbers, birth dates and what is read off them note where they sit.
+        let spots = ordered.contains { StandIns.anchored($0.entity) } ? self.spots(text) : nil
+        var unclear: Set<Int> = []
         for (count, index) in drawOrder.enumerated() {
             if count.isMultiple(of: 64) { try Scrubber.checkCancellation() }
-            fakes[index] = replacement(for: ordered[index].entity, original: TextRanges.substring(text, ordered[index].range), persona: owners[index], address: addresses[index])
+            let local = StandIns.anchored(ordered[index].entity) ? spots?.scopes(at: ordered[index].range.lowerBound) ?? [] : []
+            let written = TextRanges.substring(text, ordered[index].range)
+            // A link's part is replaced as what it spells, and written back encoded the same way;
+            // a value with hidden characters or markup inside, as what it reads (see `Visible`).
+            let shown = Visible.plain(ordered[index].url.map { URLs.decode(written, $0) } ?? written)
+            let fake = replacement(for: ordered[index].entity, original: shown, persona: owners[index], address: addresses[index], local: local)
+            fakes[index] = ordered[index].url.map { URLs.encode(fake, like: written, $0) } ?? Visible.rewrite(written, with: fake)
+            if lastUnclear { unclear.insert(index) }
         }
-        let (output, placed) = TextRanges.apply(zip(ordered, fakes).map { (range: $0.range, value: $1) }, to: text)
+        let edits = zip(ordered, fakes).map { (range: $0.range, value: $1) }
+        let (output, placed) = TextRanges.apply(edits, to: text)
+        if !held.isEmpty { held = TextRanges.shift(held, by: edits) }
         // An age with no birth date to follow is left as it was, and unmarked.
-        return (output, zip(placed, zip(ordered, fakes)).compactMap { range, pair in
-            let original = TextRanges.substring(text, pair.0.range)
-            return pair.1 == original && (StandIns.derived.contains(pair.0.entity) || pair.0.entity == "TIME_ZONE") ? nil
-                : Mark(range: range, entity: kind(of: original, read: pair.0.entity), original: original, confidence: confidence(of: original) ?? pair.0.score)
+        return (output, zip(placed, ordered.indices).compactMap { range, index in
+            let span = ordered[index], original = TextRanges.substring(text, span.range)
+            if fakes[index] == original && (StandIns.derived.contains(span.entity) || span.entity == "TIME_ZONE") { return nil }
+            let sure = here(span, Visible.plain(span.url.map { URLs.decode(original, $0) } ?? original))
+            return unclear.contains(index) ? Mark(range: range, entity: kind(of: original, read: span.entity), original: original, confidence: min(sure, Doubt.unclearOwner.confidence), doubt: .unclearOwner)
+                : Mark(range: range, entity: kind(of: original, read: span.entity), original: original, confidence: sure)
         })
     }
     func scrubValue(_ text: String, key: String? = nil, owner: Persona? = nil, contextWords: Set<String> = []) throws -> (String, [Mark], [Mark]) {

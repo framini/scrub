@@ -6,6 +6,7 @@ connectors (. _ - ' ’ @), as in the name model, so "B3J", "1100-053" and
 "St." stay one word. Each other non-space character is its own token, and so
 is each newline. A token is labelled O, B (first of an address) or I.
 """
+import os
 import unicodedata
 
 import torch
@@ -16,7 +17,11 @@ EMBED = 48
 HIDDEN = 64
 KERNEL = 5
 DILATIONS = (1, 2, 4, 8)
-SHAPES = 18
+# The token's 15 shape flags and 3 of its line's (see line_shapes). The wide
+# model (ADDRESS_WIDE=1 in the environment) reads a fourth: whether the line
+# holds a capital letter.
+WIDE = os.environ.get("ADDRESS_WIDE", "0") == "1"
+SHAPES = 19 if WIDE else 18
 LABELS = 3  # O, B, I
 CONNECTORS = set(".-_'’@")
 
@@ -103,7 +108,9 @@ def shape(word):
 
 
 def line_shapes(text, tokens):
-    """Per token: first on its line, its line holds a digit, its line holds a comma."""
+    """Per token: first on its line, its line holds a digit, its line holds a
+    comma, and (for the wide model) its line holds a capital letter: in text
+    written all in lowercase, a lowercase word tells nothing."""
     result, line, start = [], [], 0
     lines = []
     for index, (s, e) in enumerate(tokens):
@@ -118,8 +125,9 @@ def line_shapes(text, tokens):
         words = [i for i in line if text[tokens[i][0]:tokens[i][1]] != "\n"]
         digit = float(any(any(is_digit(ch) for ch in text[tokens[i][0]:tokens[i][1]]) for i in words))
         comma = float(any(text[tokens[i][0]:tokens[i][1]] == "," for i in words))
+        capital = float(any(any(ch.isupper() for ch in text[tokens[i][0]:tokens[i][1]]) for i in words))
         for position, i in enumerate(line):
-            flags[i] = [float(position == 0 and text[tokens[i][0]:tokens[i][1]] != "\n"), digit, comma]
+            flags[i] = [float(position == 0 and text[tokens[i][0]:tokens[i][1]] != "\n"), digit, comma] + ([capital] if WIDE else [])
     return flags
 
 

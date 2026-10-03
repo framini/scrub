@@ -17,13 +17,14 @@ struct AddressModelTests {
 
     @Test func loads() {
         #expect(AddressModel.shared != nil)
+        #expect(AddressModel.wide != nil)
     }
 
-    /// The Swift port splits, scores and decodes text exactly as the trained
+    /// The Swift port splits, scores and decodes text exactly as each trained
     /// model does, including a long text that spans several windows.
-    @Test func matchesTraining() throws {
-        let model = try #require(AddressModel.shared)
-        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/address-model-parity.json")
+    @Test(arguments: [false, true]) func matchesTraining(wide: Bool) throws {
+        let model = try #require(wide ? AddressModel.wide : AddressModel.shared)
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent(wide ? "Fixtures/address-model-wide-parity.json" : "Fixtures/address-model-parity.json")
         let cases = try JSONDecoder().decode([ParityCase].self, from: Data(contentsOf: url))
         for sample in cases {
             let tokens = NameModel.tokens(sample.text)
@@ -35,7 +36,7 @@ struct AddressModelTests {
                     #expect(abs(swift[label] - python[label]) < 1e-3 * max(1, abs(python[label])), "\(sample.text.prefix(60)) token \(index): \(swift) vs \(python)")
                 }
             }
-            let decoded = tokens.isEmpty ? [] : AddressModel.decode(tokens, model.probabilities(tokens))
+            let decoded = tokens.isEmpty ? [] : AddressModel.decode(tokens, model.probabilities(tokens), numberless: model.numberless)
             #expect(decoded.map { [$0.lowerBound, $0.upperBound] } == sample.addresses, "\(sample.text.prefix(60))")
         }
     }
@@ -47,14 +48,16 @@ struct AddressModelTests {
 
     /// Weights altered on disk are refused, even ones that still parse as a
     /// model, and Scrub then runs without it.
-    @Test func loadsOnlyWithItsChecksum() throws {
-        let url = try #require(ModelResources.bundle?.url(forResource: "AddressModel", withExtension: "bin"))
+    @Test(arguments: [AddressModel.Weights.first, .wide]) func loadsOnlyWithItsChecksum(weights: AddressModel.Weights) throws {
+        let url = try #require(ModelResources.bundle?.url(forResource: weights.name, withExtension: "bin"))
         var data = try Data(contentsOf: url)
-        #expect(AddressModel.verified(data) != nil)
+        #expect(AddressModel.verified(data, weights: weights) != nil)
         data[data.count - 1] ^= 0x01
         #expect(AddressModel(data) != nil)
-        #expect(AddressModel.verified(data) == nil, "an altered file is refused")
-        #expect(AddressModel.verified(try Data(contentsOf: url), checksum: String(repeating: "0", count: 64)) == nil)
+        #expect(AddressModel.verified(data, weights: weights) == nil, "an altered file is refused")
+        #expect(AddressModel.verified(try Data(contentsOf: url), weights: weights, checksum: String(repeating: "0", count: 64)) == nil)
+        // Each file is only itself.
+        #expect(AddressModel.verified(try Data(contentsOf: url), weights: weights.name == "AddressModel" ? .wide : .first) == nil)
     }
 
     // MARK: Addresses on every path

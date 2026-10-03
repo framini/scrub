@@ -7,7 +7,7 @@ import json
 
 import torch
 
-from model import AddressModel
+from model import WIDE, AddressModel
 from train import decode, normal, predict, quantized
 
 
@@ -46,7 +46,7 @@ def main():
     results = predict(model, [c["text"] for c in cases], "cpu")
     gold = exact = covered = negatives = false = 0
     for case, (tokens, probs) in zip(cases, results):
-        found = [normal(case["text"], f) for f in decode(case["text"], tokens, probs, args.threshold)]
+        found = [normal(case["text"], f) for f in decode(case["text"], tokens, probs, args.threshold, numberless=WIDE)]
         g = [normal(case["text"], s) for s in case["spans"]]
         gold += len(g)
         exact += len(set(found) & set(g))

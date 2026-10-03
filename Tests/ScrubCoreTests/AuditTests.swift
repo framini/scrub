@@ -189,7 +189,8 @@ func knownFirstNameAloneOnASignOffIsReplaced(_ input: String) throws {
 @Test func roleKeysReplaceNamesAndKeepOtherValues() throws {
     let (json, _) = try run(#"{"assigned_to":"Priya Raghunathan","manager":"Oluwaseun Adeyemi","created_by":"u_1234","owner":"platform-team"}"#, name: "a.json")
     #expect(!json.contains("Priya") && !json.contains("Raghunathan") && !json.contains("Adeyemi"))
-    #expect(json.contains("\"u_1234\"") && json.contains("\"platform-team\""))
+    // A user ID under a role key names that user: a stand-in of its shape. A team's slug names no one.
+    #expect(!json.contains("\"u_1234\"") && json.range(of: #""created_by": ?"u_\d{4}""#, options: .regularExpression) != nil && json.contains("\"platform-team\""), "\(json)")
     let (csv, _) = try run("name,assigned_to\nEmily Watson,Priya Raghunathan\n", name: "a.csv")
     #expect(!csv.contains("Raghunathan"))
     let (xml, _) = try run("<r><assignee>Priya Raghunathan</assignee></r>", name: "a.xml")
@@ -244,5 +245,5 @@ func knownFirstNameAloneOnASignOffIsReplaced(_ input: String) throws {
 @Test func roleValuesInOtherNameShapes() throws {
     let (json, _) = try run(#"{"assigned_to":"Raghunathan, Priya","manager":"Oluwaseun Adeyemi (Support)","owner":"Maria","reporter":"u_1234"}"#, name: "a.json")
     #expect(!json.contains("Priya") && !json.contains("Raghunathan") && !json.contains("Adeyemi") && !json.contains("Maria"))
-    #expect(json.contains("(Support)") && json.contains("u_1234"))
+    #expect(json.contains("(Support)") && !json.contains("u_1234") && json.range(of: #""reporter": ?"u_\d{4}""#, options: .regularExpression) != nil, "\(json)")
 }

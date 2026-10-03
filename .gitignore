@@ -22,3 +22,4 @@ Tools/AddressModel/raw/
 Tools/AddressModel/data/
 Tools/AddressModel/__pycache__/
 Sources/ScrubCore/Resources/AddressModel.bin.pt
+Sources/ScrubCore/Resources/AddressModelWide.bin.pt
