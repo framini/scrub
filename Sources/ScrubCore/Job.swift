@@ -71,6 +71,8 @@ public final class Job {
         let matcher = GazetteerMatcher(gazetteer, nameParts: nameParts, cuedParts: cuedParts)
         return zip(fields, bases).map { detector.combined($1, text: $0.text, matcher: matcher) }
     }
+    /// Kinds whose words are someone's name: an ID that starts with one is theirs.
+    private static let naming: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME", "USERNAME"]
     func observeSpans<S: Sequence>(_ fields: S) where S.Element == (String, [Span]) {
         for (text, spans) in fields {
             let length = (text as NSString).length
@@ -79,6 +81,7 @@ public final class Job {
                 let value = span.url.map { URLs.decode(TextRanges.substring(text, span.range), $0) } ?? TextRanges.substring(text, span.range)
                 standIns.avoid(value)
                 if span.entity == "PHONE_NUMBER" { standIns.notePhone(value) }
+                if Self.naming.contains(span.entity) { standIns.noteName(value) }
                 note(value, confidence: span.score)
                 noteKind(value, span, whole: span.range == 0..<length)
             }
@@ -157,7 +160,18 @@ public final class Job {
     private var spot: (value: String, records: [String], part: KeyHints.DatePart?)?
     private var looseValues = 0
     /// `part`: the part of a birth date the value is, when its key says so ("birth_month").
-    func enter(value: Int, records: [Int], part: KeyHints.DatePart? = nil) { spot = ("v\(value)", records.map { "r\($0)" }, part) }
+    /// `object`: the object a flattened header names within the innermost record
+    /// ("applicant" of "applicant.dob"), a scope of its own inside that record, so
+    /// two people in one row each keep their own birth date's parts.
+    func enter(value: Int, records: [Int], part: KeyHints.DatePart? = nil, object: String = "") {
+        var scopes = records.map { "r\($0)" }
+        if let innermost = scopes.first, !object.isEmpty {
+            // "applicant.birth" sits in "applicant" too: innermost first, each a scope of the record.
+            let names = object.split(separator: ".")
+            scopes.insert(contentsOf: names.indices.reversed().map { innermost + "/" + names[...$0].joined(separator: ".") }, at: 0)
+        }
+        spot = ("v\(value)", scopes, part)
+    }
     /// The key of the value being scrubbed, or a fresh one outside a document.
     private func valueKey() -> String {
         if let spot { return spot.value }
@@ -353,7 +367,7 @@ public final class Job {
         for index in spans.indices {
             guard let leaf = leafOf[index] else { continue }
             addresses[index] = placed[leaf]
-            if ["FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "USERNAME", "INITIALS"].contains(spans[index].entity) { owners[index] = leaves[leaf].owner(in: people) }
+            if ["FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "USERNAME", "INITIALS"].contains(spans[index].entity) { owners[index] = people.of(leaves[leaf]) }
         }
         return (addresses, owners)
     }
