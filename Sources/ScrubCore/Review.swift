@@ -516,6 +516,29 @@ extension Review {
         return found
     }
 
+    /// The value a selection is, as a reader reads it: "%51uillmere" or
+    /// "Quill%6Dere" in a link is Quillmere, "Odalys+Ferriter" in a query is
+    /// Odalys Ferriter, and "Quill\u{200B}mere" or "Quill<em>mere</em>" is
+    /// Quillmere. A mark is made of it, so it reaches the value in every form
+    /// (see `locate`). Decoded as the link readers decode (see
+    /// `URLs.reading`), and only where the selection sits in a link's part:
+    /// "C++" or "50%" in prose is written as it reads.
+    func identity(_ text: String) -> String {
+        var read = text
+        if text.contains("%") || text.contains("+") {
+            lock.lock()
+            defer { lock.unlock() }
+            search: for (index, value) in values.enumerated() where value.text.contains(text) {
+                for component in links(index) where TextRanges.substring(value.text, component.range).contains(text) {
+                    if let decoded = URLs.reading(text, component.part) { read = decoded.text }
+                    break search
+                }
+            }
+        }
+        let plain = Visible.plain(read).trimmingCharacters(in: .whitespacesAndNewlines)
+        return plain.isEmpty ? text : plain
+    }
+
     /// The findings and marks whose stand-in is `standIn`, as written anywhere
     /// once `edits` revise them: for a finding, every finding of the same original.
     func owners(ofStandIn standIn: String, marks: Marks, edits: Edits = Edits()) -> (findings: [Finding], entries: [Marks.Entry]) {
@@ -530,14 +553,15 @@ extension Review {
             let finding = findings[index]
             let current = revisions[index]?.standIn ?? finding.standIn
             guard Self.matchKey(current, entity: finding.entity) == Self.matchKey(standIn, entity: finding.entity) else { continue }
-            // The same value as it reads, plainly or inside a link, whatever kind it was read as.
+            // The same value as it reads, plainly or inside a link, whatever kind it was read as,
+            // and the same person's: another person's "Odalys" is kept or edited on her own.
             let read = Self.read(finding.original), key = Self.matchKey(read, entity: finding.entity)
             let groups = sameValues()
-            for entity in Set(findings.map(\.entity)) {
-                for id in groups[Self.matchKey(read, entity: entity)] ?? [] where findings[id].entity == entity && !owned.contains(where: { $0.id == id }) {
-                    if Self.matchKey(Self.read(findings[id].original), entity: entity) == key { owned.append(findings[id]) }
-                }
+            var same: [Finding.ID] = []
+            for entity in Set(findings.map(\.entity)).sorted() {
+                for id in groups[Self.matchKey(read, entity: entity)] ?? [] where findings[id].entity == entity && Self.matchKey(Self.read(findings[id].original), entity: entity) == key { same.append(id) }
             }
+            for id in same.sorted() where !owned.contains(where: { $0.id == id }) && sharesValue(index, id, among: same) { owned.append(findings[id]) }
         }
         let entries = marks.entries.filter { entry in (try? locate(entry, as: edits.replacements[Self.findingID(entry)]))?.written.contains(lowered) == true }
         return (owned, entries)
