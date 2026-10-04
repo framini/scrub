@@ -99,7 +99,7 @@ enum RecordIDs {
         let lower = letters.lowercased()
         let named = lower.count >= 2 && (NameLists.isFirst(lower) || NameLists.isSurname(lower))
         let listed = personPrefixes.contains(lower) || thingPrefixes.contains(lower)
-        let made = generated(body, typed: listed)
+        let made = generated(body, typed: listed || isCode(letters))
         // Before words, a type that is also a name starts one: "pat-ferriter" is Pat Ferriter.
         if listed { return made || !named }
         guard made, !named, letters == lower || letters == letters.uppercased() else { return false }
@@ -201,6 +201,24 @@ enum RecordIDs {
             }
         }
         return (named, unsure)
+    }
+
+    private static let nameNumberID = TextPattern(
+        #"(?<![\w./@#-])(?:[A-Za-z]{3,}(?:[_.-]?[A-Za-z]{2,})*[_.-]?[0-9]{2,}|[0-9]{2,}[_-][A-Za-z]{3,}(?:[_-][A-Za-z]{2,})*)(?![\w-]|[.,][0-9A-Za-z])"#)
+    /// IDs in prose built from the name of someone the same text names, and
+    /// a number ("pat-1987" or "ferriter07" beside Pat Ferriter): theirs,
+    /// however short or unlisted the name. `names` holds the words, of three
+    /// letters or more and in lowercase, of every person found in the text.
+    static func owned(in text: String, by names: Set<String>) -> [Span] {
+        guard !names.isEmpty, text.contains(where: \.isNumber) else { return [] }
+        return TextRanges.matches(nameNumberID, in: text).compactMap { match in
+            let range = match.range.location..<NSMaxRange(match.range)
+            let value = TextRanges.substring(text, range)
+            guard !isUUID(value) else { return nil }
+            let words = value.split { !$0.isLetter }.map { $0.lowercased() }
+            guard words.contains(where: names.contains) else { return nil }
+            return Span(range: range, entity: "RECORD_ID", score: 0.9)
+        }
     }
 
     static func spans(in text: String) -> [Span] {
@@ -310,7 +328,13 @@ enum RecordIDs {
     static func idLike(_ value: String) -> Bool {
         let kept = keptPrefix(value)
         let type = kept.dropLast().lowercased()
-        return generated(value.dropFirst(kept.count), typed: personPrefixes.contains(type) || thingPrefixes.contains(type))
+        return generated(value.dropFirst(kept.count), typed: personPrefixes.contains(type) || thingPrefixes.contains(type) || isCode(String(kept.dropLast())))
+    }
+    /// A type's short code no list holds, in one case ("app", "APL"): before
+    /// a long body whose case turns inside it, as before a listed type, no
+    /// written word follows ("app_wvyxnNnadrziFb").
+    private static func isCode(_ letters: String) -> Bool {
+        (2...3).contains(letters.count) && letters.allSatisfy(\.isLetter) && (letters == letters.lowercased() || letters == letters.uppercased())
     }
 
     /// `ownRecord`: the leaf's object holds a person's name or email itself, or says it is a person.
@@ -324,7 +348,8 @@ enum RecordIDs {
             let prefix = keptPrefix(leaf.text).dropLast().lowercased()
             // A person's own object: under a collection of people, beside their name or email, or with a person's prefix.
             // Beside a name or email, a UUID may be a verification's or an event's: it needs a person around it by name.
-            if personPrefixes.contains(prefix) && idLike(leaf.text) || plainID(leaf.text) && (ownRecord && !isUUID(leaf.text) || leaf.contextWords.contains(where: people.contains)) { return true }
+            let personal = ownRecord && !isUUID(leaf.text) || leaf.contextWords.contains(where: people.contains)
+            if personPrefixes.contains(prefix) && idLike(leaf.text) || plainID(leaf.text) && personal { return true }
         }
         return embeds(leaf.text, names: spelled.names, locals: spelled.locals, phones: spelled.phones)
     }

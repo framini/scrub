@@ -56,6 +56,11 @@ public final class Detector {
             let worded = RecordIDs.worded(in: text)
             spans += worded.named.filter { id in !spans.contains { $0.range.overlaps(id.range) } }
             doubts += worded.unsure
+            // One made of the name of a person found here and a number ("pat-1987" beside Pat Ferriter) is theirs.
+            let named = Set(spans.filter { ["PERSON", "FIRST_NAME", "LAST_NAME"].contains($0.entity) }.flatMap { span in
+                TextRanges.substring(text, span.range).split { !$0.isLetter }.map { $0.lowercased() }.filter { $0.count >= 3 && !People.isTitle($0) }
+            })
+            spans += RecordIDs.owned(in: text, by: named).filter { id in !spans.contains { $0.range.overlaps(id.range) } }
             // "RFC4716" names a standard, and "t.co/x" a link: neither is anyone's.
             // A secret under a query key ends with its parameter, whichever detector read it.
             let ns = text as NSString
