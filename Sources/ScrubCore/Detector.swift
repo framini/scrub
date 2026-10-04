@@ -63,8 +63,9 @@ public final class Detector {
                 guard span.entity == "SECRET", span.url == nil, let end = URLs.queryValueEnd(ns, span.range) else { return span }
                 return Span(range: span.range.lowerBound..<end, entity: span.entity, score: span.score)
             }
-            let kept = Standards.outside(Links.outside(cut, in: text, links: foundLinks), in: text)
+            var kept = Standards.outside(Links.outside(cut, in: text, links: foundLinks), in: text)
             if !doubts.isEmpty { doubts = Self.doubted(doubts, besides: kept, in: text, links: foundLinks) }
+            if !doubts.isEmpty { (kept, doubts) = Self.joined(doubts, onto: kept, in: text) }
             return kept
         }
     }
@@ -85,6 +86,28 @@ public final class Detector {
             result.append(doubt)
         }
         return result.sorted { $0.range.lowerBound < $1.range.lowerBound }
+    }
+    /// A doubted word written right beside a person found surely, with one
+    /// space between, is the rest of that name ("Tomasz O'Sullivan", where the
+    /// tagger stops at the apostrophe): the person takes it in, so the whole
+    /// name is replaced as one. A doubt of more than one word stays a doubt.
+    private static func joined(_ doubts: [Span], onto kept: [Span], in text: String) -> (kept: [Span], doubts: [Span]) {
+        let ns = text as NSString
+        var kept = kept, left: [Span] = []
+        for doubt in doubts {
+            let word = ns.substring(with: NSRange(location: doubt.range.lowerBound, length: doubt.range.count))
+            guard doubt.entity == "PERSON", !word.contains(where: \.isWhitespace), word.first?.isUppercase == true,
+                  let index = kept.firstIndex(where: { person in
+                      guard person.entity == "PERSON", person.score > NameModel.score, person.url == nil else { return false }
+                      let gap = person.range.upperBound <= doubt.range.lowerBound ? person.range.upperBound..<doubt.range.lowerBound
+                          : doubt.range.upperBound <= person.range.lowerBound ? doubt.range.upperBound..<person.range.lowerBound : nil
+                      guard let gap else { return false }
+                      return gap.count == 1 && ns.character(at: gap.lowerBound) == 0x20
+                  }) else { left.append(doubt); continue }
+            let person = kept[index]
+            kept[index] = Span(range: min(person.range.lowerBound, doubt.range.lowerBound)..<max(person.range.upperBound, doubt.range.upperBound), entity: "PERSON", score: person.score)
+        }
+        return (kept, left)
     }
     private func found(_ text: String, key: String?, contextWords: Set<String>, modelled: Bool, context: ContextStage.Reading?) -> [Span] {
         do {

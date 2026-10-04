@@ -67,6 +67,16 @@ struct RuleRegressions {
                             gone: ["Valemir"], kept: ["Article", "art", "Rule"]))
     }
 
+    @Test func theWordForWhoseRecordItIsIsNoPartOfTheName() throws {
+        // "Customer" opening a sentence was read as the first of the name after it.
+        try Self.check(Case(prose: "Customer Tomasz O'Sullivan called twice about the refund. Patient Odalys Ferriter was seen today.",
+                            gone: ["Tomasz", "Sullivan", "Odalys", "Ferriter"], kept: ["Customer", "Patient"]))
+        try Self.check(Case(prose: "Tenant Tavish Quillmere paid late again; Customer Service called him back on Monday.",
+                            gone: ["Tavish", "Quillmere"], kept: ["Tenant", "Customer", "Service"]))
+        // A first name that is also a word stays part of the name.
+        try Self.check(Case(prose: "Rose Ferriter called twice. Hunter Quillmere signed the lease.", gone: ["Rose", "Ferriter", "Hunter", "Quillmere"]))
+    }
+
     @Test func rolesBesideANameAreNoPartOfIt() throws {
         try Self.check(Case(prose: "The Government were represented by Mr H. Varnholt, Ambassador, Under-Secretary for Legal Affairs, and Ms E. Lindqvane and Mr C. Arneby, Advisers.",
                             gone: ["Varnholt", "Lindqvane", "Arneby"], kept: ["Ambassador", "Advisers"]))
