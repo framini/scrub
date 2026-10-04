@@ -337,19 +337,35 @@ enum RecordIDs {
         (2...3).contains(letters.count) && letters.allSatisfy(\.isLetter) && (letters == letters.lowercased() || letters == letters.uppercased())
     }
 
+    /// A person's type before an identifier's body, however its case runs:
+    /// in a person's own record, "usr_xqdcwmeezfMrm" beside her name and email is hers.
+    static func personTyped(_ value: String) -> Bool {
+        let kept = keptPrefix(value)
+        return shaped(value) && personPrefixes.contains(kept.dropLast().lowercased()) && opaque(value.dropFirst(kept.count))
+    }
+
+    /// One unbroken run of eight letters or digits that no word or name writes: an identifier's body.
+    private static func opaque(_ body: Substring) -> Bool {
+        let lower = body.lowercased()
+        return body.count >= 8 && body.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) }
+            && !NameLists.isOrdinary(lower) && !NameLists.isFirst(lower) && !NameLists.isSurname(lower)
+    }
+
     /// `ownRecord`: the leaf's object holds a person's name or email itself, or says it is a person.
     static func isPersonal(_ leaf: DocumentLeaf, spelled: Known, ownRecord: Bool) -> Bool {
         let key = leaf.rawKey ?? leaf.key
         guard shaped(leaf.text) else { return false }
         if identifying(key: key, value: leaf.text) { return true }
         guard idKey(key) else { return false }
-        let words = KeyHints.words(key)
+        // A flattened column names its object first ("actor.id"): the field is its last part, as a nested key is.
+        let words = KeyHints.words(key?.split(separator: ".").last.map(String.init))
         if words == ["id"] || words == ["uid"] {
             let prefix = keptPrefix(leaf.text).dropLast().lowercased()
             // A person's own object: under a collection of people, beside their name or email, or with a person's prefix.
             // Beside a name or email, a UUID may be a verification's or an event's: it needs a person around it by name.
             let personal = ownRecord && !isUUID(leaf.text) || leaf.contextWords.contains(where: people.contains)
             if personPrefixes.contains(prefix) && idLike(leaf.text) || plainID(leaf.text) && personal { return true }
+            if ownRecord, personTyped(leaf.text) { return true }
         }
         return embeds(leaf.text, names: spelled.names, locals: spelled.locals, phones: spelled.phones)
     }

@@ -164,7 +164,7 @@ enum KeyedValues {
             pending = nil
             guard !trimmed.isEmpty else { return }
             if let own, trimmed.utf16.count <= 80 { levels[levels.count - 1].fields.append((own, trimmed)) }
-            if let own, ["id", "uid"].contains(KeyHints.words(own).joined()), RecordIDs.plainID(trimmed) { levels[levels.count - 1].ids.append(content) }
+            if let own, ["id", "uid"].contains(KeyHints.words(own).joined()), RecordIDs.plainID(trimmed) || RecordIDs.personTyped(trimmed) { levels[levels.count - 1].ids.append(content) }
             if let key { found.fields.append((key, content, levels[levels.count - 1].id)) }
             if KeyHints.hint(key) == nil, KeyHints.isStructural(key) {
                 found.structural.append(content)
