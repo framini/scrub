@@ -68,6 +68,7 @@ public enum XMLFile: FileFormat {
                     }
                 }
                 elementKey = Self.labelledField(element) ?? elementKey
+                if KeyHints.hint(elementKey) == nil, let part = Self.namePart(element) { elementKey = part }
                 func key(_ name: String?, resolved: String?, parent: String?, value: String?, siblings: @autoclosure () -> [String]) -> String? {
                     if KeyHints.isBareName(name), KeyHints.isBareName(resolved), let value, !KeyHints.bareNameIsPerson(value, siblings: siblings(), parent: parent) { return nil }
                     return resolved
@@ -339,6 +340,34 @@ public enum XMLFile: FileFormat {
         }
         return KeyHints.namedField(name, siblings: siblings)
     }
+    /// What a <first>, <last>, <given>, <middle> or <family> element is read as
+    /// when it holds part of a name ("<person><first>Odalys</first><last>Ferriter</last>"):
+    /// its value is written as a name, and its record is a person's, it sits
+    /// beside the other part written as a name, or the value is a known name.
+    /// Elsewhere (`<first>true</first>`, `<first>2024-01-01</first>`) it is no name.
+    static func namePart(_ element: XMLElement) -> String? {
+        func local(_ name: String?) -> String? { name?.split(separator: ":").last.map(String.init) }
+        func part(_ element: XMLElement) -> String? {
+            local(element.name).flatMap { namePartKeys[KeyHints.words($0).joined()] }
+        }
+        func value(_ element: XMLElement) -> String? {
+            guard element.childCount == 1, element.children?.first?.kind == .text else { return nil }
+            let value = (element.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let words = value.split(separator: " ")
+            guard (1...3).contains(words.count), words.allSatisfy({ word in
+                word.first?.isUppercase == true && word.allSatisfy { $0.isLetter || "'’.-".contains($0) }
+                    && !NameShape.months.contains(word.lowercased()) && !NameShape.weekdays.contains(word.lowercased())
+            }), KeyHints.fits("first_name", value) else { return nil }
+            return value
+        }
+        guard let own = part(element), let written = value(element), let parent = element.parent as? XMLElement else { return nil }
+        let siblings = (parent.children ?? []).compactMap { $0 as? XMLElement }.filter { $0 !== element }
+        if KeyHints.isPersonsRecord(siblings: siblings.compactMap { local($0.name) }, parent: local(parent.name)) { return own }
+        if siblings.contains(where: { sibling in part(sibling).map { $0 != own } == true && value(sibling) != nil }) { return own }
+        let known = written.lowercased().split { !$0.isLetter }.contains { Names.firstFolded.contains(String($0)) || Names.lastFolded.contains(String($0)) }
+        return known ? own : nil
+    }
+    private static let namePartKeys = ["first": "first_name", "given": "first_name", "middle": "middle_name", "last": "last_name", "family": "last_name"]
     static func parses(_ data: Data) throws -> Bool {
         guard let source = try? decodeXML(data) else { return false }
         let text = normalizedDeclaration(source)

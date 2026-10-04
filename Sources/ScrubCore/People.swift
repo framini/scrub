@@ -30,15 +30,27 @@ final class Persona {
     init(realFirst: String?, realLast: String?, first: String, last: String) {
         self.realFirst = realFirst; self.realLast = realLast; self.drawnFirst = first; self.last = last
     }
+    /// A name part as an address writes it: no apostrophe or hyphen, so
+    /// "O’Sullivan" is "osullivan" and "Smith-Jones" "smithjones", whichever apostrophe it had.
+    static func letters(_ part: String) -> String { part.lowercased().filter { !joiners.contains($0) } }
+    private static let joiners: Set<Character> = ["'", "’", "‘", "ʼ", "′", "`", "＇", "-", "‐", "‑", "‒", "–"]
+    /// Whether a part is in an address's words: whole ("osullivan", "smithjones")
+    /// or with its own pieces apart ("smith.jones", "o'sullivan" read as "o", "sullivan").
+    private static func written(_ part: String, in parts: Set<String>) -> Bool {
+        if parts.contains(letters(part)) { return true }
+        let pieces = part.lowercased().split(whereSeparator: joiners.contains).map(String.init)
+        return pieces.count > 1 && pieces.allSatisfy(parts.contains)
+    }
     func matches(local: String) -> Bool {
         let parts = Set(local.lowercased().split { !$0.isLetter }.map(String.init))
         let joined = local.lowercased().filter(\.isLetter)
-        if let first = realFirst, let last = realLast {
-            return (parts.contains(first) && parts.contains(last)) || [first + last, last + first, String(first.prefix(1)) + last, last + String(first.prefix(1))].contains(joined)
+        if let realFirst, let realLast {
+            let first = Self.letters(realFirst), last = Self.letters(realLast)
+            return (Self.written(realFirst, in: parts) && Self.written(realLast, in: parts)) || [first + last, last + first, String(first.prefix(1)) + last, last + String(first.prefix(1))].contains(joined)
                 // "odalys.f", "odalysf": a first name no shorter than four letters and the surname's initial.
                 || first.count >= 4 && joined == first + String(last.prefix(1))
         }
-        return (realLast.map { parts.contains($0) } ?? false) || (realFirst.map { parts == [$0] } ?? false)
+        return (realLast.map { Self.written($0, in: parts) } ?? false) || (realFirst.map { parts == [Self.letters($0)] } ?? false)
     }
 }
 
@@ -96,6 +108,9 @@ final class People {
     private var lastBuckets: [String: Bucket] = [:]
     private var firstOnly: [String: Persona] = [:]
     private var lastOnly: [String: Persona] = [:]
+    /// The same people by that part as an address writes it (see `Persona.letters`).
+    private var firstOnlyLetters: [String: Persona] = [:]
+    private var lastOnlyLetters: [String: Persona] = [:]
     private var missingFirst = Bucket()
     private var missingLast = Bucket()
     private var joined: [UInt64: Candidates]?
@@ -117,10 +132,11 @@ final class People {
         if let l { lastBuckets[l, default: Bucket()].add(person) } else { missingLast.add(person) }
         if let f, let l {
             if joined != nil { addJoined(person, first: f, last: l) }
-        } else if let f { firstOnly[f] = person }
-        else if let l { lastOnly[l] = person }
+        } else if let f { firstOnly[f] = person; firstOnlyLetters[Persona.letters(f)] = person }
+        else if let l { lastOnly[l] = person; lastOnlyLetters[Persona.letters(l)] = person }
     }
-    private func addJoined(_ person: Persona, first: String, last: String) {
+    private func addJoined(_ person: Persona, first realFirst: String, last realLast: String) {
+        let first = Persona.letters(realFirst), last = Persona.letters(realLast)
         for key in [first + last, last + first, String(first.prefix(1)) + last, last + String(first.prefix(1))] + (first.count >= 4 ? [first + String(last.prefix(1))] : []) {
             let hash = Self.joinedHash(key)
             if var candidates = joined?[hash] {
@@ -144,8 +160,8 @@ final class People {
         fullBuckets[Key(first: f, last: l)]?.remove(person)
         if let f { firstBuckets[f]?.remove(person) } else { missingFirst.remove(person) }
         if let l { lastBuckets[l]?.remove(person) } else { missingLast.remove(person) }
-        if let f, l == nil { firstOnly.removeValue(forKey: f) }
-        if let l, f == nil { lastOnly.removeValue(forKey: l) }
+        if let f, l == nil { firstOnly.removeValue(forKey: f); firstOnlyLetters.removeValue(forKey: Persona.letters(f)) }
+        if let l, f == nil { lastOnly.removeValue(forKey: l); lastOnlyLetters.removeValue(forKey: Persona.letters(l)) }
     }
     private func compatible(_ f: String?, _ l: String?, _ middle: String?, gender: String? = nil) -> (Int, Persona?) {
         if let f, let l {
@@ -485,9 +501,10 @@ final class People {
         func collect(_ person: Persona?) { if let person { candidates[ObjectIdentifier(person)] = person } }
         ensureJoined()
         for person in joined?[Self.joinedHash(key)]?.people ?? [] { collect(person) }
-        for part in parts {
-            collect(lastOnly[part])
-            if parts.count == 1 { collect(firstOnly[part]) }
+        // A surname whose pieces are written apart ("smith.jones") is found whole too.
+        for part in parts.union([key]) {
+            collect(lastOnlyLetters[part])
+            if parts.count == 1 { collect(firstOnlyLetters[part]) }
             if let bucket = firstBuckets[part], bucket.count > 0 {
                 for other in parts {
                     for person in fullBuckets[Key(first: part, last: other)]?.people ?? [] { collect(person) }
@@ -577,11 +594,13 @@ final class People {
         let first = fold(person.first).filter(\.isLetter), last = fold(person.last).filter(\.isLetter)
         let local = pieces.first ?? ""
         let joined = local.lowercased().filter(\.isLetter)
+        // Read as letters, as the address writes the name: "o’sullivan" is "osullivan".
+        let f = person.realFirst.map(Persona.letters), l = person.realLast.map(Persona.letters)
         let fakeLocal: String
-        if let f = person.realFirst, let l = person.realLast, joined == String(f.prefix(1)) + l { fakeLocal = String(first.prefix(1)) + last }
-        else if let f = person.realFirst, let l = person.realLast, joined == l + String(f.prefix(1)) { fakeLocal = last + String(first.prefix(1)) }
-        else if let f = person.realFirst, let l = person.realLast, joined == f + l, !local.contains(where: { "._-+".contains($0) }) { fakeLocal = first + last }
-        else if let f = person.realFirst?.lowercased(), let l = person.realLast?.lowercased(), f.count >= 4, joined == f + String(l.prefix(1)) {
+        if let f, let l, joined == String(f.prefix(1)) + l { fakeLocal = String(first.prefix(1)) + last }
+        else if let f, let l, joined == l + String(f.prefix(1)) { fakeLocal = last + String(first.prefix(1)) }
+        else if let f, let l, joined == f + l, !local.contains(where: { "._-+".contains($0) }) { fakeLocal = first + last }
+        else if let f, let l, f.count >= 4, joined == f + String(l.prefix(1)) {
             fakeLocal = first + (local.first(where: { "._-".contains($0) }).map(String.init) ?? "") + String(last.prefix(1))
         }
         else { fakeLocal = first + String(local.first(where: { "._-".contains($0) }) ?? ".") + last }

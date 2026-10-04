@@ -20,8 +20,10 @@ struct DocumentLeaf: Sendable {
     /// make it differ from the text as written (see `Visible`). Detection reads this.
     let view: Visible?
     var seen: String { view?.clean ?? text }
-    /// The object a flattened header names within its record ("applicant" of "applicant.first_name").
-    let objectPath: String
+    /// The object a flattened header names within its record ("applicant" of
+    /// "applicant.first_name"), or a flat key's person ("applicant" of
+    /// "applicant_email" beside "spouse_name", see `DocumentPipeline.byPerson`).
+    var objectPath: String
     /// The key of an address field whose value has no number ("line1": "the
     /// old rectory, church lane"), which `key` leaves out (see `KeyHints.numberlessLine`).
     let addressKey: String?
@@ -137,7 +139,8 @@ enum DocumentPipeline {
         return leaf.text.contains("/") && TimeZone(identifier: leaf.text) != nil
     }
 
-    static func run(_ leaves: [DocumentLeaf], job: Job, forceFullDetection: Bool = false, progress: (Stage, Int, Int) -> Void = { _, _, _ in }) throws -> [DocumentValue] {
+    static func run(_ given: [DocumentLeaf], job: Job, forceFullDetection: Bool = false, progress: (Stage, Int, Int) -> Void = { _, _, _ in }) throws -> [DocumentValue] {
+        let leaves = byPerson(given)
         var (gazetteer, values, emptyBases) = try detectAndPrepare(leaves, job: job, progress: progress)
         try Scrubber.checkCancellation()
         var active = Array(repeating: true, count: values.count)
@@ -356,6 +359,37 @@ enum DocumentPipeline {
             }
             return nil
         }
+    }
+
+    /// A record that names several people in flat keys ("applicant_name" and
+    /// "spouse_name", "applicantEmail" and "cosignerEmail", "applicant_dob")
+    /// holds an object for each, as "applicant.name" or a nested object would,
+    /// so each one's fields are read as theirs. Only a qualifier that holds a
+    /// name of its own counts, and only beside another name: one person's
+    /// record ("name" beside "home_phone" and "work_phone", or "billing_email")
+    /// stays whole, and "first_name" and "last_name" qualify nothing.
+    static func byPerson(_ leaves: [DocumentLeaf]) -> [DocumentLeaf] {
+        var prefixes = [String?](repeating: nil, count: leaves.count)
+        var holders: [Int: Set<String>] = [:]
+        // Keys repeat in every row and record: each is read once.
+        var known: [String: String?] = [:]
+        for (index, leaf) in leaves.enumerated() where leaf.objectPath.isEmpty && !leaf.text.isEmpty {
+            guard let record = leaf.lastRecord, let key = leaf.key ?? leaf.rawKey else { continue }
+            let prefix: String?
+            if let cached = known[key] { prefix = cached } else {
+                prefix = KeyHints.personPrefix(key)
+                known[key] = .some(prefix)
+            }
+            prefixes[index] = prefix
+            if ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(KeyHints.hint(leaf.key) ?? "") { holders[record, default: []].insert(prefix ?? "") }
+        }
+        guard holders.values.contains(where: { $0.count > 1 }) else { return leaves }
+        var result = leaves
+        for index in leaves.indices {
+            guard let prefix = prefixes[index], let record = leaves[index].lastRecord, let names = holders[record], names.count > 1, names.contains(prefix) else { continue }
+            result[index].objectPath = prefix
+        }
+        return result
     }
 
     /// Who each record is: the name, email and gender read under their keys

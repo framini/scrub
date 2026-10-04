@@ -71,8 +71,30 @@ public final class Detector {
             var kept = Standards.outside(Links.outside(cut, in: text, links: foundLinks), in: text)
             if !doubts.isEmpty { doubts = Self.doubted(doubts, besides: kept, in: text, links: foundLinks) }
             if !doubts.isEmpty { (kept, doubts) = Self.joined(doubts, onto: kept, in: text) }
-            return kept
+            return Self.wholeName(kept, in: text)
         }
+    }
+    /// A value written whole as a name is one name when a reader took its
+    /// every word for part of a person, or, with a surname's particle in it,
+    /// any of them: "Odalys van der Berg" read in pieces is replaced as one,
+    /// so no word of it stays and its stand-in is a name.
+    private static func wholeName(_ spans: [Span], in text: String) -> [Span] {
+        guard !spans.isEmpty, spans.allSatisfy({ ["PERSON", "FIRST_NAME", "LAST_NAME"].contains($0.entity) && $0.url == nil }),
+              let name = writtenName(text), spans.allSatisfy({ name.lowerBound <= $0.range.lowerBound && $0.range.upperBound <= name.upperBound }),
+              spans.count > 1 || spans[0].range != name else { return spans }
+        var covered = IndexSet()
+        for span in spans where !span.range.isEmpty { covered.insert(integersIn: span.range) }
+        let ns = text as NSString
+        var start = name.lowerBound, particled = false, whole = true
+        for end in name.lowerBound...name.upperBound where end == name.upperBound || ns.character(at: end) == 0x20 {
+            if end > start, let first = Unicode.Scalar(ns.character(at: start)) {
+                if CharacterSet.uppercaseLetters.contains(first) { whole = whole && covered.contains(integersIn: start..<end) }
+                else { particled = true }
+            }
+            start = end + 1
+        }
+        guard whole || particled else { return spans }
+        return [Span(range: name, entity: "PERSON", score: spans.map(\.score).max() ?? 1)]
     }
     /// What `base` finds, and the people it doubts.
     func read(_ text: String, key: String? = nil, contextWords: Set<String> = [], context: ContextStage.Reading? = nil) -> (spans: [Span], doubts: [Span]) {
@@ -564,9 +586,11 @@ public final class Detector {
     }
     private static let timeZone = TextPattern(#"^\s*(?i:africa|america|antarctica|arctic|asia|atlantic|australia|europe|indian|pacific|etc)/[A-Za-z_+-]+(?:/[A-Za-z_+-]+)?\s*$"#)
     private static let decimal = TextPattern(#"^[-+]?\d+\.\d+$"#)
-    private static let nameShape = TextPattern(#"^\s*(\p{Lu}[\p{L}'’.-]*(?:\s+\p{Lu}[\p{L}'’.-]*){1,3}|\p{Lu}[\p{L}'’.-]*,\s*\p{Lu}[\p{L}'’.-]*(?:\s+\p{Lu}[\p{L}'’.-]*)?)\s*(?:\([^()]*\))?\s*$"#)
+    /// A value written as a name (see `writtenName`), a surname's particles in lowercase between its words ("Odalys van der Berg").
+    private static let nameShape = TextPattern(#"^\s*(\p{Lu}[\p{L}'’.-]*(?:\s+(?:(?:van|von|der|den|de|del|della|di|da|du|dos|das|la|le|ten|ter|bin|ibn|al|el|y)\s+){0,2}\p{Lu}[\p{L}'’.-]*){1,3}|\p{Lu}[\p{L}'’.-]*,\s*\p{Lu}[\p{L}'’.-]*(?:\s+\p{Lu}[\p{L}'’.-]*)?)\s*(?:\([^()]*\))?\s*$"#)
     private static let loneFirst = TextPattern(#"^\s*(\p{Lu}\p{Ll}+)\s*$"#)
-    /// The range of a value written as a name: two to four capitalised words, "Last, First",
+    /// The range of a value written as a name: two to four capitalised words, with a
+    /// surname's particles between them, "Last, First",
     /// either with a trailing note like "(Support)", or a known first name alone.
     static func writtenName(_ text: String) -> Range<Int>? {
         let match = TextRanges.matches(nameShape, in: text).first
