@@ -355,6 +355,7 @@ public final class Job {
             guard ["country", "code", "gender", "sex", "title", "honorific", "salutation", "pronouns", "timezone", "tz", "zone"].contains(last) else { continue }
             leaves.append(DocumentLeaf(TextRanges.substring(text, field.range), key: field.key, records: structure.ancestry(field.level)))
         }
+        leaves = DocumentPipeline.byPerson(leaves)
         let placed = DocumentPipeline.associateAddresses(leaves)
         // Cut short when cancelled; the caller stops before reading anything.
         guard placed.count == leaves.count else { return nil }

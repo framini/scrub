@@ -103,7 +103,8 @@ public enum KeyHints {
             guard let field, let entity = hints[field] else { continue }
             let qualifier = parts[start - 1]
             switch field {
-            case "name": if people.contains(qualifier) || roles.contains(qualifier) { return entity }
+            // "primary_name" and "secondary_name": the first and the second person a record names.
+            case "name": if people.contains(qualifier) || roles.contains(qualifier) || ["primary", "secondary"].contains(qualifier) { return entity }
             case "address", "addr": if addressQualifiers.contains(qualifier) { return entity }
             // "primary_mobile", "customer_cell": a phone, as "is_mobile" and "mobile_app" are not.
             case "mobile", "cell", "tel": if people.contains(qualifier) || roles.contains(qualifier) || addressQualifiers.contains(qualifier) || phoneQualifiers.contains(qualifier) { return entity }
@@ -330,12 +331,17 @@ public enum KeyHints {
     /// `inObject`: the siblings are one object's, not every key in loose text.
     static func bareNameIsPerson(_ value: String, siblings: [String], parent: String?, inObject: Bool = true) -> Bool {
         let parts = value.split(whereSeparator: { !$0.isLetter })
-        let known = parts.contains { Names.firstFolded.contains($0.lowercased()) || Names.lastFolded.contains($0.lowercased()) }
+        // A surname's particle between capitalised words ("Odalys van der Berg") writes a person's name.
+        let particled = parts.count >= 3 && parts.first?.first?.isUppercase == true && parts.last?.first?.isUppercase == true
+            && parts.dropFirst().dropLast().contains { surnameParticles.contains(String($0)) } && Detector.writtenName(value) != nil
+        let known = particled || parts.contains { Names.firstFolded.contains($0.lowercased()) || Names.lastFolded.contains($0.lowercased()) }
         // One unknown word ("NORTHWIND") names a business or product more often than a person.
         if parts.count < 2 && !known { return false }
         if let parent, notPeople.contains(words(parent).last.map { singular($0) ?? $0 } ?? "") { return false }
         return isPersonsRecord(siblings: siblings, parent: parent, inObject: inObject) || known
     }
+    /// Particles that write a surname and seldom a business's or a product's name.
+    private static let surnameParticles: Set<String> = ["van", "von", "der", "den", "ter", "ten", "bin", "ibn"]
     /// Whether a record says a bare "name" in it is a person's, whatever the
     /// name: it holds personal details or a person's own ID, or its parent is
     /// about people ("customers", "manager") and not about a business.
@@ -351,12 +357,32 @@ public enum KeyHints {
     }
     // Keys naming a person's role ("assigned_to", "manager") often hold an ID
     // or an email, so they only mark a value that is written like a name.
-    private static let roles: Set<String> = ["manager", "approver", "reporter", "author", "assignee", "assignedto", "owner", "requester", "requestedby", "reviewer", "reviewedby", "sender", "recipient", "createdby", "updatedby", "modifiedby", "submittedby", "approvedby", "contact", "contactperson", "agent", "rep", "salesrep", "accountmanager", "supervisor", "signedby", "attendee", "guest", "beneficiary", "emergencycontact", "nextofkin", "spouse", "parent", "guardian", "customer", "client", "patient", "applicant", "employee", "member", "guest", "tenant", "borrower", "insured", "policyholder", "passenger", "traveler", "traveller", "attn", "attention", "shipto", "billto", "soldto", "deliverto", "addressee", "cardholder", "accountholder", "signer", "witness", "caller", "visitor", "student", "candidate"]
+    private static let roles: Set<String> = ["manager", "approver", "reporter", "author", "assignee", "assignedto", "owner", "requester", "requestedby", "reviewer", "reviewedby", "sender", "recipient", "createdby", "updatedby", "modifiedby", "submittedby", "approvedby", "contact", "contactperson", "agent", "rep", "salesrep", "accountmanager", "supervisor", "signedby", "attendee", "guest", "beneficiary", "emergencycontact", "nextofkin", "spouse", "parent", "guardian", "customer", "client", "patient", "applicant", "employee", "member", "guest", "tenant", "borrower", "insured", "policyholder", "passenger", "traveler", "traveller", "attn", "attention", "shipto", "billto", "soldto", "deliverto", "addressee", "cardholder", "accountholder", "signer", "witness", "caller", "visitor", "student", "candidate", "cosigner", "cosignatory", "guarantor", "coapplicant", "coborrower", "cotenant"]
     static func isRole(_ key: String?) -> Bool {
         guard let key else { return false }
         let parts = words(key)
         guard let last = parts.last else { return false }
         return roles.contains(parts.joined()) || roles.contains(last) || parts.count >= 2 && roles.contains(parts[parts.count - 2] + last)
+    }
+    /// Qualifiers that say which of several people a field is about, beside
+    /// the roles and people above: "primary_", "secondary_", and "billing_"
+    /// or "shipping_" when they hold a name.
+    private static let personQualifiers: Set<String> = ["primary", "secondary", "billing", "shipping"]
+    /// The person a flat key's qualifier names ("applicant" of "applicant_email",
+    /// "applicantDob" or "co_signer_first_name"), when the rest of it is a field
+    /// of its own; nil for a key with none ("first_name", "home_phone", "created_at").
+    static func personPrefix(_ key: String?) -> String? {
+        let parts = words(key)
+        guard parts.count >= 2, parts.count <= 6 else { return nil }
+        for length in [2, 1] where parts.count > length {
+            let prefix = parts[..<length].joined()
+            guard people.contains(prefix) || roles.contains(prefix) || personQualifiers.contains(prefix) else { continue }
+            let rest = parts[length...]
+            // "user_name" is a username, and "contact_person" or "account_holder" one role.
+            guard hint(rest.joined(separator: "_")) != nil, !roles.contains(rest.joined()), hint(key) != nil else { continue }
+            return prefix
+        }
+        return nil
     }
     /// The words of a key: "billing_details.postalCode" → billing, details, postal, code.
     public static func words(_ key: String?) -> [String] {
