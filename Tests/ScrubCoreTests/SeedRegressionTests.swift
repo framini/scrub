@@ -75,6 +75,16 @@ import Testing
         }
     }
 
+    /// realisticPayloads, seeds 3240910474 (case 94) and 63515175 (case
+    /// 171): a webhook flattened to CSV ("data.object.name.first",
+    /// "data.object.email") read its name object as a sibling of the object
+    /// around it, so the person's email and initials no longer followed the
+    /// stand-in name. An object in a row sits inside the one around it.
+    @Test func aFlattenedObjectSitsInsideTheOneAroundIt() throws {
+        try Self.judgeEveryRendering(seed: 3_240_910_568, shape: "webhook")
+        try Self.judgeEveryRendering(seed: 63_515_346, shape: "webhook")
+    }
+
     /// realisticPayloads, seed 6165913227236476311 (case 138): a birth year
     /// of 2001 was found "still there" in every rendering, but the 2001 the
     /// judge saw opened the IPv6 address's stand-in ("2001:db8::…", the

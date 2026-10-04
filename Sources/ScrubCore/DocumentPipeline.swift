@@ -334,11 +334,20 @@ enum DocumentPipeline {
         /// The record of its own each object a flattened header names takes
         /// inside its row ("applicant" of "applicant.email"), by row and path.
         fileprivate var objects: [String: Int] = [:]
+        /// Each object's record's parent: the object around it in the same
+        /// row ("data.object" around "data.object.name"), or else its row.
+        fileprivate var parents: [Int: Int] = [:]
         fileprivate static func object(_ record: Int, _ path: String) -> String { "\(record)\u{0}" + path }
-        /// The records around a leaf, innermost first: its object's, then its own and those around it.
+        /// The records around a leaf, innermost first: its object's and the
+        /// objects around that, then its own and those around it.
         fileprivate func chain(_ leaf: DocumentLeaf) -> [Int] {
-            let own = leaf.objectPath.isEmpty ? nil : leaf.lastRecord.flatMap { objects[Self.object($0, leaf.objectPath)] }
-            return (own.map { [$0] } ?? []) + leaf.enclosing
+            var objectRecords: [Int] = []
+            var next = leaf.objectPath.isEmpty ? nil : leaf.lastRecord.flatMap { objects[Self.object($0, leaf.objectPath)] }
+            while let record = next, record != leaf.lastRecord {
+                objectRecords.append(record)
+                next = parents[record]
+            }
+            return objectRecords + leaf.enclosing
         }
         /// Whose a leaf's name, email or username is: its innermost record's that has a person.
         func of(_ leaf: DocumentLeaf) -> Persona? {
@@ -358,12 +367,23 @@ enum DocumentPipeline {
         guard maxRecord >= 0 else { return Owners() }
         var result = Owners()
         var count = maxRecord + 1
-        var objectParents: [Int: Int] = [:]
+        // Each row's objects, the shallower first, so an object's record is numbered after the one around it.
+        var paths: [(record: Int, path: String)] = []
+        var seen: Set<String> = []
         for (index, leaf) in leaves.enumerated() where !leaf.objectPath.isEmpty {
             if index.isMultiple(of: 1024) && Task.isCancelled { return Owners() }
-            guard let record = leaf.lastRecord, case let key = Owners.object(record, leaf.objectPath), result.objects[key] == nil else { continue }
-            result.objects[key] = count
-            objectParents[count] = record
+            guard let record = leaf.lastRecord, seen.insert(Owners.object(record, leaf.objectPath)).inserted else { continue }
+            paths.append((record, leaf.objectPath))
+        }
+        func depth(_ path: String) -> Int { path.reduce(0) { $1 == "." ? $0 + 1 : $0 } }
+        for (record, path) in paths.enumerated().sorted(by: { (depth($0.element.path), $0.offset) < (depth($1.element.path), $1.offset) }).map(\.element) {
+            result.objects[Owners.object(record, path)] = count
+            var parent = record, around = path
+            while let dot = around.lastIndex(of: ".") {
+                around = String(around[..<dot])
+                if let enclosing = result.objects[Owners.object(record, around)] { parent = enclosing; break }
+            }
+            result.parents[count] = parent
             count += 1
         }
         var recordFields = Array<IdentityFields?>(repeating: nil, count: count)
@@ -393,6 +413,24 @@ enum DocumentPipeline {
             guard let record = innermost(leaf), recordFields[record] != nil, recordFields[record]?.gender == nil, let gender = owner(leaf, in: genders) else { continue }
             recordFields[record]?.gender = gender
         }
+        // An object holding only part of a name ("Fname.value" beside "Lastname.value")
+        // gives it to the object around it, where the rest of the name is.
+        for record in stride(from: count - 1, through: maxRecord + 1, by: -1) {
+            guard let fields = recordFields[record], fields.full == nil, fields.email == nil, (fields.first == nil) != (fields.last == nil),
+                  let parent = result.parents[record] else { continue }
+            var around = recordFields[parent] ?? IdentityFields()
+            if let first = fields.first {
+                guard around.first == nil else { continue }
+                around.first = first
+            }
+            if let last = fields.last {
+                guard around.last == nil else { continue }
+                around.last = last
+            }
+            if around.gender == nil { around.gender = fields.gender }
+            recordFields[parent] = around
+            recordFields[record] = nil
+        }
         var identities: [Int?] = recordFields.enumerated().map { index, fields in
             guard let fields, !fields.several, fields.first != nil || fields.last != nil || fields.full != nil else { return nil }
             return index
@@ -400,7 +438,7 @@ enum DocumentPipeline {
         // A record whose name sits in one child object ("applicant": {"name": {"first": …},
         // "contact": {"emails": […]}}) is that person's; a list of several people is no one's.
         var parents = [Int?](repeating: nil, count: count)
-        for (child, parent) in objectParents { parents[child] = parent }
+        for (child, parent) in result.parents { parents[child] = parent }
         for (index, leaf) in leaves.enumerated() {
             if index.isMultiple(of: 1024) && Task.isCancelled { return Owners() }
             for (child, parent) in zip(leaf.enclosing, leaf.enclosing.dropFirst()) where parents[child] == nil { parents[child] = parent }
