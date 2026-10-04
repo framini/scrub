@@ -122,11 +122,18 @@ enum DocumentPipeline {
         var full: String?
         var email: String?
         var gender: String?
+        /// Two full names with no word in common: a row's "applicant_name" and
+        /// "guarantor_name" are two people, so the record is no one person's.
+        /// A middle name, a display name or a nickname beside a name is still one.
+        var several = false
         mutating func set(_ value: String, for hint: String) {
             switch hint {
             case "FIRST_NAME": first = value
             case "LAST_NAME": last = value
-            case "PERSON": full = value
+            case "PERSON":
+                func words(_ name: String) -> Set<String> { Set(name.lowercased().split { !$0.isLetter }.map(String.init)) }
+                if let full, words(full).count >= 2, words(value).count >= 2, words(full).isDisjoint(with: words(value)) { several = true }
+                full = value
             case "EMAIL_ADDRESS": email = value
             default: break
             }
@@ -355,7 +362,7 @@ enum DocumentPipeline {
             recordFields[record]?.gender = gender
         }
         var identities: [Int?] = recordFields.enumerated().map { index, fields in
-            guard let fields, fields.first != nil || fields.last != nil || fields.full != nil else { return nil }
+            guard let fields, !fields.several, fields.first != nil || fields.last != nil || fields.full != nil else { return nil }
             return index
         }
         // A record whose name sits in one child object ("applicant": {"name": {"first": …},
@@ -380,7 +387,7 @@ enum DocumentPipeline {
         var owners = Array<Persona?>(repeating: nil, count: maxRecord + 1)
         for record in recordFields.indices {
             if record.isMultiple(of: 1024) && Task.isCancelled { return [] }
-            guard let fields = recordFields[record] else { continue }
+            guard let fields = recordFields[record], !fields.several else { continue }
             owners[record] = job.associateRecord(first: fields.first, last: fields.last, full: fields.full, email: fields.email, gender: fields.gender)
         }
         return identities.map { $0.flatMap { owners[$0] } }

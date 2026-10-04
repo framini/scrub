@@ -11,7 +11,9 @@ import Foundation
 ///   "ferriterodalys", "ferriter99";
 /// - a number's digits with other separators or none ("4158672290" for
 ///   "(415) 867-2290"), and its last four digits after a label ("ending in 2290");
-/// - an email's local part on its own ("user quillpen77").
+/// - an email's local part on its own ("user quillpen77");
+/// - any of these in a link's part written percent-encoded ("?q=%4Cisk"),
+///   read decoded and without hidden characters, as a reader reads it.
 ///
 /// Each is replaced by the stand-in its original got, written the same way.
 /// A part is used only when it is at least four letters and no ordinary or
@@ -167,6 +169,7 @@ struct LeakGate {
         if !isEmpty {
             if !parts.isEmpty || !combos.isEmpty || !locals.isEmpty { words(units, text, into: &found, isCancelled: isCancelled) }
             if !isCancelled() { numbers(units, text, into: &found, isCancelled: isCancelled) }
+            if !isCancelled(), text.contains("%") { encoded(text, into: &found, isCancelled: isCancelled) }
         }
         if suspects, !isCancelled() { checked(units, text, into: &found, isCancelled: isCancelled) }
         if found.leaks.count > budget {
@@ -174,6 +177,27 @@ struct LeakGate {
             found.leaks.removeSubrange(budget...)
         }
         return found
+    }
+
+    /// Variants in the parts of links written percent-encoded, read as the
+    /// parts read (see `URLs.reading`) and placed back over them as written:
+    /// "?q=%4Cisk" holds "Lisk", and "%51uill%E2%80%8Bmere" "Quillmere".
+    private func encoded(_ text: String, into found: inout Found, isCancelled: () -> Bool) {
+        for component in URLs.components(in: text) {
+            if isCancelled() { return }
+            let raw = TextRanges.substring(text, component.range)
+            guard raw.contains("%"), let read = URLs.reading(raw, component.part) else { continue }
+            let units = Array(read.text.utf16)
+            var inner = Found()
+            words(units, read.text, into: &inner, isCancelled: isCancelled)
+            numbers(units, read.text, into: &inner, isCancelled: isCancelled)
+            for leak in inner.leaks where leak.range.upperBound <= read.sources.count {
+                let offset = component.range.lowerBound
+                let range = (read.sources[leak.range.lowerBound].lowerBound + offset)..<(read.sources[leak.range.upperBound - 1].upperBound + offset)
+                guard !found.leaks.contains(where: { $0.range.overlaps(range) }) else { continue }
+                found.leaks.append(Leak(range: range, entity: leak.entity, fake: leak.fake, source: leak.source))
+            }
+        }
     }
 
     private static let softHyphen: UInt16 = 0xAD
