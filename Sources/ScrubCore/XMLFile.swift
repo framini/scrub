@@ -67,13 +67,7 @@ public enum XMLFile: FileFormat {
                         elementKey = pair[position]
                     }
                 }
-                if let name = local(element.name), KeyHints.fieldValueKeys.contains(KeyHints.words(name).joined()) {
-                    let siblingTexts: [(String, String)] = ((element.parent as? XMLElement)?.children ?? []).prefix(64).compactMap { node in
-                        guard let sibling = node as? XMLElement, sibling !== element, sibling.childCount <= 1, let name = local(sibling.name) else { return nil }
-                        return (name, sibling.stringValue ?? "")
-                    }
-                    elementKey = KeyHints.namedField(name, siblings: siblingTexts) ?? elementKey
-                }
+                elementKey = Self.labelledField(element) ?? elementKey
                 func key(_ name: String?, resolved: String?, parent: String?, value: String?, siblings: @autoclosure () -> [String]) -> String? {
                     if KeyHints.isBareName(name), KeyHints.isBareName(resolved), let value, !KeyHints.bareNameIsPerson(value, siblings: siblings(), parent: parent) { return nil }
                     return resolved
@@ -312,15 +306,16 @@ public enum XMLFile: FileFormat {
     /// Whether an element names a field of its own, which keeps its own key
     /// whatever text sits beside it: an attribute says what it holds
     /// (<field name="ssn">, <data key="password">, even on formatting), or
-    /// its name does ("password", "nationalId", "customer_id", "manager").
-    /// Formatting with no such attribute never does.
+    /// its name does ("password", "nationalId", "customer_id", "manager"),
+    /// or an element beside it does (<name>ssn</name><value>…</value>), as
+    /// it would with no text around. Formatting with none of these never does.
     static func namesField(_ element: XMLElement) -> Bool {
         guard let name = element.name?.split(separator: ":").last.map(String.init) else { return false }
         let named = (element.attributes ?? []).contains { attribute in
             guard let key = attribute.name?.split(separator: ":").last.map(String.init) else { return false }
             return KeyHints.fieldNameKeys.contains(KeyHints.words(key).joined()) && KeyHints.header(attribute.stringValue ?? "") != nil
         }
-        if named { return true }
+        if named || labelledField(element) != nil { return true }
         if phrasing.contains(name.lowercased()) { return false }
         // A bare <name> in a sentence ("Ms <name>Brisa V…</name> called") names a product as
         // often as a person, so it is read with the words around it, which tell which; under
@@ -331,6 +326,18 @@ public enum XMLFile: FileFormat {
             return KeyHints.isPersonsRecord(siblings: siblings, parent: parentName)
         }
         return KeyHints.hint(name) != nil || RecordIDs.isPersonKey(name) || KeyHints.isRole(name)
+    }
+    /// The field a value element stands for when an element beside it names
+    /// it (<name>ssn</name><value>…</value>, <value>…</value><key>password</key>),
+    /// read the same whether or not the record holds text of its own.
+    static func labelledField(_ element: XMLElement) -> String? {
+        func local(_ name: String?) -> String? { name?.split(separator: ":").last.map(String.init) }
+        guard let name = local(element.name), KeyHints.fieldValueKeys.contains(KeyHints.words(name).joined()) else { return nil }
+        let siblings: [(String, String)] = ((element.parent as? XMLElement)?.children ?? []).prefix(64).compactMap { node in
+            guard let sibling = node as? XMLElement, sibling !== element, sibling.childCount <= 1, let name = local(sibling.name) else { return nil }
+            return (name, sibling.stringValue ?? "")
+        }
+        return KeyHints.namedField(name, siblings: siblings)
     }
     static func parses(_ data: Data) throws -> Bool {
         guard let source = try? decodeXML(data) else { return false }
