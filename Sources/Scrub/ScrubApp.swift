@@ -27,7 +27,7 @@ struct ScrubApp: App {
                 Button("Paste") { model.paste() }.keyboardShortcut("v")
                 Button("Select All") { NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil) }.keyboardShortcut("a")
             }
-            // Undo and redo walk the person's own changes: marks, kept originals and review choices.
+            // Undo and redo walk the person’s own changes: marks, edits, kept originals and review choices.
             CommandGroup(replacing: .undoRedo) {
                 Button(model.undoTitle) { model.undo() }.keyboardShortcut("z").disabled(!model.canUndo)
                 Button(model.redoTitle) { model.redo() }.keyboardShortcut("z", modifiers: [.command, .shift]).disabled(!model.canRedo)
@@ -35,6 +35,12 @@ struct ScrubApp: App {
             // In place of Find, whose "Use Selection for Find" also takes ⌘E; nothing in Scrub is edited.
             CommandGroup(replacing: .textEditing) {
                 Button("Replace Selection or Keep Original") { model.applySelection() }.keyboardShortcut("e")
+            }
+            // ⇧⌘L: no standard command uses it, and L is for the list of values.
+            CommandGroup(after: .sidebar) {
+                Button(model.showingValues ? Copy.hideValues : Copy.showValues) { model.toggleValues() }
+                    .keyboardShortcut("l", modifiers: [.command, .shift])
+                    .disabled(!model.isFinished)
             }
             CommandGroup(replacing: .saveItem) {
                 Button("Save…") { model.viaShortcut(.save) }.keyboardShortcut("s")

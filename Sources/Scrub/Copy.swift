@@ -7,7 +7,7 @@ enum Copy {
         "Replaces each one with a realistic stand-in. The same person or value gets the same stand-in everywhere in the file.",
         "Checks the result against what it replaced: a name, number or email written another way is replaced too, and anything it only suspects is left for you to decide.",
         "Asks you about the replacements it’s least sure of before you copy or save, so you can leave any that aren’t personal.",
-        "Lets you select anything it missed in the result and replace it too, everywhere it’s written, or keep the original of anything it shouldn’t have replaced.",
+        "Lets you select anything it missed in the result and replace it too, everywhere it’s written, keep the original of anything it shouldn’t have replaced, or change a value’s kind and type its replacement.",
         "Keeps the file’s structure, so JSON, CSV and XML stay valid.",
     ]
     static let howItWorksFooter = "macOS sandboxes the app with no network access, so nothing can be sent anywhere."
@@ -75,12 +75,10 @@ enum Copy {
 
     // Marking values by hand.
     static let yourChanges = "Your changes"
-    static let yourChangesBody = "Values you marked are replaced everywhere they’re written, and values you kept stay as written. Leave a place to undo it there, or everywhere to undo it all."
-    static let markedSection = "Marked by you"
-    static let keptSection = "Kept as written by you"
-    static func changes(marked: Int, kept: Int) -> String {
-        [marked > 0 ? "\(marked) marked" : nil, kept > 0 ? "\(kept) kept" : nil].compactMap { $0 }.joined(separator: " · ") + " by you"
+    static func changes(marked: Int, kept: Int, edited: Int = 0) -> String {
+        [marked > 0 ? "\(marked) marked" : nil, kept > 0 ? "\(kept) kept" : nil, edited > 0 ? "\(edited) edited" : nil].compactMap { $0 }.joined(separator: " · ") + " by you"
     }
+    static let changesHelp = "See the values you marked, kept or edited in the Values panel"
     /// A selected value, quoted, short enough for the bar under the preview.
     static func quoted(_ values: [String]) -> String {
         let first = values.first ?? ""
@@ -107,6 +105,97 @@ enum Copy {
     static func redid(_ change: String) -> String { "Redone: \(change)" }
     static let removeMark = "Remove mark"
     static let removeMarkHelp = "Take this mark off, and put back what it replaced everywhere"
+
+    // Editing a value: its kind, and what replaces it.
+    static let editorFor = "For"
+    static let replaceWith = "Replace with"
+    static let apply = "Apply"
+    static let cancel = "Cancel"
+    static let kindHelp = "What to read it as; a new kind draws a new stand-in"
+    static let replaceWithHelp = "Type what to write in its place, everywhere it’s written"
+    /// A kind in a sentence: "a place", "an email", "an ID".
+    static func article(_ entity: String) -> String {
+        let kind = kind(entity), lowered = kind == kind.uppercased() ? kind : kind.lowercased()
+        return ("AEIOU".contains(kind.prefix(1)) ? "an " : "a ") + lowered
+    }
+    /// The Edit menu's name for a change of kind, a typed replacement, or both.
+    static func editStep(_ original: String, kind entity: String?, replacement: String?) -> String {
+        switch (entity, replacement) {
+        case (let entity?, let typed?): "Replace \(quoted([original])) with \(quoted([typed])) as \(kind(entity))"
+        case (nil, let typed?): "Replace \(quoted([original])) with \(quoted([typed]))"
+        case (let entity?, nil): "Change \(quoted([original])) to \(kind(entity))"
+        case (nil, nil): "Edit \(quoted([original]))"
+        }
+    }
+    static func editStep(_ originals: [String], kind entity: String) -> String { "Change \(quoted(originals)) to \(kind(entity))" }
+    /// What an edit just did, said under the preview.
+    static func edited(_ original: String, kind entity: String?, replacement: String?, places count: Int) -> String {
+        switch (entity, replacement) {
+        case (let entity?, let typed?): "Replaced \(quoted([original])) with \(quoted([typed])), as \(article(entity)), \(inPlaces(count))"
+        case (nil, let typed?): "Replaced \(quoted([original])) with \(quoted([typed])) \(inPlaces(count))"
+        case (let entity?, nil): changed([original], to: entity, places: count)
+        case (nil, nil): "Nothing changed"
+        }
+    }
+    static func changed(_ originals: [String], to entity: String, places count: Int) -> String {
+        "Changed \(quoted(originals)) to \(article(entity)) \(inPlaces(count))"
+    }
+    static func replaceAgainStep(_ originals: [String]) -> String { "Replace \(quoted(originals)) Again" }
+    static func replacedAgain(_ originals: [String], places count: Int) -> String { "Replaced \(quoted(originals)) again \(inPlaces(count))" }
+    static func placesStep(_ original: String) -> String { "Choose Places for \(quoted([original]))" }
+    static func chosePlaces(_ original: String) -> String { "Chose where \(quoted([original])) is replaced" }
+    /// Why a typed replacement can't be used, beside the field.
+    static func refusal(_ refusal: Refusal, original: String) -> String {
+        switch refusal {
+        case .empty: "Type something to replace it with"
+        case .original: "That still holds \(quoted([original]))"
+        case .other(let value): "That holds \(quoted([value])), another value in this file"
+        case .number: "This value is a number in the file; type digits only"
+        }
+    }
+
+    // The Values panel.
+    static let values = "Values"
+    static let showValues = "Show Values"
+    static let hideValues = "Hide Values"
+    static let valuesHelp = "Every value Scrub found or you marked, to find, filter and change (⇧⌘L)"
+    static let searchValues = "Search originals and stand-ins"
+    static let allKinds = "All kinds"
+    static let original = "Original"
+    static let kindColumn = "Kind"
+    static let standIn = "Stand-in"
+    static let placesColumn = "Places"
+    static let statusColumn = "Status"
+    static func valueCount(shown: Int, of total: Int) -> String {
+        shown == total ? (total == 1 ? "1 value" : "\(total) values") : "\(shown) of \(total)"
+    }
+    static func selected(_ count: Int) -> String { "\(count) selected" }
+    static let changeKind = "Change kind"
+    static let keepOriginalAction = "Keep original"
+    static let replaceAgain = "Replace again"
+    static let placeByPlace = "Place by place…"
+    static let placeByPlaceHelp = "Choose where this value is replaced and where it’s left, place by place"
+    static func placesTitle(_ original: String) -> String { "Places of \(quoted([original]))" }
+    static let placesBody = "Leave a place to keep the original there. Every other place keeps its stand-in."
+    static let replaceAgainHelp = "Write the stand-in again wherever the original was left"
+    static func placesCount(_ count: Int) -> String { count == 1 ? "1 place" : "\(count) places" }
+    static func status(_ status: ValueStatus) -> String {
+        switch status {
+        case .replaced: "Replaced"
+        case .left: "Left as written"
+        case .toCheck: "To check"
+        case .marked: "Marked by you"
+        }
+    }
+    static func filter(_ filter: ValueFilter) -> String {
+        switch filter {
+        case .all: "All statuses"
+        case .status(let status): Self.status(status)
+        case .yours: yourChanges
+        }
+    }
+    static let noValues = "Scrub found nothing to replace here"
+    static let noMatches = "No values match"
     static func reviewBanner(_ count: Int) -> String {
         count == 1 ? "1 replacement to check before sharing" : "\(count) replacements to check before sharing"
     }

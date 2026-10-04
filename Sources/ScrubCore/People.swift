@@ -424,9 +424,16 @@ final class People {
     /// A name written the same way is written for the same person each time,
     /// whoever the document names after it.
     private var written: [String: String] = [:]
+    /// Who each name written so was taken for, and who the last name drawn was.
+    private var writers: [String: Persona] = [:]
+    private(set) var lastNamed: Persona?
     func name(for value: String) -> String {
-        if let known = written[value] { return known }
+        if let known = written[value] {
+            lastNamed = writers[value]
+            return known
+        }
         let name = writtenName(for: value)
+        writers[value] = lastNamed
         // "thanks odalys" stays lowercase, and "FERRITER" in capitals.
         let letters = value.filter(\.isLetter)
         var result = value.contains(where: \.isLowercase) && value == value.lowercased() ? name.lowercased()
@@ -442,6 +449,7 @@ final class People {
     }
     private func writtenName(for value: String) -> String {
         let (person, parts) = registerFull(value)
+        lastNamed = person
         // "Ms. Siobhan Okafor" keeps its title, which the stand-in name fits.
         let title = value.split(separator: " ").first.map(String.init).flatMap { Self.titles.contains($0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) ? $0 + " " : nil } ?? ""
         if parts == 2, Self.naturalOrder(value) != nil {

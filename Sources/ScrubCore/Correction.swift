@@ -51,7 +51,7 @@ enum Correction {
                 if let leak = found.leaks[span.range], leak.entity == span.entity {
                     sources[index] = leak.source
                     if let fake = leak.fake {
-                        fakes[index] = written(job.variant(shown, fake: fake, entity: leak.entity))
+                        fakes[index] = written(job.variant(shown, fake: fake, entity: leak.entity, source: leak.source))
                         continue
                     }
                 }

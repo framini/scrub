@@ -179,6 +179,7 @@ public final class Job {
         let fake = standIns.replace(actual, original, persona: persona, address: address)
         lastUnclear = standIns.unclear
         if fake == original { return fake }
+        if let owner = standIns.owner { link(original, fake, to: owner) }
         if recordsReplacements { replacements.append(Replacement(original: original, fake: fake, entity: actual)) }
         emitted.insert(fake.lowercased())
         counts[actual, default: 0] += 1
@@ -186,11 +187,35 @@ public final class Job {
     }
     /// A variant of a replaced value, written with the stand-in its original
     /// got (see `LeakGate`): counted and recorded as any replacement.
-    func variant(_ original: String, fake: String, entity: String) -> String {
+    func variant(_ original: String, fake: String, entity: String, source: String? = nil) -> String {
+        // "@odalysf" is the handle of whoever "Odalys Ferriter" is.
+        if let source, let person = people.originals[source.lowercased()] { people.link(original, fake, to: person) }
         if recordsReplacements { replacements.append(Replacement(original: original, fake: fake, entity: entity)) }
         emitted.insert(fake.lowercased())
         counts[entity, default: 0] += 1
         return fake
+    }
+    /// Which person each name, and each email, username or initials built
+    /// from one, was given a stand-in for, so a name typed in its place later
+    /// reaches them all (see `Edits`).
+    private(set) var people = PersonLinks()
+    private var personIDs: [ObjectIdentifier: Int] = [:]
+    private var personas: [Persona] = []
+    private func link(_ original: String, _ fake: String, to persona: Persona) {
+        let id: Int
+        if let known = personIDs[ObjectIdentifier(persona)] { id = known } else {
+            id = personas.count
+            personIDs[ObjectIdentifier(persona)] = id
+            personas.append(persona)
+        }
+        people.link(original, fake, to: id)
+    }
+    /// The people linked so far, with the stand-in names each was given.
+    func personLinks() -> PersonLinks {
+        var links = people
+        // Read without fixing a first name no stand-in has shown yet.
+        links.names = personas.map { PersonLinks.Names(first: $0.drawn, last: $0.last) }
+        return links
     }
     /// The stand-in a value left as written would take if a person chooses to
     /// replace it: drawn as any other, but neither counted nor recorded. Nil

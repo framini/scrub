@@ -94,13 +94,21 @@ extension ScrubResult {
     public var marks: Marks { marked ?? Marks() }
     /// The values marked by hand, each as a finding whose places can be left
     /// one by one with `Choices`, like any other. Their ids are negative.
-    public var byHand: [Finding] { review?.marked(marks) ?? [] }
+    public var byHand: [Finding] { review?.marked(marks, edits: edits) ?? [] }
 
-    /// This result written with `choices` and `marks`, always from the scrub
-    /// as first made: the same scrub, choices and marks write the same bytes.
+    /// This result written with `choices` and `marks`, and the edits it was
+    /// written with, always from the scrub as first made: the same scrub,
+    /// choices and marks write the same bytes.
     public func applying(_ choices: Choices, marks: Marks) throws -> ScrubResult {
-        guard let review, choices != self.choices || marks != self.marks else { return self }
-        var revised = try review.applying(choices, marks: marks)
+        try applying(choices, marks: marks, edits: edits)
+    }
+
+    /// This result written with `choices`, `marks` and `edits`, always from
+    /// the scrub as first made: the same scrub, choices, marks and edits
+    /// write the same bytes.
+    public func applying(_ choices: Choices, marks: Marks, edits: Edits) throws -> ScrubResult {
+        guard let review, choices != self.choices || marks != self.marks || edits != self.edits else { return self }
+        var revised = try review.applying(choices, marks: marks, edits: edits)
         revised.coverage = coverage
         return revised
     }
@@ -138,7 +146,7 @@ extension ScrubResult {
             return picked
         }
         for mark in covered {
-            let owners = review.owners(ofStandIn: ns.substring(with: NSRange(location: mark.range.lowerBound, length: mark.range.count)), marks: self.marks)
+            let owners = review.owners(ofStandIn: ns.substring(with: NSRange(location: mark.range.lowerBound, length: mark.range.count)), marks: self.marks, edits: edits)
             for finding in owners.findings where !picked.replaced.contains(where: { $0.id == finding.id }) { picked.replaced.append(finding) }
             for entry in owners.entries where !picked.marked.contains(entry) { picked.marked.append(entry) }
         }

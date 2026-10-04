@@ -235,7 +235,7 @@ public enum XMLFile: FileFormat {
             return ScrubResult(format: "xml", output: Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: counts, unresolved: unresolved)
         }
         var result = try render(values, counts: job.counts)
-        result.review = Review(values: values, counts: job.counts, records: records, render: render)
+        result.review = Review(values: values, counts: job.counts, records: records, people: job.personLinks(), render: render)
         progress(.checking, 1, 1)
         return result
     }

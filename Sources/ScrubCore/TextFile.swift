@@ -29,7 +29,7 @@ public enum TextFile: FileFormat {
             return ScrubResult(format: "text", output: Data(output.utf8), preview: .text(previewText, marks: finalMarks.filter { $0.range.upperBound <= previewLength }, truncated: length > previewLength), counts: counts, unresolved: unresolved)
         }
         var result = render(values, counts: job.counts)
-        result.review = Review(values: values, counts: job.counts, render: render)
+        result.review = Review(values: values, counts: job.counts, people: job.personLinks(), render: render)
         return result
     }
 }
