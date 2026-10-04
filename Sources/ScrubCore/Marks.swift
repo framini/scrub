@@ -141,7 +141,8 @@ extension ScrubResult {
         }
         if !pieces.isEmpty {
             for piece in pieces {
-                for candidate in review.candidates(ns.substring(with: NSRange(location: piece.lowerBound, length: piece.count))) where !picked.missed.contains(candidate) { picked.missed.append(candidate) }
+                // Each as the value it reads: "%51uillmere" in a link is Quillmere.
+                for candidate in review.candidates(ns.substring(with: NSRange(location: piece.lowerBound, length: piece.count))).map(review.identity) where !picked.missed.contains(candidate) { picked.missed.append(candidate) }
             }
             return picked
         }
@@ -153,11 +154,13 @@ extension ScrubResult {
         return picked
     }
 
-    /// The choices and marks that replace `texts` as `entity`: each marked, and
-    /// any finding of the same value left as written replaced again.
+    /// The choices and marks that replace `texts` as `entity`: each marked as
+    /// the value it reads (a selection encoded in a link, or split by markup
+    /// or a hidden character, is the value decoded, which reaches every
+    /// form), and any finding of the same value left as written replaced again.
     public func marking(_ texts: [String], as entity: String, choices: Choices, marks: Marks) -> (Choices, Marks) {
         var choices = choices, marks = marks
-        for text in texts {
+        for text in texts.map({ review?.identity($0) ?? $0 }) {
             for finding in findings where Review.matchKey(finding.original, entity: finding.entity) == Review.matchKey(text, entity: finding.entity)
                 && finding.places.contains(where: { choices.leaves($0, of: finding) }) {
                 choices.set(finding, leave: false)

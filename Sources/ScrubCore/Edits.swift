@@ -148,11 +148,13 @@ extension Review {
                 made[edit.id] = Revision(entity: revision.entity, standIn: Self.renamed(typed, entity: findings[edit.id].entity, names: edit.names, to: final), was: revision.was)
             }
         }
-        // The same value written another way, as a link writes it ("Odalys+Ferriter"), is the same value.
+        // The same value written another way, as a link writes it ("Odalys+Ferriter"), is the same value,
+        // when it is the same person's: another person's "Odalys" keeps her own stand-in.
         let groups = sameValues()
         for (id, revision) in made.sorted(by: { $0.key < $1.key }) {
             let finding = findings[id]
-            for other in groups[Self.matchKey(Self.read(finding.original), entity: finding.entity)] ?? [] where other != id && made[other] == nil && findings[other].entity == finding.entity {
+            let group = groups[Self.matchKey(Self.read(finding.original), entity: finding.entity)] ?? []
+            for other in group where other != id && made[other] == nil && findings[other].entity == finding.entity && sharesValue(id, other, among: group) {
                 made[other] = Revision(entity: revision.entity, standIn: revision.standIn, was: Self.read(findings[other].standIn))
             }
         }
@@ -207,6 +209,21 @@ extension Review {
         for finding in findings { groups[Self.matchKey(Self.read(finding.original), entity: finding.entity), default: []].append(finding.id) }
         marking?.sameValues = groups
         return groups
+    }
+
+    /// Whether `other`, a finding of the same value as `id` (both in
+    /// `group`), is the same one to an edit or a kept original: a person's
+    /// findings reach only that person's, and one no one owns is reached only
+    /// where no other person owns that text. Two people called Odalys keep
+    /// their own stand-ins whatever is done to one of them.
+    func sharesValue(_ id: Finding.ID, _ other: Finding.ID, among group: [Finding.ID]) -> Bool {
+        let mine = personOf[id], theirs = personOf[other]
+        if mine == theirs { return true }
+        let owners = Set(group.compactMap { personOf[$0] })
+        // One of the two is no one's: the same value unless someone else owns the text too.
+        if let mine, theirs == nil { return owners == [mine] }
+        if let theirs, mine == nil { return owners == [theirs] }
+        return false
     }
 
     /// The revisions `edits` make, read under the lock.
@@ -443,14 +460,24 @@ extension Review {
                     written[read] = original
                 }
                 guard let read = reads.first, !read.isEmpty else { continue }
-                gate.add([Replacement(original: read, fake: Review.placeholder(read), entity: entity)])
+                // Read with its apostrophes and hyphens left out too, so "osullivan99" is hers as "sullivan99" is.
+                for read in [read] + Review.joinings(read).prefix(1) { gate.add([Replacement(original: read, fake: Review.placeholder(read), entity: entity)]) }
                 guard name else { continue }
-                for word in Review.nameWords(Visible.plain(original)) where seenWords.insert(Review.folded(word)).inserted { words.append((Review.folded(word), word)) }
+                // A word read with its apostrophe left out or a space for it, as a reading of the text is too:
+                // "O’Sullivan" is "osullivan" and "o sullivan". "O" alone is no word of hers.
+                let nameWords = Review.nameWords(Visible.plain(original))
+                for word in nameWords {
+                    let folded = Review.folded(word), joinings = Review.joinings(folded)
+                    for read in joinings.isEmpty ? [folded] : joinings where seenWords.insert(read).inserted { words.append((read, word)) }
+                }
                 // Joined as a mark's handles are; a form with a dot or an underscore holds a word of the name, found above.
                 let bare = Visible.plain(original).split(whereSeparator: \.isWhitespace).filter { !People.isTitle(String($0)) && !People.isSuffix(String($0)) }.joined(separator: " ")
-                for (form, _) in Review.forms(bare, entity: entity, standIn: bare) where form.count >= 3 && form.allSatisfy(\.isLetter) {
-                    let key = Review.folded(form)
-                    if joined[key] == nil { joined[key] = original }
+                var forms = Review.forms(bare, entity: entity, standIn: bare).map(\.0)
+                // Two words of the name side by side written as one: "Smith-Jones" or "Smith Jones" as "SmithJones".
+                for (one, two) in zip(nameWords, nameWords.dropFirst()) { forms.append(one + two) }
+                for form in forms {
+                    let key = Review.joinings(Review.folded(form)).first ?? Review.folded(form)
+                    if key.count >= 3, key.allSatisfy(\.isLetter), joined[key] == nil { joined[key] = original }
                 }
             }
         }
@@ -508,16 +535,19 @@ extension Review {
     /// The words of a name worth refusing: three letters or more, each part
     /// of a hyphenated one apart, and no title, suffix or particle.
     static func nameWords(_ name: String) -> [String] {
-        name.split { $0.isWhitespace || $0 == "," || $0 == "-" }.map { String($0).trimmingCharacters(in: CharacterSet(charactersIn: ".")) }
+        name.split { $0.isWhitespace || $0 == "," || hyphens.contains($0) }.map { String($0).trimmingCharacters(in: CharacterSet(charactersIn: ".")) }
             .filter { word in
-                word.filter(\.isLetter).count >= 3 && word.allSatisfy { $0.isLetter || "'’.".contains($0) }
+                word.filter(\.isLetter).count >= 3 && word.allSatisfy { $0.isLetter || $0 == "." || apostrophes.contains($0) }
                     && !People.isTitle(word) && !People.isSuffix(word) && !particles.contains(word.lowercased())
             }
     }
 
     /// `text` as a reader reads it, folded: without hidden or formatting
     /// characters or in-word markup, then with a plus read as a space, and
-    /// percent-decoded where it decodes. Each reading once.
+    /// percent-decoded where it decodes. A name's apostrophe reads the same
+    /// straight, curly or left out ("O'Sullivan", "O’Sullivan", "OSullivan"),
+    /// and its hyphen as a space or as nothing ("Smith-Jones", "Smith Jones",
+    /// "SmithJones"): each reading is also read with them so. Each reading once.
     static func readings(_ text: String) -> [String] {
         func plain(_ value: String) -> String {
             String(String.UnicodeScalarView(Visible.plain(value).unicodeScalars.filter { $0.properties.generalCategory != .format }))
@@ -527,7 +557,32 @@ extension Review {
         if shown.contains("+") { reads.append(shown.replacingOccurrences(of: "+", with: " ")) }
         if shown.contains("%"), let decoded = reads.last?.removingPercentEncoding { reads.append(plain(decoded)) }
         var seen: Set<String> = []
-        return reads.map(folded).filter { seen.insert($0).inserted }
+        return reads.map(folded).flatMap { [$0] + joinings($0) }.filter { seen.insert($0).inserted }
+    }
+
+    /// Apostrophes as a name writes them: straight, curly, a modifier letter, a prime, an accent.
+    static let apostrophes: Set<Character> = ["'", "’", "‘", "ʼ", "′", "`", "´", "ʹ", "‛", "＇"]
+    /// Hyphens and dashes as a name writes them.
+    private static let hyphens: Set<Character> = ["-", "‐", "‑", "‒", "–", "—", "−", "﹣", "－"]
+
+    /// `text` with each apostrophe and hyphen between two letters left out,
+    /// then read as a space; none where it has neither. "o'sullivan-reyes"
+    /// reads "osullivanreyes" and "o sullivan reyes".
+    static func joinings(_ text: String) -> [String] {
+        let characters = Array(text)
+        func between(_ index: Int) -> Bool { index > 0 && index + 1 < characters.count && characters[index - 1].isLetter && characters[index + 1].isLetter }
+        func joint(_ index: Int) -> Bool { (apostrophes.contains(characters[index]) || hyphens.contains(characters[index])) && between(index) }
+        guard characters.indices.contains(where: joint) else { return [] }
+        var joined = "", spaced = ""
+        for index in characters.indices {
+            if joint(index) {
+                spaced.append(" ")
+                continue
+            }
+            joined.append(characters[index])
+            spaced.append(characters[index])
+        }
+        return [joined, spaced]
     }
 
     /// Folded for comparing what a person types: in any case, without accents, and full-width letters as their own.
