@@ -77,7 +77,7 @@ final class StandIns {
         // A team's or a list's mailbox ("ops-team@…") names no one: it keeps its name, and only its domain is another.
         if actual == "EMAIL_ADDRESS", original.contains("@"), People.isRoleMailbox(original) { return String(original.prefix { $0 != "@" }) + "@" + people.domain(of: original) }
         // A birth date's month or day alone follows the date of its own record.
-        if actual == "DATE_OF_BIRTH", original.count <= 2, let value = Int(original), let part = datePart(value) { return String(part) }
+        if actual == "DATE_OF_BIRTH", let part = birthPart(original) { return part }
         // Read off the number nearest it every time, never from a table of
         // its own: two people's "ssn_last4" can read the same and end two numbers.
         if actual == "LAST_DIGITS" || Self.numbered.contains(actual) && Self.isMasked(original) {
@@ -335,21 +335,61 @@ final class StandIns {
         let rewritten = String(shown.map { $0.isNumber ? digits.next() ?? $0 : $0 })
         return String(original.dropLast(shown.count)) + rewritten
     }
-    /// A birth date's month or day written alone ("birth_month": 3) takes the
-    /// stand-in month or day of the birth date beside it, in its own record;
-    /// nil where none is near.
-    private func datePart(_ value: Int) -> Int? {
+    /// The part of a birth date the value being drawn is, as its key says
+    /// (see `Job.enter`); nil where no key names one.
+    var part: KeyHints.DatePart?
+    /// A birth date's month or day written alone, as its key says it is
+    /// ("birth_month": 3, "dob": {"day": "03"}, "birth_month": "March"),
+    /// takes that part of the stand-in birth date beside it in its own record,
+    /// written as the original was: so the parts and the date agree, and a
+    /// month is never taken for a day. Where no date is near, the parts of one
+    /// record still make one date, each drawn once for the record. With no key
+    /// to say which part it is, a lone number is matched against the date beside
+    /// it, month first; nil where none is near. A year is drawn as any other.
+    private func birthPart(_ original: String) -> String? {
+        let trimmed = original.trimmingCharacters(in: .whitespaces)
+        let number = (1...2).contains(trimmed.count) && trimmed.allSatisfy({ $0.isASCII && $0.isNumber }) ? Int(trimmed) : nil
+        func written(_ value: Int) -> String {
+            // "03" stays padded; "11" is a plain number, and a JSON number can't lead with a zero.
+            guard number == nil else { return trimmed.first == "0" ? String(format: "%02d", value) : String(value) }
+            return Self.monthName(value, like: trimmed)
+        }
         let found = nearest({ self.scopedDays[$0] ?? [] }, document: [])
-        let months = found.filter { $0.real.month == value }, dayMatches = found.filter { $0.real.day == value }
-        if let pair = months.first {
-            if Set(months.map(\.fake.month)).count > 1 { unclear = true }
-            return pair.fake.month
+        // A part that is no part of any date near takes its own record's date, never a neighbour's.
+        let own = scopes.first { $0.first == "r" }.flatMap { self.scopedDays[$0] } ?? []
+        func agreed(_ pairs: [DayPair], _ part: (Day) -> Int) -> Int? {
+            guard let first = pairs.first else { return nil }
+            if Set(pairs.map { part($0.fake) }).count > 1 { unclear = true }
+            return part(first.fake)
         }
-        if let pair = dayMatches.first {
-            if Set(dayMatches.map(\.fake.day)).count > 1 { unclear = true }
-            return pair.fake.day
+        switch part {
+        case .month?:
+            guard let value = number ?? Self.month(trimmed), (1...12).contains(value) else { return nil }
+            let matching = found.filter { $0.real.month == value }
+            return written(agreed(matching.isEmpty ? own : matching, \.month) ?? drawnPart(month: true, besides: value))
+        case .day?:
+            guard let value = number, (1...31).contains(value) else { return nil }
+            let matching = found.filter { $0.real.day == value }
+            return written(agreed(matching.isEmpty ? own : matching, \.day) ?? drawnPart(month: false, besides: value))
+        case .year?:
+            return nil
+        case nil:
+            guard let value = number else { return nil }
+            return (agreed(found.filter { $0.real.month == value }, \.month) ?? agreed(found.filter { $0.real.day == value }, \.day)).map(written)
         }
-        return nil
+    }
+    /// A month and a day drawn for each record whose birth date is written
+    /// only in parts, by its innermost scope.
+    private var partDays: [String: (month: Int?, day: Int?)] = [:]
+    private func drawnPart(month: Bool, besides original: Int) -> Int {
+        let scope = scopes.first { $0.first == "r" } ?? scopes.first ?? ""
+        var drawn = partDays[scope] ?? (nil, nil)
+        if let known = month ? drawn.month : drawn.day { return known }
+        var value = original
+        for _ in 0..<8 where value == original { value = Int.random(in: 1...(month ? 12 : 28), using: &rng) }
+        if month { drawn.month = value } else { drawn.day = value }
+        partDays[scope] = drawn
+        return value
     }
     /// The year, and where the format says so the month and day, of a date
     /// as written: "1987-03-14", "03/14/1987", "14 March 1987", "19870314".
@@ -381,6 +421,21 @@ final class StandIns {
         return rest[0] > 12 ? (year, rest[1], rest[0]) : rest[1] > 12 ? (year, rest[0], rest[1]) : (year, nil, nil)
     }
     private static let monthNames = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
+    /// The month a word names, in full or cut to three letters or more ("March", "MAR", "Sept.").
+    static func month(_ word: String) -> Int? {
+        let word = word.trimmingCharacters(in: CharacterSet(charactersIn: ". ")).lowercased()
+        guard word.count >= 3, word.allSatisfy(\.isLetter) else { return nil }
+        return monthNames.firstIndex { $0.hasPrefix(word) }.map { $0 + 1 }
+    }
+    /// A month's name written as `word` writes one: in full or short, and in its case.
+    static func monthName(_ month: Int, like word: String) -> String {
+        let letters = word.filter(\.isLetter)
+        let full = letters.count > 3 && letters.lowercased() != "sept"
+        let whole = monthNames[max(1, min(12, month)) - 1].capitalized
+        let name = full ? whole : String(whole.prefix(3))
+        let cased = letters == letters.uppercased() ? name.uppercased() : letters == letters.lowercased() ? name.lowercased() : name
+        return word.hasSuffix(".") && !full ? cased + "." : cased
+    }
     private static func lone(_ entity: String, _ original: String) -> AddressParts {
         switch entity {
         case "LOCATION": return AddressParts.line(original)?.parts ?? AddressParts(city: original)
@@ -896,10 +951,11 @@ final class StandIns {
             return fake.first == "0" ? digit(true) + fake.dropFirst() : fake
         }
         if entity == "LATITUDE" || entity == "LONGITUDE" { return replace(entity, original, address: address) }
+        // A birth date's month or day follows the date of its own record, never another's "3".
+        if digits == original, entity == "DATE_OF_BIRTH", digits.count <= 2, let part = birthPart(original) { return part }
         if let existing = assigned[key] { return existing }
         // A birth date split into numbers ("year": 1987, "month": 4) keeps each part plausible.
         if digits == original, entity == "DATE_OF_BIRTH", let value = Int(digits), digits.count <= 4 {
-            if digits.count <= 2, let part = datePart(value) { return String(part) }
             let fake = digits.count == 4 ? String(year(for: value)) : String(Int.random(in: 1...(value <= 12 ? 12 : 28), using: &rng))
             assigned[key] = fake
             return fake
@@ -1100,8 +1156,14 @@ final class StandIns {
         var month = Int.random(in: 1...12, using: &rng)
         var day = Int.random(in: 1...28, using: &rng)
         // A day already written another way keeps its stand-in day.
-        if let real = Self.dateParts(original), let realMonth = real.month, let realDay = real.day, let known = days[Day(year: real.year, month: realMonth, day: realDay)] {
-            (month, day) = (known.month, known.day)
+        if let real = Self.dateParts(original), let realMonth = real.month, let realDay = real.day {
+            if let known = days[Day(year: real.year, month: realMonth, day: realDay)] {
+                (month, day) = (known.month, known.day)
+            } else {
+                // Nor its real month or day: a "birth_month" or "birth_day" read off it would write that back.
+                for _ in 0..<8 where month == realMonth { month = Int.random(in: 1...12, using: &rng) }
+                for _ in 0..<8 where day == realDay { day = Int.random(in: 1...28, using: &rng) }
+            }
         }
         let trimmed = original.trimmingCharacters(in: .whitespacesAndNewlines)
         let compact = trimmed.count == 8 && trimmed.allSatisfy({ $0.isASCII && $0.isNumber })

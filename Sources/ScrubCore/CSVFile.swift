@@ -192,7 +192,8 @@ public enum CSVFile: FileFormat {
     }
     private static func header(_ rows: [[String]], job: Job) -> Bool {
         guard let first = rows.first else { return false }
-        if first.contains(where: { KeyHints.hint($0) != nil || KeyHints.isRole($0) }) { return true }
+        // "customer_id" names a person's ID column, as "email" names an email's.
+        if first.contains(where: { KeyHints.hint($0) != nil || KeyHints.isRole($0) || RecordIDs.isPersonKey($0) }) { return true }
         // A key/value export: a column naming the field beside the column holding it ("Field,Value").
         let plain = first.map { KeyHints.words($0).joined() }
         if plain.contains(where: KeyHints.fieldValueKeys.contains), plain.contains(where: KeyHints.fieldNameKeys.contains) { return true }

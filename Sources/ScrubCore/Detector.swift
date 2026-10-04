@@ -46,9 +46,11 @@ public final class Detector {
             foundLinks = nil
             // A person a reading detector found, cut to what a name can hold (see NameShape).
             // A rule's person keeps its words, but not the verb that opens its sentence ("Call Odalys").
-            let spans = found(text, key: key, contextWords: contextWords, modelled: modelled, context: context).compactMap { span in
+            var spans = found(text, key: key, contextWords: contextWords, modelled: modelled, context: context).compactMap { span in
                 span.entity != "PERSON" ? span : span.score < 0.95 ? NameShape.trimmed(span, in: text) : NameShape.withoutCommand(span, in: text)
             }
+            // An ID made of a name after the word for whose it is ("account Quillmere_Tavish"), where nothing else was read.
+            spans += RecordIDs.labelled(in: text).filter { id in !spans.contains { $0.range.overlaps(id.range) } }
             // "RFC4716" names a standard, and "t.co/x" a link: neither is anyone's.
             // A secret under a query key ends with its parameter, whichever detector read it.
             let ns = text as NSString

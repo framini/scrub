@@ -154,9 +154,10 @@ public final class Job {
     }
     /// Where the value being scrubbed sits: its index among the document's
     /// values and the records around it, innermost first (see `StandIns.scopes`).
-    private var spot: (value: String, records: [String])?
+    private var spot: (value: String, records: [String], part: KeyHints.DatePart?)?
     private var looseValues = 0
-    func enter(value: Int, records: [Int]) { spot = ("v\(value)", records.map { "r\($0)" }) }
+    /// `part`: the part of a birth date the value is, when its key says so ("birth_month").
+    func enter(value: Int, records: [Int], part: KeyHints.DatePart? = nil) { spot = ("v\(value)", records.map { "r\($0)" }, part) }
     /// The key of the value being scrubbed, or a fresh one outside a document.
     private func valueKey() -> String {
         if let spot { return spot.value }
@@ -173,6 +174,8 @@ public final class Job {
         let actual = kind(of: original, read: entity)
         standIns.scopes = local + (spot?.records ?? [])
         standIns.unclear = false
+        standIns.part = spot?.part
+        defer { standIns.part = nil }
         let fake = standIns.replace(actual, original, persona: persona, address: address)
         lastUnclear = standIns.unclear
         if fake == original { return fake }
@@ -220,6 +223,8 @@ public final class Job {
     func numericLexeme(_ original: String, entity: String, address: AddressParts? = nil) -> String {
         standIns.scopes = (spot.map { [$0.value] } ?? []) + (spot?.records ?? [])
         standIns.unclear = false
+        standIns.part = spot?.part
+        defer { standIns.part = nil }
         let fake = standIns.numericLexeme(original, entity: entity, address: address)
         lastUnclear = standIns.unclear
         if fake == original { return fake }

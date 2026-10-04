@@ -145,12 +145,26 @@ public enum KeyHints {
         case "PHONE_NUMBER" where ["number", "digits", "e164", "national", "nationalnumber", "international", "internationalnumber", "formatted", "raw", "full"].contains(compact): return parent
         case "EMAIL_ADDRESS" where ["address", "addr"].contains(compact): return parent
         case "ADDRESS" where ["line", "lines", "text", "formatted", "full"].contains(compact): return parent
-        case "DATE_OF_BIRTH" where ["year", "month", "day", "yyyy", "mm", "dd"].contains(compact): return parent
+        // Read as the part it is, so its stand-in is that part of the stand-in date: "dob": {"month": 3} is a "birth_month".
+        case "DATE_OF_BIRTH" where ["year", "month", "day", "yyyy", "mm", "dd"].contains(compact):
+            return ["year": "birth_year", "yyyy": "birth_year", "month": "birth_month", "mm": "birth_month", "day": "day_of_birth", "dd": "day_of_birth"][compact]
         default: break
         }
         return own == nil && valueKeys.contains(compact) ? parent : key
     }
     private static let valueKeys: Set<String> = ["value", "data"]
+    /// One part of a date written in a field of its own.
+    public enum DatePart: Sendable { case year, month, day }
+    /// The part of a birth date a key names on its own: "birth_month",
+    /// "monthOfBirth", "dob_day", "birth_year". A "birthday" is a whole date.
+    static func datePart(_ key: String?) -> DatePart? {
+        guard hint(key) == "DATE_OF_BIRTH" else { return nil }
+        let parts = words(key), compact = parts.joined()
+        if compact.contains("month") || parts.last == "mm" { return .month }
+        if compact.contains("year") || compact == "yob" || parts.last == "yyyy" { return .year }
+        if parts.count >= 2 && parts.contains(where: { $0 == "day" || $0 == "dd" }) || ["dobday", "dayofbirth"].contains(compact) { return .day }
+        return nil
+    }
     /// An object that only wraps a field's value with notes about it
     /// (`{"value": …, "verified": true}`), and so is part of the record around it.
     static func isWrapper(_ keys: [String]) -> Bool {
@@ -241,6 +255,8 @@ public enum KeyHints {
             let first = trimmed.split(whereSeparator: { $0 == " " || $0 == "." }).first.map { $0.lowercased() } ?? ""
             return trimmed.contains(where: \.isNumber) && (["apt", "apartment", "suite", "ste", "unit", "floor", "fl", "room", "rm", "bldg", "building", "po", "p", "box"].contains(first) || trimmed.hasPrefix("#") || !trimmed.contains(" ") && trimmed.count <= 6)
         }
+        // A birth month may be written as its name: "birth_month": "March".
+        if entity == "DATE_OF_BIRTH", StandIns.month(trimmed) != nil, datePart(key) == .month { return true }
         if needsDigit.contains(entity) {
             // A score ("0.74") rates the field; a phone number has at least seven digits.
             let unsigned = trimmed.first == "-" || trimmed.first == "+" ? trimmed.dropFirst() : Substring(trimmed)

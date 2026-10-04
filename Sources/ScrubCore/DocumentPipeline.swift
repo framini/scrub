@@ -26,6 +26,8 @@ struct DocumentLeaf: Sendable {
     /// The key of an address field whose value has no number ("line1": "the
     /// old rectory, church lane"), which `key` leaves out (see `KeyHints.numberlessLine`).
     let addressKey: String?
+    /// The part of a birth date the value is, when its key names one ("birth_month", "dob": {"day": …}).
+    let datePart: KeyHints.DatePart?
 
     init(_ text: String, key: String? = nil, records: [Int] = [], contextWords: Set<String> = [], numericEntity: String? = nil, fieldName: Bool = false, objectPath: String = "") {
         self.objectPath = objectPath
@@ -33,6 +35,7 @@ struct DocumentLeaf: Sendable {
         self.key = numericEntity != nil || KeyHints.fits(key, text) ? key : nil
         addressKey = self.key == nil && numericEntity == nil && KeyHints.numberlessLine(key, text) ? key : nil
         self.rawKey = KeyHints.hint(key) == nil ? key : nil
+        datePart = rawKey == nil ? KeyHints.datePart(self.key) : nil
         self.records = RecordPath(records)
         self.contextWords = contextWords
         self.numericEntity = numericEntity
@@ -156,7 +159,7 @@ enum DocumentPipeline {
                 let previous = values[index]
                 if previous.fullyMarked { continue }
                 let reusable = !forceFullDetection && emptyBases[index] && previous.text == leaves[index].text
-                job.enter(value: index, records: leaves[index].enclosing)
+                job.enter(value: index, records: leaves[index].enclosing, part: leaves[index].datePart)
                 var held = previous.held
                 let (text, marks, unresolved) = try Correction.run(previous.text, marks: previous.marks, job: job, matcher: originals, gazetteer: gazetteer, gate: gate, passes: 1, base: reusable ? [] : nil, held: &held)
                 if text != previous.text { changed = true; changedIndices.append(index) }
@@ -188,7 +191,7 @@ enum DocumentPipeline {
         for index in values.indices where !values[index].unresolved.isEmpty || !values[index].held.isEmpty {
             try Scrubber.checkCancellation()
             let value = values[index]
-            job.enter(value: index, records: leaves[index].enclosing)
+            job.enter(value: index, records: leaves[index].enclosing, part: leaves[index].datePart)
             var kept: [Mark] = [], proposals: [String] = []
             // A doubted person the final check also suspects is its suspect.
             var suspected = IndexSet()
@@ -278,8 +281,9 @@ enum DocumentPipeline {
             if index.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
             if people.contains(hint(leaf.key) ?? "") || typeKey(leaf.rawKey) && RecordIDs.namesPersonType(key: leaf.rawKey, value: leaf.text), let object = object(leaf) { personal.insert(object) }
         }
-        // An age or last four digits is read off the stand-ins it belongs with, so those come first.
-        let later = { (index: Int) in StandIns.derived.contains(leaves[index].numericEntity ?? KeyHints.hint(leaves[index].key) ?? "") || KeyHints.hint(leaves[index].key) != nil && StandIns.isMasked(leaves[index].text) }
+        // An age, last four digits or a birth date's month or day is read off the stand-ins it belongs with, so those come first.
+        let later = { (index: Int) in StandIns.derived.contains(leaves[index].numericEntity ?? KeyHints.hint(leaves[index].key) ?? "") || KeyHints.hint(leaves[index].key) != nil && StandIns.isMasked(leaves[index].text)
+            || leaves[index].datePart.map { $0 != .year } == true }
         var order: [Int] = [], derived: [Int] = []
         for index in leaves.indices {
             if index.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
@@ -289,7 +293,7 @@ enum DocumentPipeline {
         for index in order {
             try Scrubber.checkCancellation()
             let (leaf, stored) = (leaves[index], bases[index])
-            job.enter(value: index, records: leaf.enclosing)
+            job.enter(value: index, records: leaf.enclosing, part: leaf.datePart)
             var found = detected(leaf, base: base(leaf, stored: stored), gazetteer: gazetteer, detector: job.detector)
             if found.isEmpty, leaf.numericEntity == nil, hint(leaf.key) == nil, mayName(leaf.rawKey ?? leaf.key), RecordIDs.isPersonal(leaf, spelled: spelled, ownRecord: object(leaf).map(personal.contains) ?? false) {
                 found = [Span(range: 0..<(leaf.seen as NSString).length, entity: "RECORD_ID", score: 1)]
