@@ -128,6 +128,8 @@ final class AppModel {
     var valueFilter = ValueFilter.all
     private(set) var selectedValues: Set<Finding.ID> = []
     private var selectionAnchor: Finding.ID?
+    /// The row last clicked or moved to with the arrow keys, kept in view.
+    private(set) var valueCursor: Finding.ID?
     /// Every value as the result writes it, one row each; built once per result.
     private(set) var values: [ValueRow] = []
     /// The value the preview should scroll to and show.
@@ -364,6 +366,7 @@ final class AppModel {
     private func clearValueSelection() {
         selectedValues = []
         selectionAnchor = nil
+        valueCursor = nil
         if draft?.source == .panel { draft = nil }
     }
 
@@ -396,9 +399,28 @@ final class AppModel {
             selectedValues = [id]
             selectionAnchor = id
         }
+        valueCursor = id
         // Rows the filters hide stay unselected.
         selectedValues.formIntersection(shown.map(\.id))
         valuesSelected()
+    }
+
+    /// ↑ or ↓ in the Values panel: selects the row above or below the last
+    /// one clicked or moved to (the first or the last with nothing selected
+    /// yet), with ⇧ every row from where the selection started, and with ⌘
+    /// the first or the last row.
+    func moveValueSelection(by step: Int, extending: Bool = false, toEnd: Bool = false) {
+        let shown = visibleValues
+        guard !shown.isEmpty, step != 0 else { return }
+        let index: Int
+        if toEnd {
+            index = step < 0 ? 0 : shown.count - 1
+        } else if let cursor = valueCursor, let at = shown.firstIndex(where: { $0.id == cursor }) {
+            index = min(max(at + step, 0), shown.count - 1)
+        } else {
+            index = step < 0 ? shown.count - 1 : 0
+        }
+        selectValue(shown[index].id, extending: extending)
     }
 
     /// Selects every row the filters leave.
@@ -666,6 +688,7 @@ final class AppModel {
         valueFilter = .all
         selectedValues = []
         selectionAnchor = nil
+        valueCursor = nil
         values = []
         reveal = nil
         placing = nil
