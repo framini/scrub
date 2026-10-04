@@ -6,7 +6,6 @@ struct DocumentLeaf: Sendable {
     let key: String?
     private let records: RecordPath
     var lastRecord: Int? { records.last }
-    func owner<Value>(in owners: [Value?]) -> Value? { records.owner(in: owners) }
     /// The records this value sits in, innermost first.
     var enclosing: [Int] { records.all.reversed() }
     let contextWords: Set<String>
@@ -68,17 +67,6 @@ private enum RecordPath: Sendable {
         case .none: nil
         case .one(let record): record
         case .many(let records): records.last
-        }
-    }
-    func owner<Value>(in owners: [Value?]) -> Value? {
-        switch self {
-        case .none: return nil
-        case .one(let record): return owners.indices.contains(record) ? owners[record] : nil
-        case .many(let records):
-            for record in records.reversed() where owners.indices.contains(record) {
-                if let owner = owners[record] { return owner }
-            }
-            return nil
         }
     }
 }
@@ -166,7 +154,7 @@ enum DocumentPipeline {
                 let previous = values[index]
                 if previous.fullyMarked { continue }
                 let reusable = !forceFullDetection && emptyBases[index] && previous.text == leaves[index].text
-                job.enter(value: index, records: leaves[index].enclosing, part: leaves[index].datePart)
+                job.enter(value: index, records: leaves[index].enclosing, part: leaves[index].datePart, object: leaves[index].objectPath)
                 var held = previous.held
                 let (text, marks, unresolved) = try Correction.run(previous.text, marks: previous.marks, job: job, matcher: originals, gazetteer: gazetteer, gate: gate, passes: 1, base: reusable ? [] : nil, held: &held)
                 if text != previous.text { changed = true; changedIndices.append(index) }
@@ -198,7 +186,7 @@ enum DocumentPipeline {
         for index in values.indices where !values[index].unresolved.isEmpty || !values[index].held.isEmpty {
             try Scrubber.checkCancellation()
             let value = values[index]
-            job.enter(value: index, records: leaves[index].enclosing, part: leaves[index].datePart)
+            job.enter(value: index, records: leaves[index].enclosing, part: leaves[index].datePart, object: leaves[index].objectPath)
             var kept: [Mark] = [], proposals: [String] = []
             // A doubted person the final check also suspects is its suspect.
             var suspected = IndexSet()
@@ -300,7 +288,7 @@ enum DocumentPipeline {
         for index in order {
             try Scrubber.checkCancellation()
             let (leaf, stored) = (leaves[index], bases[index])
-            job.enter(value: index, records: leaf.enclosing, part: leaf.datePart)
+            job.enter(value: index, records: leaf.enclosing, part: leaf.datePart, object: leaf.objectPath)
             var found = detected(leaf, base: base(leaf, stored: stored), gazetteer: gazetteer, detector: job.detector)
             if found.isEmpty, leaf.numericEntity == nil, hint(leaf.key) == nil, mayName(leaf.rawKey ?? leaf.key), RecordIDs.isPersonal(leaf, spelled: spelled, ownRecord: object(leaf).map(personal.contains) ?? false) {
                 found = [Span(range: 0..<(leaf.seen as NSString).length, entity: "RECORD_ID", score: 1)]
@@ -317,7 +305,7 @@ enum DocumentPipeline {
             job.recordOriginals([(leaf.seen, found)])
             // Read in the text as seen, replaced in the text as written.
             if let view = leaf.view { found = found.map(view.raw) }
-            let owner = identityHints.contains(KeyHints.hint(leaf.key) ?? "") ? leaf.owner(in: owners) : nil
+            let owner = identityHints.contains(KeyHints.hint(leaf.key) ?? "") ? owners.of(leaf) : nil
             var (text, marks): (String, [Mark])
             var held: [Mark] = []
             if let entity = leaf.numericEntity {
@@ -340,25 +328,69 @@ enum DocumentPipeline {
         return (gazetteer, values.map { $0! })
     }
 
-    static func associateOwners(_ leaves: [DocumentLeaf], job: Job) -> [Persona?] {
+    /// The person each record is, read off the names in it (see `associateOwners`).
+    struct Owners {
+        fileprivate var people: [Persona?] = []
+        /// The record of its own each object a flattened header names takes
+        /// inside its row ("applicant" of "applicant.email"), by row and path.
+        fileprivate var objects: [String: Int] = [:]
+        fileprivate static func object(_ record: Int, _ path: String) -> String { "\(record)\u{0}" + path }
+        /// The records around a leaf, innermost first: its object's, then its own and those around it.
+        fileprivate func chain(_ leaf: DocumentLeaf) -> [Int] {
+            let own = leaf.objectPath.isEmpty ? nil : leaf.lastRecord.flatMap { objects[Self.object($0, leaf.objectPath)] }
+            return (own.map { [$0] } ?? []) + leaf.enclosing
+        }
+        /// Whose a leaf's name, email or username is: its innermost record's that has a person.
+        func of(_ leaf: DocumentLeaf) -> Persona? {
+            for record in chain(leaf) where people.indices.contains(record) {
+                if let person = people[record] { return person }
+            }
+            return nil
+        }
+    }
+
+    /// Who each record is: the name, email and gender read under their keys
+    /// in it. A CSV row of flattened objects ("applicant.name", "spouse.name")
+    /// holds a record for each object, as a JSON record holds one for each of
+    /// its objects, so two people in one row are two people.
+    static func associateOwners(_ leaves: [DocumentLeaf], job: Job) -> Owners {
         let maxRecord = leaves.compactMap(\.lastRecord).max() ?? -1
-        guard maxRecord >= 0 else { return [] }
-        var recordFields = Array<IdentityFields?>(repeating: nil, count: maxRecord + 1)
-        var genders = Array<String?>(repeating: nil, count: maxRecord + 1)
+        guard maxRecord >= 0 else { return Owners() }
+        var result = Owners()
+        var count = maxRecord + 1
+        var objectParents: [Int: Int] = [:]
+        for (index, leaf) in leaves.enumerated() where !leaf.objectPath.isEmpty {
+            if index.isMultiple(of: 1024) && Task.isCancelled { return Owners() }
+            guard let record = leaf.lastRecord, case let key = Owners.object(record, leaf.objectPath), result.objects[key] == nil else { continue }
+            result.objects[key] = count
+            objectParents[count] = record
+            count += 1
+        }
+        var recordFields = Array<IdentityFields?>(repeating: nil, count: count)
+        var genders = Array<String?>(repeating: nil, count: count)
+        func innermost(_ leaf: DocumentLeaf) -> Int? {
+            leaf.objectPath.isEmpty ? leaf.lastRecord : leaf.lastRecord.flatMap { result.objects[Owners.object($0, leaf.objectPath)] }
+        }
+        func owner<Value>(_ leaf: DocumentLeaf, in values: [Value?]) -> Value? {
+            for record in result.chain(leaf) where values.indices.contains(record) {
+                if let value = values[record] { return value }
+            }
+            return nil
+        }
         for (index, leaf) in leaves.enumerated() {
-            if index.isMultiple(of: 1024) && Task.isCancelled { return [] }
-            if let record = leaf.lastRecord, let last = KeyHints.words(leaf.rawKey).last, genderWords.contains(last), let gender = People.gender(leaf.text) {
+            if index.isMultiple(of: 1024) && Task.isCancelled { return Owners() }
+            if let record = innermost(leaf), let last = KeyHints.words(leaf.rawKey).last, genderWords.contains(last), let gender = People.gender(leaf.text) {
                 genders[record] = gender
                 continue
             }
-            guard let record = leaf.lastRecord, let hint = KeyHints.hint(leaf.key), identityHints.contains(hint), !leaf.text.isEmpty else { continue }
+            guard let record = innermost(leaf), let hint = KeyHints.hint(leaf.key), identityHints.contains(hint), !leaf.text.isEmpty else { continue }
             if recordFields[record] == nil { recordFields[record] = IdentityFields() }
             recordFields[record]?.set(leaf.seen, for: hint)
         }
         // A gender beside a name object ("gender" next to "name": {"first": …}) is that person's.
         for (index, leaf) in leaves.enumerated() {
-            if index.isMultiple(of: 1024) && Task.isCancelled { return [] }
-            guard let record = leaf.lastRecord, recordFields[record] != nil, recordFields[record]?.gender == nil, let gender = leaf.owner(in: genders) else { continue }
+            if index.isMultiple(of: 1024) && Task.isCancelled { return Owners() }
+            guard let record = innermost(leaf), recordFields[record] != nil, recordFields[record]?.gender == nil, let gender = owner(leaf, in: genders) else { continue }
             recordFields[record]?.gender = gender
         }
         var identities: [Int?] = recordFields.enumerated().map { index, fields in
@@ -367,30 +399,33 @@ enum DocumentPipeline {
         }
         // A record whose name sits in one child object ("applicant": {"name": {"first": …},
         // "contact": {"emails": […]}}) is that person's; a list of several people is no one's.
-        var parents = [Int?](repeating: nil, count: maxRecord + 1)
+        var parents = [Int?](repeating: nil, count: count)
+        for (child, parent) in objectParents { parents[child] = parent }
         for (index, leaf) in leaves.enumerated() {
-            if index.isMultiple(of: 1024) && Task.isCancelled { return [] }
+            if index.isMultiple(of: 1024) && Task.isCancelled { return Owners() }
             for (child, parent) in zip(leaf.enclosing, leaf.enclosing.dropFirst()) where parents[child] == nil { parents[child] = parent }
         }
-        var named = [Set<Int>](repeating: [], count: maxRecord + 1)
-        for record in stride(from: maxRecord, through: 0, by: -1) {
+        // Children before parents: an object's record is numbered after every row's.
+        var named = [Set<Int>](repeating: [], count: count)
+        for record in Array(stride(from: count - 1, through: maxRecord + 1, by: -1)) + Array(stride(from: maxRecord, through: 0, by: -1)) {
             if let identity = identities[record] { named[record].insert(identity) }
             if identities[record] == nil, named[record].count == 1 { identities[record] = named[record].first }
             if let parent = parents[record], !named[record].isEmpty { named[parent].formUnion(named[record].count == 1 ? named[record] : [-1, -2]) }
         }
-        if Task.isCancelled { return [] }
+        if Task.isCancelled { return Owners() }
         for leaf in leaves where KeyHints.hint(leaf.key) == "EMAIL_ADDRESS" && !leaf.text.isEmpty {
-            if let record = leaf.owner(in: identities), recordFields[record]?.email == nil {
+            if let record = owner(leaf, in: identities), recordFields[record]?.email == nil {
                 recordFields[record]?.email = leaf.seen
             }
         }
-        var owners = Array<Persona?>(repeating: nil, count: maxRecord + 1)
+        var owners = Array<Persona?>(repeating: nil, count: count)
         for record in recordFields.indices {
-            if record.isMultiple(of: 1024) && Task.isCancelled { return [] }
+            if record.isMultiple(of: 1024) && Task.isCancelled { return Owners() }
             guard let fields = recordFields[record], !fields.several else { continue }
             owners[record] = job.associateRecord(first: fields.first, last: fields.last, full: fields.full, email: fields.email, gender: fields.gender)
         }
-        return identities.map { $0.flatMap { owners[$0] } }
+        result.people = identities.map { $0.flatMap { owners[$0] } }
+        return result
     }
 
     /// The address each leaf belongs to: the city, region, postcode and country

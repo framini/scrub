@@ -75,6 +75,13 @@ final class StandIns {
     /// A username or an email's local part, and the stand-in each took: "user
     /// quillpen77" beside "quillpen77@marrowmail.example" is one account.
     private var handles: [String: String] = [:]
+    /// The lowercase words of every name and handle the document holds, noted
+    /// before anything is drawn: a record ID's prefix that is one of them is
+    /// someone's name, not a type (see `RecordIDs.keptPrefix`).
+    private var namedWords: Set<String> = []
+    func noteName(_ value: String) {
+        for word in value.lowercased().split(whereSeparator: { !$0.isLetter }) where word.count >= 2 { namedWords.insert(String(word)) }
+    }
     private func drawn(_ entity: String, _ original: String, persona: Persona?, address: AddressParts?) -> String {
         let actual = entity == "LOCATION" && people.knows(original) ? "PERSON" : entity
         if actual == "AGE" { return age(original) }
@@ -188,11 +195,13 @@ final class StandIns {
     // MARK: Values read off another
 
     /// Where the value being drawn sits, innermost first: in prose its
-    /// sentence, paragraph and value, then the records around it (see
-    /// `Job.enter`). An age, last digits, a masked number or a birth date's
-    /// month follows the value it is read off in the nearest of these that
-    /// holds one, not just any in the document: two people's SSNs can end
-    /// alike, and two birth years can both fit an age.
+    /// sentence, paragraph and value, then the records around it, the
+    /// innermost led by the object a flattened header names in it
+    /// ("r3/applicant" before "r3", see `Job.enter`). An age, last digits, a
+    /// masked number or a birth date's month follows the value it is read
+    /// off in the nearest of these that holds one, not just any in the
+    /// document: two people's SSNs can end alike, and two birth years can
+    /// both fit an age.
     var scopes: [String] = []
     /// Set by a draw read off another value when the nearest scope holding
     /// one holds several that disagree: it takes the first, and review asks.
@@ -359,8 +368,10 @@ final class StandIns {
             return Self.monthName(value, like: trimmed)
         }
         let found = nearest({ self.scopedDays[$0] ?? [] }, document: [])
-        // A part that is no part of any date near takes its own record's date, never a neighbour's.
-        let own = scopes.first { $0.first == "r" }.flatMap { self.scopedDays[$0] } ?? []
+        // A part that is no part of any date near takes its own record's date, never a neighbour's:
+        // within a row of flattened objects, its own object's first ("applicant.dob"), then the row's.
+        let record = scopes.first { $0.first == "r" }?.prefix { $0 != "/" }
+        let own = scopes.lazy.filter { $0.first == "r" && $0.prefix { $0 != "/" } == record }.compactMap { self.scopedDays[$0] }.first ?? []
         func agreed(_ pairs: [DayPair], _ part: (Day) -> Int) -> Int? {
             guard let first = pairs.first else { return nil }
             if Set(pairs.map { part($0.fake) }).count > 1 { unclear = true }
@@ -1127,13 +1138,14 @@ final class StandIns {
         default: return "[\(entity)]"
         }
     }
-    /// A person's record ID in its own shape: its type prefix kept ("cus_"),
+    /// A person's record ID in its own shape: its type prefix kept ("cus_")
+    /// unless the document names someone so ("pat_" beside Pat Ferriter),
     /// then a fresh character of the same kind for each: a digit for a digit
     /// (none leading with a zero that had none), a letter of the same case,
     /// hex for hex, and every joiner where it was. So "cus_odalys_ferriter"
     /// becomes "cus_" and 15 letters around one underscore, and joins still work.
     private func recordID(like original: String) -> String {
-        let prefix = RecordIDs.keptPrefix(original)
+        let prefix = RecordIDs.keptPrefix(original, named: namedWords)
         let rest = original.dropFirst(prefix.count)
         let hex = rest.allSatisfy { $0.isHexDigit || $0 == "-" } && rest.contains(where: \.isNumber) && rest.contains(where: \.isLetter)
         let lead = rest.firstIndex(where: { $0.isLetter || $0.isNumber })

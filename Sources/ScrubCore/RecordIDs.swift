@@ -78,10 +78,16 @@ enum RecordIDs {
     /// "-" that read as a type's code, never a name. "odalys-ferriter" and
     /// "pat-ferriter" start with a name, "quillmere_north" with the first word
     /// of a slug: each is replaced whole, so no part of a name stays.
-    static func keptPrefix(_ value: String) -> String {
+    /// What the document says about who is in it overrides a type's list:
+    /// beside Pat Ferriter, "pat-ferriter1987" and "pat_ZqybnpAzukkun" start
+    /// with Pat, so a prefix that is a word of `named` (the lowercase words of
+    /// the names and handles the document holds) is replaced too.
+    static func keptPrefix(_ value: String, named: Set<String> = []) -> String {
         guard let match = TextRanges.matches(prefix, in: value).first else { return "" }
         let kept = TextRanges.substring(value, 0..<NSMaxRange(match.range))
-        return isType(String(kept.dropLast()), before: value.dropFirst(kept.count)) ? kept : ""
+        let letters = String(kept.dropLast())
+        guard !named.contains(letters.lowercased()) else { return "" }
+        return isType(letters, before: value.dropFirst(kept.count)) ? kept : ""
     }
 
     /// Whether `letters` name what a record is, before `body`: a type the
@@ -120,7 +126,8 @@ enum RecordIDs {
         guard shaped(value) else { return false }
         let lower = value.lowercased()
         let pieces = lower.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
-        if pieces.contains(where: names.contains) { return true }
+        // A name runs up to a digit as well as a joiner: "pat-ferriter1987".
+        if lower.split(whereSeparator: { !$0.isLetter }).contains(where: { names.contains(String($0)) }) { return true }
         // An email's local part, as one piece or several joined ("odalys.ferriter", "odalys_ferriter"):
         // looked up, never searched for, so a file of many emails stays linear.
         if !locals.isEmpty {
