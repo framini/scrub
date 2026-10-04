@@ -44,6 +44,8 @@ public enum Refusal: Error, Sendable, Equatable {
     case part(String)
     /// The value is a bare number in the file (a JSON number), which only a number may replace.
     case number
+    /// It would leave a place the value was replaced in as written: this form of it, as the file writes it.
+    case uncovered(String)
 }
 
 /// Who each name, and each email, username or initials built from one, was
@@ -401,7 +403,10 @@ extension Review {
     /// Why edits that were `before` may not become `after`, or nil when they
     /// may. A revision that cannot be written in every place its value
     /// stands (a word where a JSON number stands), or a mark no longer
-    /// written where one stood, is refused. With a replacement typed for the
+    /// written in a place it was (a bare number, or one of its forms), is
+    /// refused: no place a finding or a mark replaced is left as written by
+    /// an edit. A finding's places are its own, so it keeps every one unless
+    /// it is `blocked`. With a replacement typed for the
     /// values `typedFor` names, so is any stand-in it would write in their
     /// other forms (an email's local part, "Ms Roe", a handle) that holds
     /// what `held` refuses.
@@ -411,16 +416,19 @@ extension Review {
         let was = try revisions(before), wasBlocked = try blocked(before)
         let will = try revisions(after), blocked = try blocked(after)
         if !blocked.isSubset(of: wasBlocked) { return .number }
-        // A mark changed (another kind, or a replacement typed) still stands in every bare number it stood in.
+        // A mark changed (another kind, or a replacement typed) still stands in every place it stood in:
+        // a bare number it cannot be written in is refused as such, and any other form as the form it is.
         var changed: [Marks.Entry] = []
         for entry in marks.entries {
             let id = Self.findingID(entry)
             guard let previous = old.entries.first(where: { Self.matchKey($0.text, entity: $0.entity) == Self.matchKey(entry.text, entity: $0.entity) }),
                   previous != entry || after.replacements[id] != before.replacements[id] else { continue }
             changed.append(entry)
-            let kept = Set(try locate(entry, as: after.replacements[id]).places.map { [$0.value, $0.range.lowerBound, $0.range.upperBound] })
-            for place in try locate(previous, as: before.replacements[Self.findingID(previous)]).places where numeric.contains(place.value) {
-                if !kept.contains([place.value, place.range.lowerBound, place.range.upperBound]) { return .number }
+            var kept: [Int: [Range<Int>]] = [:]
+            for place in try locate(entry, as: after.replacements[id]).places { kept[place.value, default: []].append(place.range) }
+            for place in try locate(previous, as: before.replacements[Self.findingID(previous)]).places
+            where !(kept[place.value] ?? []).contains(where: { $0.lowerBound <= place.range.lowerBound && place.range.upperBound <= $0.upperBound }) {
+                return numeric.contains(place.value) ? .number : .uncovered(TextRanges.substring(values[place.value].text, place.range))
             }
         }
         guard let own else { return nil }
@@ -504,7 +512,8 @@ extension Review {
         let mine = Set(own.flatMap(Self.readings)).subtracting([""])
         // Inside a word too, but a value of one or two letters only as a word of its own.
         if reads.contains(where: { read in mine.contains { $0.count >= 3 ? read.contains($0) : Self.holds(read, $0) } }) { return .original }
-        let tokens = Set(reads.flatMap(Self.tokens))
+        // Each run of letters apart from the digits beside it too, so "ferriter99@example.org" and "@odalys99" hold her names.
+        let tokens = Set(reads.flatMap(Self.tokens).flatMap { [$0] + Self.pieces($0) })
         func holds(_ word: String) -> Bool { word.allSatisfy { $0.isLetter || $0.isNumber } ? tokens.contains(word) : reads.contains { Self.holds($0, word) } }
         let sets = [readable(), Readable(marks.entries.map { (original: $0.text, entity: $0.entity) })]
         func whole(names: Bool) -> Refusal? {
@@ -522,7 +531,9 @@ extension Review {
         func source(_ name: String) -> Refusal { mine.contains(Self.readings(name).first ?? name) ? .original : .other(name) }
         for set in sets {
             for token in tokens.sorted() { if let name = set.joined[token] { return source(name) } }
-            for read in reads {
+            // An address or a handle read as the words it is made of: the gate reads no token with an at sign in it,
+            // and an email's local part ("odalys.ferriter@…") is its own variant.
+            for read in reads.flatMap({ $0.contains("@") ? [$0, $0.replacingOccurrences(of: "@", with: " ")] : [$0] }) {
                 if let leak = set.gate.scan(read, suspects: false, isCancelled: { false }).leaks.first { return source(set.written[leak.source] ?? leak.source) }
             }
         }
@@ -591,6 +602,18 @@ extension Review {
     /// The runs of letters and digits in `text`.
     static func tokens(_ text: String) -> [String] {
         text.split { !($0.isLetter || $0.isNumber) }.map(String.init)
+    }
+
+    /// A token's runs of letters and of digits, each apart: "ferriter99" is
+    /// "ferriter" and "99". None where it is one run.
+    static func pieces(_ token: String) -> [String] {
+        var runs: [String] = []
+        var letters: Bool?
+        for character in token {
+            if character.isLetter == letters, !runs.isEmpty { runs[runs.count - 1].append(character) } else { runs.append(String(character)) }
+            letters = character.isLetter
+        }
+        return runs.count > 1 ? runs : []
     }
 
     /// A stand-in no original is, of the same shape: each letter an "x",

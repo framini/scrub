@@ -516,23 +516,46 @@ extension Review {
         return found
     }
 
+    /// Where a selection of `text` stands in the values: the first place it
+    /// is written in a link's `part`, or with `part` nil, the first place it
+    /// is written outside any link. Nil where it stands nowhere so.
+    func place(of text: String, in part: URLPart?) -> (value: Int, range: Range<Int>)? {
+        guard !text.isEmpty else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        let length = (text as NSString).length
+        for (index, value) in values.enumerated() where value.text.contains(text) {
+            let ns = value.text as NSString
+            var start = 0
+            while start < ns.length {
+                let found = ns.range(of: text, range: NSRange(location: start, length: ns.length - start))
+                if found.location == NSNotFound { break }
+                let range = found.location..<(found.location + length)
+                if links(index).first(where: { $0.range.lowerBound <= range.lowerBound && range.upperBound <= $0.range.upperBound })?.part == part { return (index, range) }
+                start = found.location + 1
+            }
+        }
+        return nil
+    }
+
     /// The value a selection is, as a reader reads it: "%51uillmere" or
     /// "Quill%6Dere" in a link is Quillmere, "Odalys+Ferriter" in a query is
     /// Odalys Ferriter, and "Quill\u{200B}mere" or "Quill<em>mere</em>" is
     /// Quillmere. A mark is made of it, so it reaches the value in every form
     /// (see `locate`). Decoded as the link readers decode (see
-    /// `URLs.reading`), and only where the selection sits in a link's part:
-    /// "C++" or "50%" in prose is written as it reads.
-    func identity(_ text: String) -> String {
+    /// `URLs.reading`), and only where the place selected, `location` (a
+    /// value and a range in its text), sits in a link's part: "C++" or "50%"
+    /// in prose is written as it reads, and so is "KX+4471" selected in prose
+    /// though a link writes it too. Without a place, nothing is decoded.
+    func identity(_ text: String, at location: (value: Int, range: Range<Int>)? = nil) -> String {
         var read = text
-        if text.contains("%") || text.contains("+") {
+        if let location, text.contains("%") || text.contains("+") {
             lock.lock()
             defer { lock.unlock() }
-            search: for (index, value) in values.enumerated() where value.text.contains(text) {
-                for component in links(index) where TextRanges.substring(value.text, component.range).contains(text) {
-                    if let decoded = URLs.reading(text, component.part) { read = decoded.text }
-                    break search
-                }
+            if values.indices.contains(location.value),
+               let component = links(location.value).first(where: { $0.range.lowerBound <= location.range.lowerBound && location.range.upperBound <= $0.range.upperBound }),
+               let decoded = URLs.reading(text, component.part) {
+                read = decoded.text
             }
         }
         let plain = Visible.plain(read).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -622,9 +645,21 @@ extension Review {
         let joined = marking.joined
         let caseless = !Self.caseSensitive.contains(entry.entity)
         var found: [(range: Range<Int>, written: String, entity: String, encoded: Bool)] = []
-        let forms = Self.forms(entry.text, entity: entry.entity, standIn: standIn)
-        var gate = LeakGate()
-        gate.add([Replacement(original: entry.text, fake: standIn, entity: entry.entity)])
+        // Found as the value was first marked (its `variants` kind, with that kind's own stand-in), so a
+        // replacement typed for it or a kind changed reaches every place the mark did. Each variant is
+        // written with this stand-in where it takes one of that shape, and otherwise with the whole of it.
+        let reshaped = typed != nil || entry.variants != entry.entity
+        let forms = Self.forms(entry.text, entity: entry.variants, standIn: standIn, whole: !Self.names.contains(entry.entity))
+        var gate = LeakGate(), writer = LeakGate()
+        gate.add([Replacement(original: entry.text, fake: reshaped ? try self.standIn(for: entry.text, entity: entry.variants) : standIn, entity: entry.variants)])
+        if reshaped { writer.add([Replacement(original: entry.text, fake: standIn, entity: entry.entity)]) }
+        func reshape(_ leak: LeakGate.Leak, in text: NSString, written: [Range<Int>: LeakGate.Leak]) -> (fake: String, entity: String) {
+            if let made = written[leak.range], let fake = made.fake { return (fake, made.entity) }
+            let read = text.substring(with: NSRange(location: leak.range.lowerBound, length: leak.range.count))
+            let entity = Self.names.contains(entry.entity) ? leak.entity : entry.entity
+            let fake = leak.entity == "USERNAME" ? Self.handle(standIn) : standIn
+            return (caseless ? LeakGate.cased(fake, like: read) : fake, entity)
+        }
         /// Each place in `text` the value reads, in any of its forms or as the
         /// leak gate reads a variant of it (a name's part alone or in a handle),
         /// with its stand-in cased as the place reads.
@@ -646,8 +681,16 @@ extension Review {
                 }
             }
             if !gate.isEmpty {
-                for leak in gate.scan(text as String, suspects: false).leaks {
-                    if let fake = leak.fake { hits.append((leak.range, fake, leak.entity)) }
+                let leaks = gate.scan(text as String, suspects: false).leaks
+                guard reshaped else {
+                    for leak in leaks { if let fake = leak.fake { hits.append((leak.range, fake, leak.entity)) } }
+                    return hits
+                }
+                var written: [Range<Int>: LeakGate.Leak] = [:]
+                if !writer.isEmpty, !leaks.isEmpty { for leak in writer.scan(text as String, suspects: false).leaks { written[leak.range] = leak } }
+                for leak in leaks where leak.fake != nil {
+                    let made = reshape(leak, in: text, written: written)
+                    hits.append((leak.range, made.fake, made.entity))
                 }
             }
             return hits
@@ -702,20 +745,39 @@ extension Review {
     /// its stand-in written the same way. The leak gate hunts a name's handles
     /// only when no part is a word; a person who marked the name has said it
     /// is one, so its handles are looked for here too, each as a whole word.
-    static func forms(_ text: String, entity: String, standIn: String) -> [(String, String)] {
+    /// A stand-in of two words or more is written in each form by its first
+    /// and last words ("J. Roe", "jroe"). One of a single word (a first name
+    /// typed for a full name), or `whole`, for a value now read as another
+    /// kind, is written whole in each: "h. lisk" and "Lisk, Harrowgate" read
+    /// "Jane", and the handles "harrowgate.lisk" and "hlisk" read "jane".
+    static func forms(_ text: String, entity: String, standIn: String, whole: Bool = false) -> [(String, String)] {
         var forms = [(text, standIn)]
         guard names.contains(entity) else { return forms }
         let real = text.split(whereSeparator: \.isWhitespace).map(String.init), made = standIn.split(whereSeparator: \.isWhitespace).map(String.init)
-        guard real.count >= 2, real.count == made.count, let first = real.first, let last = real.last, let fakeFirst = made.first, let fakeLast = made.last,
-              first.allSatisfy(\.isLetter), last.count >= 2 else { return forms }
-        let initial = String(first.prefix(1)), fakeInitial = String(fakeFirst.prefix(1))
-        forms += [(initial + ". " + last, fakeInitial + ". " + fakeLast), (last + ", " + first, fakeLast + ", " + fakeFirst), (last + ", " + initial + ".", fakeLast + ", " + fakeInitial + ".")]
+        guard real.count >= 2, let first = real.first, let last = real.last, first.allSatisfy(\.isLetter), last.count >= 2 else { return forms }
+        let initial = String(first.prefix(1))
         // "A Long" without its full stop is how "a long time" begins.
-        if LeakGate.usable(last) { forms.append((initial + " " + last, fakeInitial + " " + fakeLast)) }
-        let (f, l, ff, fl) = (first.lowercased(), last.lowercased().filter(\.isLetter), fakeFirst.lowercased().filter(\.isLetter), fakeLast.lowercased().filter(\.isLetter))
-        for separator in [".", "_", ""] { forms.append((f + separator + l, ff + separator + fl)) }
-        forms += [(initial.lowercased() + l, String(ff.prefix(1)) + fl), (l + initial.lowercased(), fl + String(ff.prefix(1))), (l + f, fl + ff)]
+        let spaced = [initial + ". " + last, last + ", " + first, last + ", " + initial + "."] + (LeakGate.usable(last) ? [initial + " " + last] : [])
+        let (f, l) = (first.lowercased(), last.lowercased().filter(\.isLetter))
+        let joined = [f + "." + l, f + "_" + l, f + l, initial.lowercased() + l, l + initial.lowercased(), l + f]
+        guard !whole, made.count >= 2, let fakeFirst = made.first, let fakeLast = made.last else {
+            return forms + spaced.map { ($0, standIn) } + joined.map { ($0, handle(standIn)) }
+        }
+        let fakeInitial = String(fakeFirst.prefix(1))
+        forms += zip(spaced, [fakeInitial + ". " + fakeLast, fakeLast + ", " + fakeFirst, fakeLast + ", " + fakeInitial + ".", fakeInitial + " " + fakeLast]).map { ($0, $1) }
+        let (ff, fl) = (fakeFirst.lowercased().filter(\.isLetter), fakeLast.lowercased().filter(\.isLetter))
+        forms += zip(joined, [ff + "." + fl, ff + "_" + fl, ff + fl, String(ff.prefix(1)) + fl, fl + String(ff.prefix(1)), fl + ff]).map { ($0, $1) }
         return forms
+    }
+
+    /// A stand-in written as a handle is: an email's local part, or the
+    /// letters and digits of a name or a word, in lowercase ("Corvane
+    /// Holdings" is "corvaneholdings").
+    static func handle(_ standIn: String) -> String {
+        var value = standIn
+        if let at = value.firstIndex(of: "@"), at != value.startIndex { value = String(value[..<at]) }
+        let made = fold(value).filter { $0.isLetter || $0.isNumber || "._-".contains($0) }.trimmingCharacters(in: CharacterSet(charactersIn: "._-"))
+        return made.isEmpty ? standIn : made
     }
 
     /// The stand-in a marked value takes. One Scrub already gave it, or a

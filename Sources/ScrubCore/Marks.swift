@@ -10,6 +10,11 @@ public struct Marks: Sendable, Equatable {
         public let id: Int
         public let text: String
         public let entity: String
+        /// The kind whose forms it is found in: the kind it was marked as,
+        /// or a name's, once it was marked as a name. A value marked again as
+        /// another kind still reaches every place it reached, so "h. lisk"
+        /// stays replaced when "Harrowgate Lisk" is changed to an employer.
+        public let variants: String
     }
 
     public private(set) var entries: [Entry] = []
@@ -21,14 +26,16 @@ public struct Marks: Sendable, Equatable {
     public var isEmpty: Bool { entries.isEmpty }
 
     /// Marks `text` as `entity`. The same value marked again as another kind
-    /// keeps its place among the marks, with a new stand-in, and its choices
-    /// made place by place start over.
+    /// keeps its place among the marks, with a new stand-in, and every place
+    /// it reached (see `Entry.variants`); its choices made place by place start over.
     @discardableResult
     public mutating func add(_ text: String, as entity: String) -> Entry {
-        let entry = Entry(id: next, text: text, entity: entity)
+        let known = entries.firstIndex { Review.matchKey($0.text, entity: $0.entity) == Review.matchKey(text, entity: $0.entity) }
+        if let known, entries[known].entity == entity { return entries[known] }
+        let variants = known.map { Review.names.contains(entity) ? entity : entries[$0].variants } ?? entity
+        let entry = Entry(id: next, text: text, entity: entity, variants: variants)
         next += 1
-        if let known = entries.firstIndex(where: { Review.matchKey($0.text, entity: $0.entity) == Review.matchKey(text, entity: $0.entity) }) {
-            if entries[known].entity == entity { return entries[known] }
+        if let known {
             entries[known] = entry
         } else {
             entries.append(entry)
@@ -141,8 +148,16 @@ extension ScrubResult {
         }
         if !pieces.isEmpty {
             for piece in pieces {
-                // Each as the value it reads: "%51uillmere" in a link is Quillmere.
-                for candidate in review.candidates(ns.substring(with: NSRange(location: piece.lowerBound, length: piece.count))).map(review.identity) where !picked.missed.contains(candidate) { picked.missed.append(candidate) }
+                let held = ns.substring(with: NSRange(location: piece.lowerBound, length: piece.count))
+                for candidate in review.candidates(held) {
+                    // Each as the value it reads where it was selected: "%51uillmere" in a link is Quillmere,
+                    // and "KX+4471" in prose is itself, however a link elsewhere writes it.
+                    let within = (held as NSString).range(of: candidate)
+                    let at = within.location == NSNotFound ? piece : (piece.lowerBound + within.location)..<(piece.lowerBound + NSMaxRange(within))
+                    let encoded = candidate.contains("%") || candidate.contains("+")
+                    let read = review.identity(candidate, at: encoded ? review.place(of: candidate, in: Self.linkPart(ns, at)) : nil)
+                    if !picked.missed.contains(read) { picked.missed.append(read) }
+                }
             }
             return picked
         }
@@ -154,10 +169,20 @@ extension ScrubResult {
         return picked
     }
 
+    /// The part of a link in `ns` that `range` sits in, or nil where it sits
+    /// in no link: what the preview shows around the place selected.
+    static func linkPart(_ ns: NSString, _ range: Range<Int>) -> URLPart? {
+        guard range.upperBound <= ns.length else { return nil }
+        let line = ns.lineRange(for: NSRange(location: range.lowerBound, length: range.count))
+        let components = URLs.components(in: ns.substring(with: line))
+        return components.first { $0.range.lowerBound + line.location <= range.lowerBound && range.upperBound <= $0.range.upperBound + line.location }?.part
+    }
+
     /// The choices and marks that replace `texts` as `entity`: each marked as
-    /// the value it reads (a selection encoded in a link, or split by markup
-    /// or a hidden character, is the value decoded, which reaches every
-    /// form), and any finding of the same value left as written replaced again.
+    /// the value it reads (a selection split by markup or a hidden character
+    /// is the value without them; `pick` has already read one encoded in a
+    /// link, where it was selected), and any finding of the same value left
+    /// as written replaced again.
     public func marking(_ texts: [String], as entity: String, choices: Choices, marks: Marks) -> (Choices, Marks) {
         var choices = choices, marks = marks
         for text in texts.map({ review?.identity($0) ?? $0 }) {

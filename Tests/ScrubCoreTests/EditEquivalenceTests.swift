@@ -157,6 +157,15 @@ import Testing
         return String(text[range].drop { $0 != "=" }.dropFirst())
     }
 
+    /// Whether the place selected, the first `needle` after `context` as the
+    /// output wrote it before, is written otherwise after: a mark always
+    /// replaces the very place it was made from.
+    static func replacedWhereSelected(_ before: ScrubResult, _ after: ScrubResult, _ needle: String, after context: String) -> Bool {
+        let was = output(before)
+        guard let start = was.range(of: context), let end = was.range(of: needle, range: start.upperBound..<was.endIndex) else { return false }
+        return !output(after).contains(String(was[start.lowerBound..<end.upperBound]))
+    }
+
     /// Selected encoded in a link (one letter, some letters, every letter), the mark reaches the value plainly,
     /// split, and encoded otherwise, each written as its place needs.
     @Test(arguments: Shape.allCases, ["%51uillmere", "Quill%6Dere", "%51%75%69%6C%6C%6D%65%72%65"])
@@ -170,6 +179,7 @@ import Testing
         let marked = try result.applying(choices, marks: marks)
         let after = Self.output(marked)
         #expect(!Self.read(marked).contains("quillmere") && !after.contains(selected) && !after.contains(other), "\(shape) \(selected): \(after)")
+        #expect(Self.replacedWhereSelected(result, marked, selected, after: "q="), "\(shape) \(selected): \(after)")
         #expect(Self.parses(marked, shape), "\(shape): \(after)")
         // Type oracle: a place's name, the same in every place, encoded in the links as they need.
         let finding = try #require(marked.byHand.first)
@@ -210,6 +220,7 @@ import Testing
         let marked = try result.applying(choices, marks: marks)
         let after = Self.output(marked)
         for gone in ["harrowgate", "lisk"] { #expect(!Self.read(marked).contains(gone), "\(shape) \(gone): \(after)") }
+        #expect(Self.replacedWhereSelected(result, marked, "harrowgate+lisk", after: "who="), "\(shape): \(after)")
         #expect(Self.parses(marked, shape), "\(shape): \(after)")
         // Type oracle: two words of a name, written into the query with "+" for the space.
         let finding = try #require(marked.byHand.first)
