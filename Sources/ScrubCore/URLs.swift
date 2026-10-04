@@ -14,10 +14,13 @@ public enum URLPart: Sendable, Equatable {
 /// follow (see `Links`), but some of its parts name someone: a query value
 /// under a personal key (`?email=…&name=…&phone=…`), a token or signature, a
 /// path segment under a collection of people (`/users/odalys.ferriter`,
-/// `/u/12345`, `/~odalys`), and the user name before the host. Those are read
-/// decoded, replaced with the stand-in the same value takes elsewhere, and
-/// written back encoded as the original was, so the link stays valid. A link
-/// with none of these (a page, a short link, a host) stays as written.
+/// `/u/12345`, `/~odalys`, `/@odalys`), and the user name before the host. A
+/// fragment that is a route reads as a path with its own query
+/// (`#/search?email=…`), and a collection written encoded (`/%75sers/…`) as
+/// it reads. Those are read decoded, replaced with the stand-in the same
+/// value takes elsewhere, and written back encoded as the original was, so
+/// the link stays valid. A link with none of these (a page, a short link, a
+/// host) stays as written.
 enum URLs {
     struct Component {
         let range: Range<Int>
@@ -53,8 +56,31 @@ enum URLs {
 
     private static func components(_ units: [UInt16]) -> [Component] {
         let slash: UInt16 = 47, question: UInt16 = 63, hash: UInt16 = 35, at: UInt16 = 64, colon: UInt16 = 58, amp: UInt16 = 38, semicolon: UInt16 = 59, equals: UInt16 = 61
+        let bang: UInt16 = 33
         var result: [Component] = []
         func string(_ range: Range<Int>) -> String { String(decoding: units[range], as: UTF16.self) }
+        // A segment or key as it reads: "%75sers" is "users", "%65mail" is "email".
+        func name(_ range: Range<Int>) -> String { let raw = string(range); return raw.removingPercentEncoding ?? raw }
+        func path(_ range: Range<Int>) {
+            var previous: String?
+            var start = range.lowerBound
+            for index in range.lowerBound...range.upperBound where index == range.upperBound || units[index] == slash {
+                if index > start {
+                    result.append(Component(range: start..<index, part: .path, key: previous))
+                    previous = name(start..<index).lowercased()
+                }
+                start = index + 1
+            }
+        }
+        func pairs(_ range: Range<Int>) {
+            var pairStart = range.lowerBound
+            for at in range.lowerBound...range.upperBound where at == range.upperBound || units[at] == amp || units[at] == semicolon {
+                if let equal = (pairStart..<at).first(where: { units[$0] == equals }), equal + 1 < at {
+                    result.append(Component(range: (equal + 1)..<at, part: .query, key: name(pairStart..<equal)))
+                }
+                pairStart = at + 1
+            }
+        }
         // Scheme and authority: "https://user:pass@host:port".
         var cursor = 0
         if let scheme = (0..<min(units.count, 24)).first(where: { units[$0] == colon }), scheme + 2 < units.count, units[scheme + 1] == slash, units[scheme + 2] == slash {
@@ -71,35 +97,26 @@ enum URLs {
         }
         let queryStart = (cursor..<units.count).first { units[$0] == question || units[$0] == hash } ?? units.count
         // Path segments, each keyed by the one before it.
-        var previous: String?
-        var start = cursor
-        for index in cursor...queryStart where index == queryStart || units[index] == slash {
-            if index > start {
-                result.append(Component(range: start..<index, part: .path, key: previous))
-                previous = string(start..<index).lowercased()
-            }
-            start = index + 1
-        }
-        // Query and fragment parameters ("?a=1&b=2", "#a=1"); a fragment that is a path ("#/users/odalys") reads as one.
+        path(cursor..<queryStart)
+        // Query and fragment parameters ("?a=1&b=2", "#a=1"). A fragment that is a route
+        // ("#/users/odalys", "#!/users/odalys") reads as a path, and its own query
+        // ("#/search?email=…") as a query.
         var index = queryStart
         while index < units.count {
             let section = index + 1
             let sectionEnd = (section..<units.count).first { units[$0] == hash } ?? units.count
-            if units[index] == hash, section < sectionEnd, units[section] == slash {
-                var previous: String?
-                var start = section + 1
-                for at in (section + 1)...sectionEnd where at == sectionEnd || units[at] == slash {
-                    if at > start { result.append(Component(range: start..<at, part: .path, key: previous)); previous = string(start..<at).lowercased() }
-                    start = at + 1
-                }
+            // The slash a route's path starts at.
+            var route: Int?
+            if units[index] == hash, section < sectionEnd {
+                if units[section] == slash { route = section }
+                else if units[section] == bang, section + 1 < sectionEnd, units[section + 1] == slash { route = section + 1 }
+            }
+            if let route {
+                let routeEnd = (route..<sectionEnd).first { units[$0] == question } ?? sectionEnd
+                path((route + 1)..<routeEnd)
+                if routeEnd < sectionEnd { pairs((routeEnd + 1)..<sectionEnd) }
             } else {
-                var pairStart = section
-                for at in section...sectionEnd where at == sectionEnd || units[at] == amp || units[at] == semicolon {
-                    if let equal = (pairStart..<at).first(where: { units[$0] == equals }), equal + 1 < at {
-                        result.append(Component(range: (equal + 1)..<at, part: .query, key: string(pairStart..<equal)))
-                    }
-                    pairStart = at + 1
-                }
+                pairs(section..<sectionEnd)
             }
             index = sectionEnd
         }
@@ -114,7 +131,9 @@ enum URLs {
             let raw = TextRanges.substring(text, component.range)
             let value = decode(raw, component.part)
             guard !value.isEmpty, value.utf16.count <= 256, let entity = kind(of: value, component) else { continue }
-            spans.append(Span(range: component.range, entity: entity, score: 1, url: component.part))
+            // "/~odalys" keeps its tilde, as "@odalys" keeps its at sign (see `StandIns`): only the handle is replaced.
+            let tilde = component.part == .path && entity == "USERNAME" && raw.hasPrefix("~") ? 1 : 0
+            spans.append(Span(range: (component.range.lowerBound + tilde)..<component.range.upperBound, entity: entity, score: 1, url: component.part))
         }
         return spans
     }
@@ -146,8 +165,9 @@ enum URLs {
             // A query value is one value: "name=Odalys+Ferriter" is a person, "state=CA" a region.
             return ["LATITUDE", "LONGITUDE", "COORDINATES", "TIME_ZONE"].contains(hint) ? nil : hint
         case .path:
-            guard let key = component.key else { return nil }
+            // "/@odalysferriter" and "/~odalys" are someone's handle wherever they sit, the first segment too.
             let bare = value.hasPrefix("~") || value.hasPrefix("@")
+            guard let key = component.key ?? (bare ? "" : nil) else { return nil }
             guard bare || collections.contains(key) else { return RecordIDs.prefixed(value) && RecordIDs.isPersonCollection(key) ? "RECORD_ID" : nil }
             if value.allSatisfy(\.isNumber) { return value.count >= 3 ? "RECORD_ID" : nil }
             if RecordIDs.prefixed(value) { return "RECORD_ID" }

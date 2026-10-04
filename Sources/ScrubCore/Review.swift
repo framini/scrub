@@ -318,6 +318,28 @@ extension Review {
         var known: LeakGate?
         /// The last marks shown as findings, which every redraw of the result asks for.
         var shown: (marks: Marks, findings: [Finding])?
+        /// The values as they read where that differs from how they are written, built on first use.
+        var readings: Readings?
+        /// Each value's link parts, read once a mark stands in the value.
+        var links: [Int: [URLs.Component]] = [:]
+    }
+    /// The values' texts as a reader reads them where that differs from how
+    /// they are written, joined as `Marking.joined` is: a mark is found there
+    /// too, so "Quill<em>mere</em>" and "?depot=%51uillmere" are Quillmere.
+    struct Readings {
+        let joined: NSString
+        let starts: [Int]
+        let readings: [Reading]
+    }
+    /// One value's text as it reads: without hidden characters, in-word
+    /// markup and the joints between an XML element's pieces (see `Visible`),
+    /// or one part of a link percent-decoded (see `URLs`).
+    struct Reading {
+        let value: Int
+        /// For each UTF-16 unit of the reading, the range of the value's text it is read from.
+        let sources: [Range<Int>]
+        /// The part of a link it is, which says how a stand-in is written there; nil for the visible text.
+        let part: URLPart?
     }
     typealias Place = (value: Int, range: Range<Int>, written: String, entity: String)
     /// Where one marked value stands, and the stand-in it takes.
@@ -360,13 +382,102 @@ extension Review {
     }
 
     /// The value `offset` in the joined text falls in.
-    private func value(at offset: Int, in marking: Marking) -> Int {
-        var low = 0, high = marking.starts.count
+    private func value(at offset: Int, in marking: Marking) -> Int { Self.piece(at: offset, starts: marking.starts) }
+
+    /// The piece of a joined text, by where each starts, that `offset` falls in.
+    private static func piece(at offset: Int, starts: [Int]) -> Int {
+        var low = 0, high = starts.count
         while low < high {
             let middle = (low + high) / 2
-            if marking.starts[middle] <= offset { low = middle + 1 } else { high = middle }
+            if starts[middle] <= offset { low = middle + 1 } else { high = middle }
         }
         return max(0, low - 1)
+    }
+
+    /// The parts of the links in a value, read once. Every caller holds the lock.
+    private func links(_ value: Int) -> [URLs.Component] {
+        if let known = marking?.links[value] { return known }
+        let found = URLs.components(in: values[value].text)
+        marking?.links[value] = found
+        return found
+    }
+
+    /// The readings of every value that reads otherwise than it is written,
+    /// built on first use. Every caller holds the lock.
+    private func readings() throws -> Readings {
+        if let known = marking?.readings { return known }
+        let joined = NSMutableString()
+        var starts: [Int] = [], readings: [Reading] = []
+        func add(_ text: String, value: Int, sources: [Range<Int>], part: URLPart?) {
+            starts.append(joined.length)
+            joined.append(text)
+            joined.append("\u{0}")
+            readings.append(Reading(value: value, sources: sources, part: part))
+        }
+        for (index, value) in values.enumerated() {
+            if index.isMultiple(of: 4096) { try Scrubber.checkCancellation() }
+            if let view = Visible(value.text) {
+                add(view.clean, value: index, sources: (0..<(view.clean as NSString).length).map { view.raw($0..<($0 + 1)) }, part: nil)
+            }
+            // Only a percent sign or a plus reads otherwise in a link.
+            guard value.text.contains("%") || value.text.contains("+") else { continue }
+            for component in URLs.components(in: value.text) {
+                guard let read = Self.decoded(TextRanges.substring(value.text, component.range), component.part) else { continue }
+                let offset = component.range.lowerBound
+                add(read.text, value: index, sources: read.sources.map { ($0.lowerBound + offset)..<($0.upperBound + offset) }, part: component.part)
+            }
+        }
+        let made = Readings(joined: joined.copy() as? NSString ?? joined, starts: starts, readings: readings)
+        marking?.readings = made
+        return made
+    }
+
+    /// A link's part as it reads, percent-decoded and in a query with "+" a
+    /// space (as `URLs.decode` reads it), with the range of the part each
+    /// UTF-16 unit is read from; nil when it reads as written or is no UTF-8.
+    static func decoded(_ raw: String, _ part: URLPart) -> (text: String, sources: [Range<Int>])? {
+        let units = Array(raw.utf16)
+        func hex(_ unit: UInt16) -> UInt8? {
+            switch unit {
+            case 48...57: UInt8(unit - 48)
+            case 65...70: UInt8(unit - 55)
+            case 97...102: UInt8(unit - 87)
+            default: nil
+            }
+        }
+        var bytes: [(byte: UInt8, from: Range<Int>)] = []
+        var index = 0
+        while index < units.count {
+            let unit = units[index]
+            if unit == 37, index + 2 < units.count, let high = hex(units[index + 1]), let low = hex(units[index + 2]) {
+                bytes.append((high << 4 | low, index..<(index + 3)))
+                index += 3
+            } else if unit == 43, part == .query {
+                bytes.append((32, index..<(index + 1)))
+                index += 1
+            } else {
+                // A character written as itself: each of its bytes is read from it.
+                let width = UTF16.isLeadSurrogate(unit) && index + 1 < units.count ? 2 : 1
+                let from = index..<(index + width)
+                for byte in String(decoding: units[from], as: UTF16.self).utf8 { bytes.append((byte, from)) }
+                index += width
+            }
+        }
+        var text: [UInt16] = [], sources: [Range<Int>] = []
+        var at = 0
+        while at < bytes.count {
+            let lead = bytes[at].byte
+            let width = lead < 0x80 ? 1 : lead >> 5 == 0b110 ? 2 : lead >> 4 == 0b1110 ? 3 : lead >> 3 == 0b11110 ? 4 : 0
+            guard width > 0, at + width <= bytes.count, let scalar = String(bytes: bytes[at..<(at + width)].map(\.byte), encoding: .utf8), scalar.unicodeScalars.count == 1 else { return nil }
+            let from = bytes[at].from.lowerBound..<bytes[at + width - 1].from.upperBound
+            for unit in scalar.utf16 {
+                text.append(unit)
+                sources.append(from)
+            }
+            at += width
+        }
+        let read = String(decoding: text, as: UTF16.self)
+        return read == raw ? nil : (read, sources)
     }
 
     private func taken(_ value: Int) -> [Range<Int>] {
@@ -467,8 +578,9 @@ extension Review {
         let standIn = try self.standIn(for: entry.text, entity: entry.entity)
         let joined = marking.joined
         let caseless = !Self.caseSensitive.contains(entry.entity)
-        var found: [(range: Range<Int>, written: String, entity: String)] = []
-        for (literal, fake) in Self.forms(entry.text, entity: entry.entity, standIn: standIn) {
+        var found: [(range: Range<Int>, written: String, entity: String, encoded: Bool)] = []
+        let forms = Self.forms(entry.text, entity: entry.entity, standIn: standIn)
+        for (literal, fake) in forms {
             var start = 0
             var count = 0
             while start < joined.length {
@@ -481,14 +593,38 @@ extension Review {
                 // "Ann" inside "annual" is no one.
                 guard !TextRanges.joinsWord(joined, at: range.lowerBound, underscore: false), !TextRanges.joinsWord(joined, at: range.upperBound, underscore: false) else { continue }
                 let written = joined.substring(with: match)
-                found.append((range, written == literal || !caseless ? fake : LeakGate.cased(fake, like: written), entry.entity))
+                found.append((range, written == literal || !caseless ? fake : LeakGate.cased(fake, like: written), entry.entity, false))
             }
         }
         var gate = LeakGate()
         gate.add([Replacement(original: entry.text, fake: standIn, entity: entry.entity)])
         if !gate.isEmpty {
             for leak in gate.scan(joined as String, suspects: false).leaks {
-                if let fake = leak.fake { found.append((leak.range, fake, leak.entity)) }
+                if let fake = leak.fake { found.append((leak.range, fake, leak.entity, false)) }
+            }
+        }
+        // Where it is written otherwise than it reads, split by markup or a hidden
+        // character, or encoded in a link: found as it reads, and its stand-in
+        // written as the place is, with the markup kept or encoded as the link needs.
+        let readings = try self.readings()
+        for (literal, fake) in forms where readings.joined.length > 0 {
+            var start = 0
+            while start < readings.joined.length {
+                let match = readings.joined.range(of: literal, options: caseless ? [.caseInsensitive] : [], range: NSRange(location: start, length: readings.joined.length - start))
+                if match.location == NSNotFound { break }
+                start = NSMaxRange(match)
+                guard !TextRanges.joinsWord(readings.joined, at: match.location, underscore: false), !TextRanges.joinsWord(readings.joined, at: NSMaxRange(match), underscore: false) else { continue }
+                let index = Self.piece(at: match.location, starts: readings.starts)
+                let reading = readings.readings[index], offset = readings.starts[index]
+                let source = reading.sources[match.location - offset].lowerBound..<reading.sources[NSMaxRange(match) - offset - 1].upperBound
+                let written = (values[reading.value].text as NSString).substring(with: NSRange(location: source.lowerBound, length: source.count))
+                let read = readings.joined.substring(with: match)
+                // Written as it reads, the search above found it.
+                guard written != read else { continue }
+                let cased = read == literal || !caseless ? fake : LeakGate.cased(fake, like: read)
+                let rewritten = reading.part.map { URLs.encode(cased, like: written, $0) } ?? Visible.rewrite(written, with: cased)
+                let at = marking.starts[reading.value]
+                found.append(((source.lowerBound + at)..<(source.upperBound + at), rewritten, entry.entity, reading.part != nil))
             }
         }
         try Scrubber.checkCancellation()
@@ -502,7 +638,12 @@ extension Review {
             guard local.upperBound <= (values[value].text as NSString).length, !taken(value).contains(where: { $0.overlaps(local) }) else { continue }
             // A JSON number stays a number.
             if numeric.contains(value), !(item.written + joined.substring(with: NSRange(location: item.range.lowerBound, length: item.range.count))).allSatisfy({ $0.isASCII && $0.isNumber }) { continue }
-            places.append((value, local, item.written, item.entity))
+            // Inside a link's part, written as the link writes it ("near=Quillmere+North" keeps a valid link).
+            var written = item.written
+            if !item.encoded, let component = links(value).first(where: { $0.range.lowerBound <= local.lowerBound && local.upperBound <= $0.range.upperBound }) {
+                written = URLs.encode(written, like: joined.substring(with: NSRange(location: item.range.lowerBound, length: item.range.count)), component.part)
+            }
+            places.append((value, local, written, item.entity))
             end = item.range.upperBound
         }
         let located = Located(standIn: standIn, places: places, written: Set([standIn.lowercased()] + places.map { $0.written.lowercased() }))

@@ -72,12 +72,45 @@ enum RecordIDs {
 
     private static let prefix = TextPattern(#"^[A-Za-z]{1,8}[_-](?=[A-Za-z0-9])"#)
     /// "cus_4TUvJh", "usr-19f3", "E-48211": a type prefix before the identifier.
-    static func prefixed(_ value: String) -> Bool { shaped(value) && !TextRanges.matches(prefix, in: value).isEmpty }
+    static func prefixed(_ value: String) -> Bool { shaped(value) && !keptPrefix(value).isEmpty }
 
-    /// The prefix kept by a stand-in, if any.
+    /// The prefix kept by a stand-in, if any: letters before the first "_" or
+    /// "-" that read as a type's code, never a name. "odalys-ferriter" and
+    /// "pat-ferriter" start with a name, "quillmere_north" with the first word
+    /// of a slug: each is replaced whole, so no part of a name stays.
     static func keptPrefix(_ value: String) -> String {
         guard let match = TextRanges.matches(prefix, in: value).first else { return "" }
-        return TextRanges.substring(value, 0..<NSMaxRange(match.range))
+        let kept = TextRanges.substring(value, 0..<NSMaxRange(match.range))
+        return isType(String(kept.dropLast()), before: value.dropFirst(kept.count)) ? kept : ""
+    }
+
+    /// Whether `letters` name what a record is, before `body`: a type the
+    /// lists of people's and things' types hold ("cus", "usr", "ord", "inv"),
+    /// or a code in one case ("E", "INV", "acc") or an ordinary word ("tenant")
+    /// before a generated body. A first name or surname the lists know is no
+    /// type, and a body of words is a slug that starts with one of its words.
+    private static func isType(_ letters: String, before body: Substring) -> Bool {
+        let lower = letters.lowercased()
+        let named = lower.count >= 2 && (NameLists.isFirst(lower) || NameLists.isSurname(lower))
+        let listed = personPrefixes.contains(lower) || thingPrefixes.contains(lower)
+        let made = generated(body, typed: listed)
+        // Before words, a type that is also a name starts one: "pat-ferriter" is Pat Ferriter.
+        if listed { return made || !named }
+        guard made, !named, letters == lower || letters == letters.uppercased() else { return false }
+        return letters.count <= (letters == lower ? 3 : 4) || NameLists.isOrdinary(lower)
+    }
+
+    /// Made by a system, not written: a digit in it ("48213177", "4TUvJh"),
+    /// or letters in both cases, mixed as no word is ("jwLHzYUsfaqhdNYV").
+    /// After a listed type (`typed`), a long unbroken body whose case turns
+    /// inside it is enough ("pat_ZqybnpAzukkun"): no written word follows "pat_" so.
+    private static func generated(_ body: Substring, typed: Bool = false) -> Bool {
+        if body.contains(where: \.isNumber) { return true }
+        // Case that changes back and forth, with several capitals ("GWYVaoEXYDXH"), as no camelCase word does.
+        let changes = zip(body, body.dropFirst()).filter { $0.isLetter && $1.isLetter && $0.isUppercase != $1.isUppercase }.count
+        let capitals = body.filter(\.isUppercase).count
+        if typed { return body.count >= 10 && body.allSatisfy(\.isLetter) && capitals >= 2 && changes >= 2 }
+        return body.count >= 8 && capitals >= 3 && changes >= 2
     }
 
     /// Whether an identifier spells out a person the document names: a name
@@ -115,6 +148,26 @@ enum RecordIDs {
     /// One token after the prefix, with a digit or a capital in it: "user_last_name" is a key, not an ID.
     private static let prefixedID = TextPattern(#"(?<![\w-])(?:cus|cust|usr|user|acct|pat|mem|emp|prof|stu)_[A-Za-z0-9]{6,40}(?![\w-])"#)
     private static let idPrefixes: Set<String> = ["cus_", "cust_", "usr_", "user_", "acct_", "pat_", "mem_", "emp_", "prof_", "stu_"]
+    /// An ID right after the word for whose it is ("customer odalys-ferriter",
+    /// "account Quillmere_Tavish", "user ID pat-ferriter"), made of names and
+    /// words no dictionary holds: a name written as an ID, someone's though
+    /// nothing else in the document names them. "user kube-system" is made of words.
+    /// It fills a gap: where a name was read inside it, the name stands and is learned.
+    private static let labelledID = TextPattern(
+        #"(?i)\b(?:customer|client|account|user|member|patient|profile|employee|subscriber|student|contact)s?(?:[ _-]?(?:id|ref|number|no\.?))?\s?[:#]?\s+([A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+)(?![\w-])"#)
+    static func labelled(in text: String) -> [Span] {
+        guard text.contains("_") || text.contains("-") else { return [] }
+        return TextRanges.matches(labelledID, in: text).compactMap { match in
+            let token = match.range(at: 1)
+            let value = TextRanges.substring(text, token.location..<NSMaxRange(token))
+            let words = value.split(whereSeparator: { $0 == "_" || $0 == "-" }).filter { $0.allSatisfy(\.isLetter) }.map(String.init)
+            // Every word a name or no word at all, and one of them no word: "test-account" is two words that are also surnames.
+            guard !isUUID(value), words.contains(where: { $0.count >= 3 && !NameLists.isWord($0) }),
+                  words.allSatisfy({ NameLists.isFirst($0) || NameLists.isSurname($0) || !NameLists.isWord($0) }) else { return nil }
+            return Span(range: token.location..<NSMaxRange(token), entity: "RECORD_ID", score: 0.9)
+        }
+    }
+
     static func spans(in text: String) -> [Span] {
         // Every match has one of the prefixes and its "_": read only around those.
         // One pass: each "_" with a prefix's lowercase letters right before it.
@@ -220,11 +273,9 @@ enum RecordIDs {
         return word.count >= 3 && number.count <= 2 && number.allSatisfy { $0.isASCII && $0.isNumber } && NameLists.isOrdinary(String(word))
     }
     static func idLike(_ value: String) -> Bool {
-        let body = Array(value.dropFirst(keptPrefix(value).count))
-        if body.contains(where: \.isNumber) { return true }
-        // Case that changes back and forth, with several capitals ("GWYVaoEXYDXH"), as no camelCase word does.
-        let changes = zip(body, body.dropFirst()).filter { $0.isLetter && $1.isLetter && $0.isUppercase != $1.isUppercase }.count
-        return body.count >= 8 && body.filter(\.isUppercase).count >= 3 && changes >= 2
+        let kept = keptPrefix(value)
+        let type = kept.dropLast().lowercased()
+        return generated(value.dropFirst(kept.count), typed: personPrefixes.contains(type) || thingPrefixes.contains(type))
     }
 
     /// `ownRecord`: the leaf's object holds a person's name or email itself, or says it is a person.

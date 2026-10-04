@@ -244,7 +244,9 @@ public enum XMLFile: FileFormat {
     /// in document order; nil for any other element. It holds text of its own
     /// beside its elements, and those hold only text and such elements, a few
     /// levels deep, so a record's fields (<first>, <last> under <person>) are
-    /// each still read under their own name.
+    /// each still read under their own name. So is a field beside text of
+    /// the record's own ("<account>Active<password>…</password></account>"):
+    /// only formatting and elements that name no field are read through.
     static func inline(_ element: XMLElement) -> [XMLNode]? {
         let children = element.children ?? []
         guard children.contains(where: { $0 is XMLElement }),
@@ -254,7 +256,7 @@ public enum XMLFile: FileFormat {
             guard depth <= 4 else { return false }
             for child in node.children ?? [] {
                 if let inner = child as? XMLElement {
-                    guard collect(inner, depth: depth + 1) else { return false }
+                    guard !namesField(inner), collect(inner, depth: depth + 1) else { return false }
                 } else if child.kind == .text {
                     // A text that already holds a joint could not be parted again.
                     guard !(child.stringValue ?? "").contains(Visible.joint) else { return false }
@@ -265,6 +267,23 @@ public enum XMLFile: FileFormat {
             return true
         }
         return collect(element, depth: 0) && texts.count > 1 ? texts : nil
+    }
+    /// Elements that format a run of text, which a word may be split across.
+    private static let phrasing: Set<String> = ["a", "abbr", "b", "bdi", "bdo", "big", "br", "cite", "code", "data", "del", "dfn", "em", "emphasis", "font", "i", "ins", "kbd",
+                                                "mark", "q", "s", "samp", "small", "span", "strike", "strong", "sub", "sup", "time", "tt", "u", "var", "wbr"]
+    /// Whether an element names a field of its own, which keeps its own key:
+    /// its name says what it holds ("password", "nationalId", "customer_id",
+    /// "manager"), or an attribute does (<field name="ssn">). Formatting never does.
+    static func namesField(_ element: XMLElement) -> Bool {
+        guard let name = element.name?.split(separator: ":").last.map(String.init) else { return false }
+        // A bare <name> in a sentence ("Ms <name>Brisa V…</name> called") names a product as
+        // often as a person, so it is read with the words around it, which tell which.
+        if phrasing.contains(name.lowercased()) || KeyHints.isBareName(name) { return false }
+        if KeyHints.hint(name) != nil || RecordIDs.isPersonKey(name) || KeyHints.isRole(name) { return true }
+        return (element.attributes ?? []).contains { attribute in
+            guard let key = attribute.name?.split(separator: ":").last.map(String.init) else { return false }
+            return KeyHints.fieldNameKeys.contains(KeyHints.words(key).joined()) && KeyHints.header(attribute.stringValue ?? "") != nil
+        }
     }
     static func parses(_ data: Data) throws -> Bool {
         guard let source = try? decodeXML(data) else { return false }

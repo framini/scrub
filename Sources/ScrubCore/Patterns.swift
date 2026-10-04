@@ -69,6 +69,8 @@ enum Patterns {
                 if entity == "PERSON" && NameTagger.namesOrganisation(value) { return }
                 // "https://deploy:hunter2@git.example.test" holds a password and a host, no address.
                 if entity == "EMAIL_ADDRESS", inURLCredentials(text, at: range.lowerBound) { return }
+                // "social.example/@odalys.ferriter" is a link to a handle (see `URLs`), no address.
+                if entity == "EMAIL_ADDRESS", value.contains("/@") { return }
                 guard valid(value, entity: entity), !(entity == "US_SSN" && base <= 0.5 && invalidSSN(value)) else { return }
                 let score = context.isDisjoint(with: contextWords) ? Context.enhanced(base, words: context, range: range, text: text) : min(1, max(0.4, base + 0.35))
                 if score >= 0.4 { spans.append(Span(range: range, entity: entity, score: score)) }
