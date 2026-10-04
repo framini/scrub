@@ -317,6 +317,30 @@ struct UnlabelledIdentifierTests {
         #expect(output.contains("app_wvyxnNnadrziFb"), "\(output)")
     }
 
+    @Test func aPersonsTypedIDNeedsNoMixedCase() throws {
+        // A user's ID beside their own name and email, its body almost all lowercase.
+        for id in ["usr_qmtrvzkapwHns", "cus_hbqxwtrnelzd", "usr-7kq2mwzx"] {
+            let shapes = [
+                (#"{"actor": {"id": "\#(id)", "email": "oferriter12@corvane.test", "name": "Odalys Ferriter"}, "action": "user.login"}"#, "a.json"),
+                ("<event><actor><id>\(id)</id><email>oferriter12@corvane.test</email><name>Odalys Ferriter</name></actor><action>user.login</action></event>", "a.xml"),
+                ("actor.id,actor.email,actor.name,action\n\(id),oferriter12@corvane.test,Odalys Ferriter,user.login\n", "a.csv"),
+                ("Saw this in the audit log:\n{\"actor\": {\"id\": \"\(id)\", \"email\": \"oferriter12@corvane.test\", \"name\": \"Odalys Ferriter\"}, \"action\": \"user.login\"}\n", "a.txt"),
+                ("actor:\n  id: \(id)\n  email: oferriter12@corvane.test\n  name: Odalys Ferriter\naction: user.login\n", "a.txt"),
+            ]
+            for (input, name) in shapes {
+                let result = try Scrubber.scrub(Data(input.utf8), name: name, forceFullDetection: false, seed: 4)
+                let output = String(decoding: result.output, as: UTF8.self)
+                #expect(!output.contains(id) && output.contains("user.login"), "[\(name) \(id)] \(output)")
+                let finding = try #require(result.findings.first { $0.original == id }, "[\(name) \(id)] \(result.findings.map(\.original))")
+                #expect(IdentifierLeakTests.shaped(finding.standIn, like: id), "[\(name)] \(finding.standIn)")
+            }
+        }
+        // Away from a person, a thing's ID stays.
+        let build = #"{"build": {"id": "usr_qmtrvzkapwHns", "channel": "beta"}}"#
+        let output = String(decoding: try Scrubber.scrub(Data(build.utf8), name: "r.json", forceFullDetection: false, seed: 1).output, as: UTF8.self)
+        #expect(output.contains("usr_qmtrvzkapwHns"), "\(output)")
+    }
+
     @Test(arguments: Path.allCases)
     func anIDBuiltOnAnUnknownWordWaitsForTheReview(_ path: Path) throws {
         for id in ["QUILLMERE-0042", "ferriter-4821", "4821_tavish_brightwater"] {
