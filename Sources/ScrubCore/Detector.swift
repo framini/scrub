@@ -51,6 +51,11 @@ public final class Detector {
             }
             // An ID made of a name after the word for whose it is ("account Quillmere_Tavish"), where nothing else was read.
             spans += RecordIDs.labelled(in: text).filter { id in !spans.contains { $0.range.overlaps(id.range) } }
+            // One made of a word and a number, with nothing labelling it ("close QUILLMERE-0042"):
+            // a name's is replaced, an unknown word's is asked about.
+            let worded = RecordIDs.worded(in: text)
+            spans += worded.named.filter { id in !spans.contains { $0.range.overlaps(id.range) } }
+            doubts += worded.unsure
             // "RFC4716" names a standard, and "t.co/x" a link: neither is anyone's.
             // A secret under a query key ends with its parameter, whichever detector read it.
             let ns = text as NSString
