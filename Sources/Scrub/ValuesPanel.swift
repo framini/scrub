@@ -62,6 +62,7 @@ struct ValueRow: Identifiable, Equatable, Sendable {
 /// once. Selecting one row shows it in the preview and opens its editor.
 struct ValuesPanel: View {
     let model: AppModel
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         let rows = model.visibleValues
@@ -76,17 +77,31 @@ struct ValuesPanel: View {
                     .foregroundStyle(Color.slate)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(rows) { row in
-                            ValueRowView(row: row, selected: model.selectedValues.contains(row.id))
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    let flags = NSEvent.modifierFlags
-                                    model.selectValue(row.id, toggling: flags.contains(.command), extending: flags.contains(.shift))
-                                }
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(rows) { row in
+                                ValueRowView(row: row, selected: model.selectedValues.contains(row.id))
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        let flags = NSEvent.modifierFlags
+                                        listFocused = true
+                                        model.selectValue(row.id, toggling: flags.contains(.command), extending: flags.contains(.shift))
+                                    }
+                            }
                         }
                     }
+                    .onChange(of: model.valueCursor) { _, cursor in
+                        if let cursor { proxy.scrollTo(cursor) }
+                    }
+                }
+                // ↑ and ↓ walk the rows, ⇧ grows the selection, ⌘ goes to the first or last.
+                .focusable()
+                .focused($listFocused)
+                .focusEffectDisabled()
+                .onKeyPress(keys: [.upArrow, .downArrow]) { press in
+                    model.moveValueSelection(by: press.key == .upArrow ? -1 : 1, extending: press.modifiers.contains(.shift), toEnd: press.modifiers.contains(.command))
+                    return .handled
                 }
             }
             if !model.selectedValues.isEmpty {
@@ -97,6 +112,8 @@ struct ValuesPanel: View {
         .frame(height: 260)
         .background(Color.snow)
         .font(.system(size: 12))
+        // Opened, the rows take the arrow keys at once.
+        .onAppear { listFocused = true }
     }
 
     private func toolbar(shown: Int) -> some View {
@@ -105,6 +122,13 @@ struct ValuesPanel: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(Color.slate)
                 TextField(Copy.searchValues, text: Binding(get: { model.valueSearch }, set: { model.valueSearch = $0 }))
                     .textFieldStyle(.plain)
+                    // ↓ from the search goes on to the rows it leaves.
+                    .onKeyPress(.downArrow) {
+                        guard !model.visibleValues.isEmpty else { return .ignored }
+                        listFocused = true
+                        model.moveValueSelection(by: 1)
+                        return .handled
+                    }
             }
             .padding(.horizontal, 8)
             .frame(height: 26)

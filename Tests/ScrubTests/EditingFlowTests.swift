@@ -227,3 +227,50 @@ private func click(_ standIn: String, in done: Finished, _ model: AppModel) thro
     try await settled(model)
     #expect(try copied(model, board) == edited)
 }
+
+@MainActor
+@Test func theArrowKeysWalkThePanelsRows() async throws {
+    let (model, _) = try await finished(handover)
+    _ = try await reviewed(model)
+    model.toggleValues()
+    let rows = model.visibleValues
+    try #require(rows.count >= 3)
+    // ↓ with nothing selected starts at the first row, and opens its editor as a click would.
+    model.moveValueSelection(by: 1)
+    #expect(model.selectedValues == [rows[0].id] && model.valueCursor == rows[0].id && model.draft?.original == rows[0].finding.original)
+    model.moveValueSelection(by: 1)
+    #expect(model.selectedValues == [rows[1].id] && model.reveal?.original == rows[1].finding.original)
+    model.moveValueSelection(by: -1)
+    #expect(model.selectedValues == [rows[0].id])
+    // It stops at either end.
+    model.moveValueSelection(by: -1)
+    #expect(model.selectedValues == [rows[0].id])
+    // ⇧ grows the selection from where it started, and shrinks it walking back.
+    model.moveValueSelection(by: 1, extending: true)
+    model.moveValueSelection(by: 1, extending: true)
+    #expect(model.selectedValues == Set(rows[0...2].map(\.id)) && model.draft == nil)
+    model.moveValueSelection(by: -1, extending: true)
+    #expect(model.selectedValues == Set(rows[0...1].map(\.id)))
+    // ⌘ goes to the last row and the first.
+    model.moveValueSelection(by: 1, toEnd: true)
+    #expect(model.selectedValues == [rows[rows.count - 1].id])
+    model.moveValueSelection(by: -1, toEnd: true)
+    #expect(model.selectedValues == [rows[0].id])
+    // A click moves the cursor too; ↑ from there is the row above it.
+    model.selectValue(rows[2].id)
+    model.moveValueSelection(by: -1)
+    #expect(model.selectedValues == [rows[1].id])
+    // Only the rows the filters leave are walked.
+    model.valueKind = "Email"
+    let emails = model.visibleValues
+    try #require(!emails.isEmpty)
+    model.moveValueSelection(by: 1)
+    #expect(model.selectedValues == [emails[0].id])
+    // Hiding the panel forgets where it was; ↑ then starts at the last row.
+    model.toggleValues()
+    model.toggleValues()
+    model.valueKind = nil
+    #expect(model.valueCursor == nil)
+    model.moveValueSelection(by: -1)
+    #expect(model.selectedValues == [rows[rows.count - 1].id])
+}
