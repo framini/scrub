@@ -152,6 +152,7 @@ enum Copy {
         case .other(let value): "That holds \(quoted([value])), another value in this file"
         case .part(let word): "That still holds \(quoted([word]))"
         case .number: "It’s a bare number in the file, so only a number can replace it"
+        case .uncovered(let form): "That would leave \(quoted([form])) as written"
         }
     }
     /// Why a change of kind changed none of the values chosen, under the
