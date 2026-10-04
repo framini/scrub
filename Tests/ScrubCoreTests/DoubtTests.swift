@@ -59,4 +59,23 @@ struct DoubtTests {
             #expect(!result.findings.contains { $0.doubt == .unconfirmed }, "\(note): \(result.findings)")
         }
     }
+
+    /// A surname the tagger stops short of ("Tomasz O'Sullivan", cut at the
+    /// apostrophe) is part of the first name found beside it: the whole name
+    /// is replaced, with nothing of it left and nothing asked.
+    @Test(arguments: Path.allCases)
+    func aDoubtedWordBesideAFoundNameIsPartOfIt(_ path: Path) throws {
+        for (note, name) in [("Customer: Tomasz O'Sullivan", "Tomasz O'Sullivan"), ("Spoke to Tomasz O'Sullivan.", "Tomasz O'Sullivan"),
+                             ("Contact: Tavish O'Quillmere", "Tavish O'Quillmere")] {
+            let (data, file) = Self.wrap(note, path)
+            let result = try Scrubber.scrub(data, name: file, forceFullDetection: false, seed: 3)
+            let output = String(decoding: result.output, as: UTF8.self)
+            let label = "[\(path)] \(note)"
+            let surname = String(name.split(separator: " ").last!)
+            #expect(!output.contains(surname) && !output.contains(String(surname.dropFirst(2))), "\(label): \(output)")
+            let people = result.findings.filter { name.contains($0.original) }
+            #expect(!people.isEmpty && people.allSatisfy { $0.entity == "PERSON" && !$0.suspected }, "\(label): \(result.findings)")
+            #expect(!result.findings.contains { $0.doubt == .unconfirmed }, "\(label): \(result.findings)")
+        }
+    }
 }

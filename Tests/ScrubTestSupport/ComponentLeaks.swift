@@ -100,8 +100,9 @@ public enum ComponentLeaks {
         case .digits(let digits):
             pattern = #"(?<!\d)"# + digits.map(String.init).joined(separator: #"[\s\-.()/]?"#) + #"(?!\d)"#
         case .ending(let ending):
-            // Four digits alone or after a mask ("ends in 1234", "***-**-1234"), not a longer number's tail.
-            pattern = #"(?<!\d)(?<!\d[\-. ])"# + ending + #"(?!\d)"#
+            // Four digits alone or after a mask ("ends in 1234", "***-**-1234"), not a longer number's tail
+            // nor an IPv6 address's first group ("2001:db8::").
+            pattern = #"(?<!\d)(?<!\d[\-. ])"# + ending + #"(?!\d)(?!:[0-9A-Fa-f:])"#
         }
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return 0 }
         return regex.numberOfMatches(in: text, range: NSRange(location: 0, length: (text as NSString).length))

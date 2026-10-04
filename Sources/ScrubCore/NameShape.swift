@@ -37,6 +37,15 @@ enum NameShape {
                                         "remind", "thank", "invite", "notify", "inform", "cc", "bcc", "dm", "meet", "brief", "nudge", "warn", "alert",
                                         "update", "forward", "loop", "reach", "help", "pay", "send", "let", "get", "have", "see", "visit",
                                         "welcome", "congratulate", "thanks", "escalate", "assign", "add", "tag", "mention", "include", "introduce"]
+    /// What a record calls the person it is about, written before their name
+    /// as a label is ("Customer Tomasz Brightwater", "Patient Odalys"): never
+    /// the first of the name after it.
+    static let parties: Set<String> = ["customer", "client", "patient", "tenant", "applicant", "claimant", "defendant", "plaintiff", "appellant",
+                                       "petitioner", "respondent", "witness", "victim", "suspect", "member", "employee", "resident", "caller", "user",
+                                       "subscriber", "borrower", "lender", "debtor", "creditor", "buyer", "purchaser", "seller", "passenger", "student",
+                                       "candidate", "contractor", "visitor", "donor", "beneficiary", "landlord", "insured", "policyholder", "cardholder",
+                                       "accountholder", "payee", "payer", "recipient", "requester", "requestor", "attendee", "participant", "volunteer",
+                                       "homeowner", "renter", "lessee", "lessor", "traveler", "traveller", "guarantor", "complainant", "inmate"]
     /// Whether the word is such a verb opening its sentence or line.
     static func commands(_ word: Word, in text: String) -> Bool {
         commands.contains(word.bare) && word.text.first?.isUppercase == true && NameCues.opens(word.range, in: text)
@@ -88,6 +97,12 @@ enum NameShape {
             parts.removeLast()
         }
         while let first = parts.first, isRole(first.text) || joining.contains(first.bare) || commands(first, in: text) { parts.removeFirst() }
+        // "Customer Tomasz O'Sullivan": the word for whose record it is goes; "Customer Service" was never anyone.
+        if let first = parts.first, parties.contains(first.bare), first.text.first?.isUppercase == true {
+            let rest = parts.dropFirst().filter { !joining.contains($0.bare) }
+            guard rest.contains(where: { NameLists.isName($0.bare) || !NameLists.isOrdinary($0.bare) }) else { return nil }
+            parts.removeFirst()
+        }
         // "Assistant Secretary": the ordinary words before a role are part of the
         // role, not a name ("Sergeant Gamble" is someone).
         if trailingRole, parts.allSatisfy({ NameLists.isOrdinary($0.bare) && !NameLists.isName($0.bare) }) { return nil }
