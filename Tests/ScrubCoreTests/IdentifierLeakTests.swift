@@ -269,6 +269,54 @@ struct UnlabelledIdentifierTests {
         }
     }
 
+    /// An ID built from the name of someone the same note names is theirs,
+    /// however short the name or missing from the name lists: "pat-1987"
+    /// beside Pat Ferriter. The same shapes with no one named stay as written.
+    @Test(arguments: Path.allCases)
+    func anIDBuiltOnANamedPersonIsTheirs(_ path: Path) throws {
+        for (id, piece) in [("pat-1987", "pat"), ("pat1987", "pat"), ("ferriter_07", "ferriter"), ("1987-pat", "pat")] {
+            for seed in UInt64(0)..<3 {
+                let (data, name) = Self.render("Pat Ferriter asked us to close \(id) before Friday.", path)
+                let result = try Scrubber.scrub(data, name: name, forceFullDetection: false, seed: seed)
+                let output = String(decoding: result.output, as: UTF8.self)
+                let label = "[\(path) \(seed) \(id)]"
+                #expect(!IdentifierLeakTests.words(output).contains(piece) && !output.lowercased().contains(id), "\(label) \(output)")
+                let finding = try #require(result.findings.first { $0.original == id }, "\(label) not found: \(result.findings.map(\.original))")
+                // Replaced either way; one read as a handle may still be shown for a look.
+                #expect(["RECORD_ID", "ID_NUMBER", "USERNAME"].contains(finding.entity), "\(label) → \(finding.entity) \(finding.standIn)")
+                #expect(IdentifierLeakTests.shaped(finding.standIn, like: id) || finding.entity == "USERNAME", "\(label) → \(finding.standIn)")
+            }
+        }
+        // A host beside a named person is still no one's.
+        let (data, name) = Self.render("Odalys Ferriter asked us to restart router-0042 before Friday.", path)
+        let output = String(decoding: try Scrubber.scrub(data, name: name, forceFullDetection: false, seed: 1).output, as: UTF8.self)
+        #expect(output.contains("router-0042") && !output.contains("Ferriter"), "[\(path)] \(output)")
+    }
+
+    /// realisticPayloads, seed 603824321: an applicant's own "ID":
+    /// "app_wvyxnNnadrziFb", with a prefix no list holds and only two capitals,
+    /// stayed. In a person's own record it is theirs; a build tag beside no one stays.
+    @Test func aPersonsOwnIDNeedsNoPersonsPrefix() throws {
+        let id = "app_wvyxnNnadrziFb"
+        let shapes = [
+            (#"{"applicant": {"ID": "\#(id)", "name": "Odalys Ferriter", "status": "pending"}}"#, "a.json"),
+            ("<applicant><ID>\(id)</ID><name>Odalys Ferriter</name><status>pending</status></applicant>", "a.xml"),
+            ("applicant.ID,applicant.name,applicant.status\n\(id),Odalys Ferriter,pending\n", "a.csv"),
+        ]
+        for (input, name) in shapes {
+            for seed in UInt64(0)..<3 {
+                let result = try Scrubber.scrub(Data(input.utf8), name: name, forceFullDetection: false, seed: seed)
+                let output = String(decoding: result.output, as: UTF8.self)
+                #expect(!output.contains("wvyxnNnadrziFb") && !output.contains("Ferriter") && output.contains("pending"), "[\(name) \(seed)] \(output)")
+                let finding = try #require(result.findings.first { $0.original == id }, "[\(name)] \(result.findings.map(\.original))")
+                #expect(IdentifierLeakTests.shaped(finding.standIn, like: id), "[\(name)] \(finding.standIn)")
+            }
+        }
+        let build = #"{"release": {"id": "app_wvyxnNnadrziFb", "channel": "beta"}}"#
+        let output = String(decoding: try Scrubber.scrub(Data(build.utf8), name: "r.json", forceFullDetection: false, seed: 1).output, as: UTF8.self)
+        #expect(output.contains("app_wvyxnNnadrziFb"), "\(output)")
+    }
+
     @Test(arguments: Path.allCases)
     func anIDBuiltOnAnUnknownWordWaitsForTheReview(_ path: Path) throws {
         for id in ["QUILLMERE-0042", "ferriter-4821", "4821_tavish_brightwater"] {
