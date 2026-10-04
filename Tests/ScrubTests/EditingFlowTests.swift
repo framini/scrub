@@ -274,3 +274,71 @@ private func click(_ standIn: String, in done: Finished, _ model: AppModel) thro
     model.moveValueSelection(by: -1)
     #expect(model.selectedValues == [rows[rows.count - 1].id])
 }
+
+/// A name typed for a person that keeps one of her words, or hides her name
+/// behind an unseen character or an encoding, is refused beside the field;
+/// nothing is written.
+@MainActor
+@Test func aKeptNameWordIsRefusedInTheEditor() async throws {
+    let (model, board) = try await finished(handover)
+    let done = try await reviewed(model)
+    let before = try copied(model, board)
+    let customer = try #require(done.result.findings.first { $0.original == "Odalys Ferriter" })
+    for typed in ["Jane Ferriter", "Odalys Roe", "Odalys\u{200B}Ferriter", "Jane%20Ferriter"] {
+        try click(customer.standIn, in: done, model)
+        model.draft?.text = typed
+        model.applyDraft()
+        let refusal = try #require(model.draft?.refusal, "\(typed) must be refused")
+        let shown = Copy.refusal(refusal, original: "Odalys Ferriter")
+        #expect(shown.contains("Ferriter") || shown.contains("Odalys"), "\(typed): \(shown)")
+        #expect(!model.applyingReview && !model.canUndo)
+        model.cancelDraft()
+    }
+    #expect(Copy.refusal(.part("Ferriter"), original: "Odalys Ferriter") == "That still holds “Ferriter”")
+    #expect(try copied(model, board) == before)
+}
+
+private let locker = #"{"customer":"Odalys Ferriter","phone":7025550128,"email":"odalys.ferriter@kestrel.example"}"#
+
+/// A bare JSON number read as a name can't be written as one: the editor
+/// refuses the kind beside it, and nothing changes.
+@MainActor
+@Test func aKindABareNumberCantTakeIsRefusedInTheEditor() async throws {
+    let (model, board) = try await finished(locker)
+    _ = try await reviewed(model)
+    let before = try copied(model, board)
+    model.toggleValues()
+    let phone = try #require(model.values.first { $0.finding.original == "7025550128" }, "\(model.values.map(\.finding.original))")
+    model.selectValue(phone.id)
+    model.draft?.kind = "PERSON"
+    model.applyDraft()
+    #expect(model.draft?.refusal == .number && !model.applyingReview && !model.canUndo)
+    #expect(Copy.refusal(.number, original: phone.finding.original) == "It’s a bare number in the file, so only a number can replace it")
+    #expect(try copied(model, board) == before)
+    #expect(model.values.first { $0.id == phone.id }?.finding.entity == phone.finding.entity)
+}
+
+/// Changing many values' kind at once changes none when one can't take it,
+/// and says under the preview how many, which and why.
+@MainActor
+@Test func aBulkKindChangeOneValueCantTakeChangesNothingAndSaysWhy() async throws {
+    let (model, board) = try await finished(locker)
+    _ = try await reviewed(model)
+    let before = try copied(model, board)
+    model.toggleValues()
+    let phone = try #require(model.values.first { $0.finding.original == "7025550128" })
+    let email = try #require(model.values.first { $0.finding.entity == "EMAIL_ADDRESS" })
+    model.selectValue(phone.id)
+    model.selectValue(email.id, toggling: true)
+    model.changeKind(of: model.selectedValues, to: "PERSON")
+    #expect(!model.applyingReview && !model.canUndo)
+    let notice = try #require(model.notice)
+    #expect(notice.refused && notice.text == "Nothing changed: 1 of 2 values (“7025550128”) is a bare number in the file, and only a number can replace it", "\(notice.text)")
+    #expect(try copied(model, board) == before)
+    #expect(model.values.first { $0.id == phone.id }?.finding.entity == phone.finding.entity && model.values.first { $0.id == email.id }?.finding.entity == "EMAIL_ADDRESS")
+    // Without the number, the rest change as asked.
+    model.changeKind(of: [email.id], to: "PERSON")
+    try await settled(model)
+    #expect(model.notice?.refused == false && model.canUndo)
+    #expect(model.values.first { $0.id == email.id }?.finding.entity == "PERSON")
+}

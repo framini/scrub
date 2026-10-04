@@ -81,6 +81,8 @@ struct Notice: Equatable {
     let text: String
     /// Undo when the change was just made, Redo when it was just undone.
     let undone: Bool
+    /// Nothing was changed: the notice says why, with nothing to undo.
+    var refused = false
 }
 
 struct ShortcutPulse: Equatable {
@@ -447,12 +449,24 @@ final class AppModel {
         return values.filter { ids.contains($0.id) }.map { row in row.id >= 0 && made.indices.contains(row.id) ? made[row.id] : row.finding }
     }
 
-    /// Reads the selected values as `kind`, each with a new stand-in of that kind.
+    /// Reads the selected values as `kind`, each with a new stand-in of that
+    /// kind. When any of them can't take it (a bare JSON number takes only a
+    /// number), none is changed, and the notice says how many, which and why.
     func changeKind(of ids: Set<Finding.ID>, to kind: String) {
         guard case .finished(let done) = state, let latest, !applyingReview else { return }
         let chosen = targets(ids).filter { done.result.revised($0).entity != kind }
         guard !chosen.isEmpty else { return }
-        guard let edited = try? done.result.editing(chosen, kind: kind, replacement: nil, choices: latest.choices, marks: latest.marks, edits: latest.edits) else { return }
+        func changed(_ targets: [Finding]) throws -> (Choices, Marks, Edits) {
+            try done.result.editing(targets, kind: kind, replacement: nil, choices: latest.choices, marks: latest.marks, edits: latest.edits)
+        }
+        let edited: (Choices, Marks, Edits)
+        do {
+            edited = try changed(chosen)
+        } catch {
+            let refused = chosen.filter { target in (try? changed([target])) == nil }
+            notice = Notice(text: Copy.unchanged((refused.isEmpty ? chosen : refused).map(\.original), of: chosen.count, because: error as? Refusal ?? .number), undone: false, refused: true)
+            return
+        }
         let (choices, marks, edits) = edited
         let originals = chosen.map(\.original), places = chosen.reduce(0) { $0 + $1.places.count }
         record(Step(choices: choices, marks: marks, edits: edits, reviewed: latest.reviewed, name: Copy.editStep(originals, kind: kind)))

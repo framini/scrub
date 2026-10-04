@@ -144,13 +144,24 @@ enum Copy {
     static func replacedAgain(_ originals: [String], places count: Int) -> String { "Replaced \(quoted(originals)) again \(inPlaces(count))" }
     static func placesStep(_ original: String) -> String { "Choose Places for \(quoted([original]))" }
     static func chosePlaces(_ original: String) -> String { "Chose where \(quoted([original])) is replaced" }
-    /// Why a typed replacement can't be used, beside the field.
+    /// Why a typed replacement, or a kind, can't be used, beside the field.
     static func refusal(_ refusal: Refusal, original: String) -> String {
         switch refusal {
         case .empty: "Type something to replace it with"
         case .original: "That still holds \(quoted([original]))"
         case .other(let value): "That holds \(quoted([value])), another value in this file"
-        case .number: "This value is a number in the file; type digits only"
+        case .part(let word): "That still holds \(quoted([word]))"
+        case .number: "It’s a bare number in the file, so only a number can replace it"
+        }
+    }
+    /// Why a change of kind changed none of the values chosen, under the
+    /// preview: how many of them can't take it, which, and why.
+    static func unchanged(_ refused: [String], of total: Int, because refusal: Refusal) -> String {
+        let one = refused.count == 1
+        let which = total == 1 ? quoted(refused) : "\(refused.count) of \(total) values (\(quoted(refused)))"
+        switch refusal {
+        case .number: return "Nothing changed: \(which) \(one ? "is a bare number" : "are bare numbers") in the file, and only a number can replace \(one ? "it" : "them")"
+        default: return "Nothing changed: \(which) can’t take that kind"
         }
     }
 

@@ -12,6 +12,11 @@ public struct Edits: Sendable, Equatable {
     public private(set) var kinds: [Finding.ID: String] = [:]
     /// The replacement typed for each finding or mark, written in place of its stand-in.
     public private(set) var replacements: [Finding.ID: String] = [:]
+    /// The findings and marks given a replacement, in the order each was
+    /// last typed: a name typed later for a person wins over one typed
+    /// before it, part by part (see `Review.revisions`). Only the order is
+    /// kept, so the same replacements typed in the same order are the same edits.
+    public private(set) var typed: [Finding.ID] = []
 
     public init() {}
 
@@ -19,18 +24,25 @@ public struct Edits: Sendable, Equatable {
     public func touches(_ id: Finding.ID) -> Bool { kinds[id] != nil || replacements[id] != nil }
     /// Reads a finding as `entity`; nil reads it as Scrub did.
     public mutating func setKind(_ entity: String?, of id: Finding.ID) { kinds[id] = entity }
-    /// Writes `text` in place of a finding's or a mark's stand-in; nil writes its own again.
-    public mutating func setReplacement(_ text: String?, of id: Finding.ID) { replacements[id] = text }
+    /// Writes `text` in place of a finding's or a mark's stand-in, typed
+    /// after every other; nil writes its own again.
+    public mutating func setReplacement(_ text: String?, of id: Finding.ID) {
+        replacements[id] = text
+        typed.removeAll { $0 == id }
+        if text != nil { typed.append(id) }
+    }
 }
 
-/// Why a typed replacement is refused. Nothing of a refused one is written.
+/// Why a replacement or a kind is refused. Nothing of a refused one is written.
 public enum Refusal: Error, Sendable, Equatable {
     case empty
     /// It is, or holds, the value it would replace.
     case original
     /// It holds another value Scrub found or the person marked, as written here.
     case other(String)
-    /// The value is a bare number in the file (a JSON number), which only digits may replace.
+    /// It holds a word of a name Scrub found or the person marked, as written there.
+    case part(String)
+    /// The value is a bare number in the file (a JSON number), which only a number may replace.
     case number
 }
 
@@ -91,16 +103,25 @@ extension Review {
     /// The findings `edits` revise, by id: each edited one, and each other
     /// finding of a person whose name was typed anew, written with the new
     /// name the way its stand-in was written with the old ("Ms Holt",
-    /// "maren.holt@…", "@mholt"). A finding changed to another kind leaves its
-    /// person and keeps nothing of theirs; its variants keep their stand-ins.
+    /// "maren.holt@…", "@mholt"). Names typed for one person apply in the
+    /// order typed, the later winning part by part, and a name typed before
+    /// the last is written again with the names typed since: "Jane Roe" for
+    /// her, then "Alice" for her first name alone, reads "Alice Roe". A
+    /// finding changed to another kind leaves its person and keeps nothing of
+    /// theirs; its variants keep their stand-ins. A revision that cannot
+    /// stand in every place of its value (a word where a JSON number stands)
+    /// is written nowhere, and its finding keeps its stand-in (see `blocked`).
     /// Every caller holds the lock.
     func revisions(_ edits: Edits) throws -> [Finding.ID: Revision] {
         guard !edits.isEmpty else { return [:] }
         if let known = marking?.revised, known.edits == edits { return known.revisions }
         _ = try prepared()
         var made: [Finding.ID: Revision] = [:]
-        var renamings: [Int: Renaming] = [:]
-        for id in Set(edits.kinds.keys).union(edits.replacements.keys).filter(findings.indices.contains).sorted() {
+        // Each person's names typed anew, in the order typed.
+        var typedFor: [Int: [(id: Finding.ID, renaming: Renaming)]] = [:]
+        let order = Dictionary(uniqueKeysWithValues: edits.typed.enumerated().map { ($0.element, $0.offset) })
+        let edited = Set(edits.kinds.keys).union(edits.replacements.keys).filter(findings.indices.contains)
+        for id in edited.sorted(by: { (order[$0] ?? -1, $0) < (order[$1] ?? -1, $1) }) {
             let finding = findings[id]
             let entity = edits.kinds[id] ?? finding.entity
             let typed = edits.replacements[id]
@@ -109,7 +130,23 @@ extension Review {
             made[id] = Revision(entity: entity, standIn: standIn, was: finding.standIn)
             guard let typed, Self.names.contains(entity), Self.names.contains(finding.entity), let person = personOf[id], people.names.indices.contains(person),
                   let renaming = Self.renaming(Self.read(finding.standIn), to: typed, names: people.names[person]) else { continue }
-            renamings[person] = renamings[person].map { $0.merged(renaming) } ?? renaming
+            typedFor[person, default: []].append((id, renaming))
+        }
+        var renamings: [Int: Renaming] = [:]
+        for (person, typed) in typedFor {
+            var names = people.names[person]
+            var typedWith: [(id: Finding.ID, names: PersonLinks.Names)] = []
+            for edit in typed {
+                names = PersonLinks.Names(first: edit.renaming.first ?? names.first, last: edit.renaming.last ?? names.last)
+                typedWith.append((edit.id, names))
+                renamings[person] = renamings[person].map { $0.merged(edit.renaming) } ?? edit.renaming
+            }
+            // The last name typed stays as typed; each before it takes the names typed since.
+            let final = Renaming(first: names.first, last: names.last)
+            for edit in typedWith.dropLast() {
+                guard let typed = edits.replacements[edit.id], let revision = made[edit.id] else { continue }
+                made[edit.id] = Revision(entity: revision.entity, standIn: Self.renamed(typed, entity: findings[edit.id].entity, names: edit.names, to: final), was: revision.was)
+            }
         }
         // The same value written another way, as a link writes it ("Odalys+Ferriter"), is the same value.
         let groups = sameValues()
@@ -129,10 +166,37 @@ extension Review {
                 if renamed != read { made[id] = Revision(entity: finding.entity, standIn: renamed, was: read) }
             }
         }
+        var blocked: Set<Finding.ID> = []
+        if !numeric.isEmpty {
+            for (id, revision) in made where findings[id].places.contains(where: { !writable(revision, at: $0) }) { blocked.insert(id) }
+            for id in blocked { made[id] = nil }
+        }
         var byStandIn: [String: [Finding.ID]] = [:]
         for id in made.keys.sorted() { byStandIn[made[id]?.standIn.lowercased() ?? "", default: []].append(id) }
-        marking?.revised = (edits, made, byStandIn)
+        marking?.revised = (edits, made, byStandIn, blocked)
         return made
+    }
+
+    /// The findings whose revision `edits` ask for but cannot be written in
+    /// every place of the value, so it is written nowhere (see `revisions`).
+    /// Every caller holds the lock.
+    func blocked(_ edits: Edits) throws -> Set<Finding.ID> {
+        guard !edits.isEmpty else { return [] }
+        _ = try revisions(edits)
+        return marking?.revised?.blocked ?? []
+    }
+
+    /// Whether `revision` can be written at `place`: anywhere but a bare JSON
+    /// number, which takes only a number.
+    private func writable(_ revision: Revision, at place: Occurrence) -> Bool {
+        guard spots.indices.contains(place.id) else { return true }
+        let spot = spots[place.id]
+        guard numeric.contains(spot.value) else { return true }
+        let value = values[spot.value]
+        let marks = spot.suspected ? value.unresolved : value.marks
+        guard marks.indices.contains(spot.mark) else { return true }
+        let range = marks[spot.mark].range
+        return written(revision, over: TextRanges.substring(value.text, range), value: spot.value, range: range) != nil
     }
 
     /// The findings of each value as it reads, by its match key: one original
@@ -156,15 +220,40 @@ extension Review {
     /// A revised stand-in written where `current` stands in a value's text,
     /// as that place writes one: encoded inside a link's part, around the
     /// markup and hidden characters the place keeps, and in its case. Nil
-    /// where it cannot stand: a bare JSON number takes only digits.
+    /// where it cannot stand: a bare JSON number takes only a JSON number.
     func written(_ revision: Revision, over current: String, value: Int, range: Range<Int>) -> String? {
         if let component = links(value).first(where: { $0.range.lowerBound <= range.lowerBound && range.upperBound <= $0.range.upperBound }) {
             let read = URLs.decode(current, component.part)
             return URLs.encode(Self.cased(revision.standIn, like: read, was: revision.was), like: current, component.part)
         }
         let made = Visible.rewrite(current, with: Self.cased(revision.standIn, like: Visible.plain(current), was: revision.was))
-        if numeric.contains(value), !made.allSatisfy({ $0.isASCII && $0.isNumber }) { return nil }
+        if numeric.contains(value), !Self.isJSONNumber(TextRanges.replace(values[value].text, range, with: made)) { return nil }
         return made
+    }
+
+    /// Whether `text` is a number as JSON writes one: an optional minus, no
+    /// leading zero, then an optional fraction and exponent ("-0.5e-3").
+    /// "0012", "+3", "1." and ".5" are not.
+    static func isJSONNumber(_ text: String) -> Bool {
+        var units = Array(text.utf8)[...]
+        func digits() -> Int {
+            var count = 0
+            while let unit = units.first, (48...57).contains(unit) { units.removeFirst(); count += 1 }
+            return count
+        }
+        if units.first == 45 { units.removeFirst() }
+        guard let lead = units.first, (48...57).contains(lead) else { return false }
+        if lead == 48 { units.removeFirst() } else { _ = digits() }
+        if units.first == 46 {
+            units.removeFirst()
+            guard digits() > 0 else { return false }
+        }
+        if units.first == 101 || units.first == 69 {
+            units.removeFirst()
+            if units.first == 43 || units.first == 45 { units.removeFirst() }
+            guard digits() > 0 else { return false }
+        }
+        return units.isEmpty
     }
 
     /// `typed` in the case a place wrote its stand-in in: "HOLT" where the
@@ -278,29 +367,181 @@ extension Review {
     }
 
     /// Why `typed` may not replace `edited`, or nil when it may: it is
-    /// empty, holds the value it replaces (in any case, with or without
-    /// accents), stands where only a number may, or holds, as a word of
-    /// three letters or more, another value Scrub found or `marks` hold.
+    /// empty, holds the value it replaces, stands where only a number may, or
+    /// holds what `held` refuses of another value Scrub found or `marks` hold.
     func refusal(_ typed: String, for edited: [Finding], marks: Marks) -> Refusal? {
         guard !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .empty }
-        let folded = Self.fold(typed)
-        let own = Set(edited.map { Self.fold($0.original) })
-        if own.contains(where: { !$0.isEmpty && folded.contains($0) }) { return .original }
         lock.lock()
         defer { lock.unlock() }
-        if !typed.allSatisfy({ $0.isASCII && $0.isNumber }), edited.contains(where: { finding in
+        let held = held(typed, own: edited.map(\.original), marks: marks)
+        if held == .original { return held }
+        if !Self.isJSONNumber(typed), edited.contains(where: { finding in
             finding.id >= 0 && finding.places.contains { spots.indices.contains($0.id) && numeric.contains(spots[$0.id].value) }
         }) { return .number }
-        if marking?.folded == nil {
-            var seen: Set<String> = []
-            marking?.folded = findings.compactMap { finding in
-                let key = Self.fold(finding.original)
-                return seen.insert(key).inserted ? (key, finding.original) : nil
+        return held
+    }
+
+    /// Why edits that were `before` may not become `after`, or nil when they
+    /// may. A revision that cannot be written in every place its value
+    /// stands (a word where a JSON number stands), or a mark no longer
+    /// written where one stood, is refused. With a replacement typed for the
+    /// values `typedFor` names, so is any stand-in it would write in their
+    /// other forms (an email's local part, "Ms Roe", a handle) that holds
+    /// what `held` refuses.
+    func refusal(writing after: Edits, marks: Marks, over before: Edits, marks old: Marks, typedFor own: [String]?) throws -> Refusal? {
+        lock.lock()
+        defer { lock.unlock() }
+        let was = try revisions(before), wasBlocked = try blocked(before)
+        let will = try revisions(after), blocked = try blocked(after)
+        if !blocked.isSubset(of: wasBlocked) { return .number }
+        // A mark changed (another kind, or a replacement typed) still stands in every bare number it stood in.
+        var changed: [Marks.Entry] = []
+        for entry in marks.entries {
+            let id = Self.findingID(entry)
+            guard let previous = old.entries.first(where: { Self.matchKey($0.text, entity: $0.entity) == Self.matchKey(entry.text, entity: $0.entity) }),
+                  previous != entry || after.replacements[id] != before.replacements[id] else { continue }
+            changed.append(entry)
+            let kept = Set(try locate(entry, as: after.replacements[id]).places.map { [$0.value, $0.range.lowerBound, $0.range.upperBound] })
+            for place in try locate(previous, as: before.replacements[Self.findingID(previous)]).places where numeric.contains(place.value) {
+                if !kept.contains([place.value, place.range.lowerBound, place.range.upperBound]) { return .number }
             }
         }
-        let others = (marking?.folded ?? findings.map { (Self.fold($0.original), $0.original) }) + marks.entries.map { (Self.fold($0.text), $0.text) }
-        for (other, written) in others where other.count >= 3 && !own.contains(other) && Self.holds(folded, other) { return .other(written) }
+        guard let own else { return nil }
+        for (id, revision) in will.sorted(by: { $0.key < $1.key }) where was[id]?.standIn != revision.standIn {
+            if let refusal = held(revision.standIn, own: own + [findings[id].original], marks: marks) { return refusal }
+        }
+        for entry in changed {
+            guard let typed = after.replacements[Self.findingID(entry)] else { continue }
+            for place in try locate(entry, as: typed).places {
+                if let refusal = held(place.written, own: own + [entry.text], marks: marks) { return refusal }
+            }
+        }
         return nil
+    }
+
+    /// What every original reads as, for `held`: built once for Scrub's
+    /// findings, and for a person's marks each time they are asked about.
+    struct Readable {
+        /// Each original as it reads, folded, with how it is written and whether it is a name.
+        var originals: [(read: String, written: String, name: Bool)] = []
+        /// Each word of a name of three letters or more, folded, with how it is written.
+        var words: [(read: String, written: String)] = []
+        /// A name's words joined as a handle is ("odalysferriter", "oferriter"), folded, and the name.
+        var joined: [String: String] = [:]
+        /// Each original's variants as the leak gate reads them, its originals folded.
+        var gate = LeakGate()
+        /// How each folded original is written.
+        var written: [String: String] = [:]
+
+        init<S: Sequence>(_ values: S) where S.Element == (original: String, entity: String) {
+            var seen: Set<String> = [], seenWords: Set<String> = []
+            for (original, entity) in values {
+                let name = Review.names.contains(entity)
+                let reads = Review.readings(original)
+                for read in reads where !read.isEmpty && seen.insert(read).inserted {
+                    originals.append((read, original, name))
+                    written[read] = original
+                }
+                guard let read = reads.first, !read.isEmpty else { continue }
+                gate.add([Replacement(original: read, fake: Review.placeholder(read), entity: entity)])
+                guard name else { continue }
+                for word in Review.nameWords(Visible.plain(original)) where seenWords.insert(Review.folded(word)).inserted { words.append((Review.folded(word), word)) }
+                // Joined as a mark's handles are; a form with a dot or an underscore holds a word of the name, found above.
+                let bare = Visible.plain(original).split(whereSeparator: \.isWhitespace).filter { !People.isTitle(String($0)) && !People.isSuffix(String($0)) }.joined(separator: " ")
+                for (form, _) in Review.forms(bare, entity: entity, standIn: bare) where form.count >= 3 && form.allSatisfy(\.isLetter) {
+                    let key = Review.folded(form)
+                    if joined[key] == nil { joined[key] = original }
+                }
+            }
+        }
+    }
+
+    /// The readable originals of Scrub's findings, built on first use. Every caller holds the lock.
+    private func readable() -> Readable {
+        if let known = marking?.readable { return known }
+        let made = Readable(findings.lazy.map { (original: $0.original, entity: $0.entity) })
+        marking?.readable = made
+        return made
+    }
+
+    /// What `text`, typed by a person or written by an edit, holds that it
+    /// may not, read as a reader reads it (without hidden characters or
+    /// in-word markup, in any case, without accents, and decoded where it
+    /// decodes): one of the values `own` names (`.original`); another value
+    /// found or marked, whole, as a word of three letters or more (`.other`);
+    /// a word of a name, three letters or more (`.part`); or a name's words
+    /// joined as a handle, an email's local part or a number with other
+    /// separators, as the marks and the leak gate find them. Every caller holds the lock.
+    func held(_ text: String, own: [String], marks: Marks) -> Refusal? {
+        let reads = Self.readings(text)
+        let mine = Set(own.flatMap(Self.readings)).subtracting([""])
+        // Inside a word too, but a value of one or two letters only as a word of its own.
+        if reads.contains(where: { read in mine.contains { $0.count >= 3 ? read.contains($0) : Self.holds(read, $0) } }) { return .original }
+        let tokens = Set(reads.flatMap(Self.tokens))
+        func holds(_ word: String) -> Bool { word.allSatisfy { $0.isLetter || $0.isNumber } ? tokens.contains(word) : reads.contains { Self.holds($0, word) } }
+        let sets = [readable(), Readable(marks.entries.map { (original: $0.text, entity: $0.entity) })]
+        func whole(names: Bool) -> Refusal? {
+            for set in sets {
+                for other in set.originals where other.name == names && other.read.count >= 3 && !mine.contains(other.read) && holds(other.read) { return .other(other.written) }
+            }
+            return nil
+        }
+        if let refusal = whole(names: false) { return refusal }
+        for set in sets {
+            for word in set.words where holds(word.read) { return .part(word.written) }
+        }
+        // A name whole, however short its words ("Bo Li").
+        if let refusal = whole(names: true) { return refusal }
+        func source(_ name: String) -> Refusal { mine.contains(Self.readings(name).first ?? name) ? .original : .other(name) }
+        for set in sets {
+            for token in tokens.sorted() { if let name = set.joined[token] { return source(name) } }
+            for read in reads {
+                if let leak = set.gate.scan(read, suspects: false, isCancelled: { false }).leaks.first { return source(set.written[leak.source] ?? leak.source) }
+            }
+        }
+        return nil
+    }
+
+    /// Name particles, which are no one's name alone.
+    private static let particles: Set<String> = ["van", "von", "der", "den", "del", "della", "des", "dos", "das", "bin", "ibn"]
+
+    /// The words of a name worth refusing: three letters or more, each part
+    /// of a hyphenated one apart, and no title, suffix or particle.
+    static func nameWords(_ name: String) -> [String] {
+        name.split { $0.isWhitespace || $0 == "," || $0 == "-" }.map { String($0).trimmingCharacters(in: CharacterSet(charactersIn: ".")) }
+            .filter { word in
+                word.filter(\.isLetter).count >= 3 && word.allSatisfy { $0.isLetter || "'’.".contains($0) }
+                    && !People.isTitle(word) && !People.isSuffix(word) && !particles.contains(word.lowercased())
+            }
+    }
+
+    /// `text` as a reader reads it, folded: without hidden or formatting
+    /// characters or in-word markup, then with a plus read as a space, and
+    /// percent-decoded where it decodes. Each reading once.
+    static func readings(_ text: String) -> [String] {
+        func plain(_ value: String) -> String {
+            String(String.UnicodeScalarView(Visible.plain(value).unicodeScalars.filter { $0.properties.generalCategory != .format }))
+        }
+        let shown = plain(text)
+        var reads = [shown]
+        if shown.contains("+") { reads.append(shown.replacingOccurrences(of: "+", with: " ")) }
+        if shown.contains("%"), let decoded = reads.last?.removingPercentEncoding { reads.append(plain(decoded)) }
+        var seen: Set<String> = []
+        return reads.map(folded).filter { seen.insert($0).inserted }
+    }
+
+    /// Folded for comparing what a person types: in any case, without accents, and full-width letters as their own.
+    static func folded(_ value: String) -> String { value.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: locale) }
+
+    /// The runs of letters and digits in `text`.
+    static func tokens(_ text: String) -> [String] {
+        text.split { !($0.isLetter || $0.isNumber) }.map(String.init)
+    }
+
+    /// A stand-in no original is, of the same shape: each letter an "x",
+    /// each digit another. The leak gate learns a value's variants from it.
+    static func placeholder(_ value: String) -> String {
+        String(value.map { $0.isLetter ? "x" : $0.isNumber ? ($0 == "1" ? "2" : "1") : $0 })
     }
 
     /// Whether `text` holds `word` as a whole word: no letter or digit right before or after it.
@@ -339,18 +580,37 @@ extension ScrubResult {
         return revisedFindings + byHand
     }
 
-    /// Why `typed` may not replace `findings`' stand-ins, or nil when it may.
+    /// Why `typed` may not replace `findings`' stand-ins on top of this
+    /// result's edits, or nil when it may (see `editing`).
     public func refusal(_ typed: String, for findings: [Finding]) -> Refusal? {
-        review?.refusal(typed, for: findings, marks: marks) ?? (typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .empty : nil)
+        do {
+            _ = try editing(findings, kind: nil, replacement: typed, choices: choices, marks: marks, edits: edits)
+            return nil
+        } catch {
+            return error as? Refusal
+        }
     }
 
     /// The choices, marks and edits that read `targets` as `kind` and write
     /// `replacement` in place of their stand-ins, either left nil to keep it
     /// as it is. Each is replaced again where it was left as written. A mark
     /// changes kind by being marked again, and keeps its typed replacement.
-    /// Throws the `Refusal` of an unsafe replacement, and changes nothing.
+    /// Throws the `Refusal` of an unsafe replacement, or of one, or a kind,
+    /// that cannot be written in every place it would stand, or whose
+    /// stand-ins in the value's other forms would hold an original; and
+    /// changes nothing.
     public func editing(_ targets: [Finding], kind: String?, replacement: String?, choices: Choices, marks: Marks, edits: Edits) throws -> (Choices, Marks, Edits) {
-        if let replacement, let refusal = refusal(replacement, for: targets) { throw refusal }
+        if let replacement {
+            if let review, let refusal = review.refusal(replacement, for: targets, marks: marks) { throw refusal }
+            if review == nil, replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw Refusal.empty }
+        }
+        let made = edited(targets, kind: kind, replacement: replacement, choices: choices, marks: marks, edits: edits)
+        if let review, let refusal = try review.refusal(writing: made.2, marks: made.1, over: edits, marks: marks, typedFor: replacement.map { _ in targets.map(\.original) }) { throw refusal }
+        return made
+    }
+
+    /// `editing` without its checks.
+    private func edited(_ targets: [Finding], kind: String?, replacement: String?, choices: Choices, marks: Marks, edits: Edits) -> (Choices, Marks, Edits) {
         var choices = choices, marks = marks, edits = edits
         for target in targets {
             if target.id < 0 {

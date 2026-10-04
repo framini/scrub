@@ -284,7 +284,10 @@ struct ValueEditor: View {
                 Spacer(minLength: 8)
                 Menu {
                     ForEach(Self.kinds(including: draft.initialKind), id: \.self) { kind in
-                        Button(Copy.kind(kind)) { model.draft?.kind = kind }
+                        Button(Copy.kind(kind)) {
+                            model.draft?.kind = kind
+                            model.draft?.refusal = nil
+                        }
                     }
                 } label: {
                     Text(Copy.kind(draft.kind))
