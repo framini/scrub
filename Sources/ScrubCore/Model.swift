@@ -50,6 +50,8 @@ public struct ScrubResult: Sendable {
     var made: Choices?
     /// The values a person marked to replace, when there are any (see `Marks`).
     var marked: Marks?
+    /// The kinds and replacements a person changed, when there are any (see `Edits`).
+    var edited: Edits?
     public init(format: String, output: Data, preview: Preview, counts: [String: Int], unresolved: [Mark], neutralized: Int = 0) {
         self.format = format; self.output = output; self.preview = preview; self.counts = counts; self.unresolved = unresolved; self.neutralized = neutralized
     }

@@ -17,6 +17,8 @@ struct Finished {
     var choices = Choices()
     /// Values the person marked for Scrub to replace too; kept for this file only.
     var marks = Marks()
+    /// Kinds and replacements the person changed; kept for this file only, as the marks are.
+    var edits = Edits()
     var reviewed = false
     var needsReview: Bool { !reviewed && !result.uncertain.isEmpty }
     /// Whether anything of the result may leave the app yet: whole, as a
@@ -36,13 +38,42 @@ struct PreviewSelection {
 }
 
 /// One state of the person's own changes: what to leave, what they marked,
-/// whether the review was done, and what the change that made it was called
-/// (for the Edit menu). Undoing a review asks for it again before anything leaves.
+/// the kinds and replacements they changed, whether the review was done, and
+/// what the change that made it was called (for the Edit menu). Undoing a
+/// review asks for it again before anything leaves.
 struct Step {
     let choices: Choices
     let marks: Marks
+    var edits = Edits()
     var reviewed: Bool
     let name: String
+}
+
+/// The editor for one value: what it replaced, the kind it is read as and
+/// the stand-in written for it, each the person's to change before applying.
+struct Draft: Equatable {
+    enum Source { case preview, panel }
+    /// Every finding of the value, as Scrub made them, or the one mark.
+    let targets: [Finding]
+    let original: String
+    let places: Int
+    let byHand: Bool
+    let source: Source
+    let initialKind: String
+    let initialText: String
+    var kind: String
+    var text: String
+    /// Why the text typed was refused, shown beside it until it changes.
+    var refusal: Refusal?
+
+    var changed: Bool { kind != initialKind || text != initialText }
+}
+
+/// A value to find in the preview: scrolled to and shown, once per request.
+struct Reveal: Equatable {
+    let original: String
+    let standIn: String
+    let count: Int
 }
 
 /// What the last change did, said under the preview with the way back.
@@ -87,6 +118,22 @@ final class AppModel {
     private var history: [Step] = []
     private var position = 0
     private(set) var notice: Notice?
+    /// The editor open for one value, from a click on its stand-in or its row in the Values panel.
+    var draft: Draft?
+    /// The Values panel: every value, to find, filter and change, and which rows are selected.
+    private(set) var showingValues = false
+    var valueSearch = ""
+    /// A kind as `Copy.kind` names it, or nil for every kind.
+    var valueKind: String?
+    var valueFilter = ValueFilter.all
+    private(set) var selectedValues: Set<Finding.ID> = []
+    private var selectionAnchor: Finding.ID?
+    /// Every value as the result writes it, one row each; built once per result.
+    private(set) var values: [ValueRow] = []
+    /// The value the preview should scroll to and show.
+    private(set) var reveal: Reveal?
+    /// A value whose places are being chosen one by one, from the Values panel.
+    var placing: Finding?
     /// Copy or Save asked for while the result is being written again; run once it is.
     private var afterRewrite: Shortcut?
     private var rewrites = 0
@@ -232,26 +279,219 @@ final class AppModel {
         let next = afterReview
         afterReview = nil
         // A review that changes nothing is no change to undo; it is done all the same.
-        if choices != latest.choices { record(Step(choices: choices, marks: latest.marks, reviewed: true, name: "Review Choices")) } else { history[position].reviewed = true }
+        if choices != latest.choices { record(Step(choices: choices, marks: latest.marks, edits: latest.edits, reviewed: true, name: "Review Choices")) } else { history[position].reviewed = true }
         notice = nil
         rewrite(history[position], then: next)
     }
 
-    /// Reads what a selection in the preview stands on; nil clears it.
+    /// Reads what a selection in the preview stands on; nil clears it. A
+    /// click on one value's stand-in opens its editor.
     func select(_ selection: PreviewSelection?) {
         guard case .finished(let done) = state, let selection else {
             pick = Pick()
+            if draft?.source == .preview { draft = nil }
             return
         }
         pick = done.result.pick(in: selection.text, marks: selection.marks, range: selection.range)
         if !pick.isEmpty { notice = nil }
         if let first = pick.missed.first { markKind = Marks.guess(first, key: selection.key) }
+        draft = Self.draft(for: pick, in: done)
+    }
+
+    /// The editor for what `pick` stands on, when that is one value's stand-in.
+    private static func draft(for pick: Pick, in done: Finished) -> Draft? {
+        guard pick.missed.isEmpty, !pick.isEmpty, ResultView.originals(of: pick).count == 1 else { return nil }
+        if let first = pick.replaced.first {
+            let shown = done.result.revised(first)
+            return Draft(targets: pick.replaced, original: first.original, places: pick.replaced.reduce(0) { $0 + $1.places.count }, byHand: false, source: .preview,
+                         initialKind: shown.entity, initialText: shown.standIn, kind: shown.entity, text: shown.standIn)
+        }
+        guard let entry = pick.marked.first, let mine = done.result.byHand.first(where: { $0.original == entry.text && $0.entity == entry.entity }) else { return nil }
+        return draft(for: mine, source: .preview)
+    }
+
+    private static func draft(for finding: Finding, source: Draft.Source) -> Draft {
+        Draft(targets: [finding], original: finding.original, places: finding.places.count, byHand: finding.id < 0, source: source,
+              initialKind: finding.entity, initialText: finding.standIn, kind: finding.entity, text: finding.standIn)
+    }
+
+    /// Esc in the editor: closes it and changes nothing.
+    func cancelDraft() {
+        guard let draft else { return }
+        self.draft = nil
+        if draft.source == .preview { pick = Pick() }
+    }
+
+    /// ⏎ in the editor: reads the value as the kind chosen and writes the
+    /// replacement typed, everywhere it stands. A replacement that is unsafe
+    /// is refused, with why, and nothing is written.
+    func applyDraft() {
+        guard case .finished(let done) = state, var draft, let latest, !applyingReview else { return }
+        guard draft.changed else { return cancelDraft() }
+        let kind = draft.kind != draft.initialKind ? draft.kind : nil
+        let typed = draft.text != draft.initialText ? draft.text : nil
+        let edited: (Choices, Marks, Edits)
+        do {
+            edited = try done.result.editing(draft.targets, kind: kind, replacement: typed, choices: latest.choices, marks: latest.marks, edits: latest.edits)
+        } catch {
+            draft.refusal = error as? Refusal ?? .empty
+            self.draft = draft
+            return
+        }
+        let (choices, marks, edits) = edited
+        let (original, places) = (draft.original, draft.places)
+        record(Step(choices: choices, marks: marks, edits: edits, reviewed: latest.reviewed, name: Copy.editStep(original, kind: kind, replacement: typed)))
+        self.draft = nil
+        rewrite(history[position]) { _ in Notice(text: Copy.edited(original, kind: kind, replacement: typed, places: places), undone: false) }
+    }
+
+    // MARK: Values panel
+
+    /// ⇧⌘L: shows or hides the Values panel.
+    func toggleValues() {
+        guard case .finished = state else { return }
+        showingValues.toggle()
+        if !showingValues { clearValueSelection() }
+    }
+
+    /// Shows the Values panel with only `filter`'s rows, as the footer's count of your changes does.
+    func showValues(_ filter: ValueFilter) {
+        guard case .finished = state else { return }
+        valueFilter = filter
+        showingValues = true
+    }
+
+    private func clearValueSelection() {
+        selectedValues = []
+        selectionAnchor = nil
+        if draft?.source == .panel { draft = nil }
+    }
+
+    /// The rows the search, kind and status filters leave, in the order Scrub met them.
+    var visibleValues: [ValueRow] {
+        let query = ValueRow.fold(valueSearch.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !query.isEmpty || valueKind != nil || valueFilter != .all else { return values }
+        return values.filter { row in
+            (valueKind == nil || Copy.kind(row.finding.entity) == valueKind) && valueFilter.admits(row) && (query.isEmpty || row.search.contains(query))
+        }
+    }
+
+    /// The kinds the rows hold, as `Copy.kind` names them, for the kind filter.
+    var valueKinds: [String] {
+        var seen: Set<String> = []
+        return values.map { Copy.kind($0.finding.entity) }.filter { seen.insert($0).inserted }.sorted()
+    }
+
+    /// A click on a row: selects it alone, or with ⌘ adds or takes it away,
+    /// or with ⇧ selects every row from the last one clicked. One row
+    /// selected opens its editor, and the preview shows it.
+    func selectValue(_ id: Finding.ID, toggling: Bool = false, extending: Bool = false) {
+        let shown = visibleValues
+        if extending, let anchor = selectionAnchor, let from = shown.firstIndex(where: { $0.id == anchor }), let to = shown.firstIndex(where: { $0.id == id }) {
+            selectedValues = Set(shown[min(from, to)...max(from, to)].map(\.id))
+        } else if toggling {
+            if selectedValues.contains(id) { selectedValues.remove(id) } else { selectedValues.insert(id) }
+            selectionAnchor = id
+        } else {
+            selectedValues = [id]
+            selectionAnchor = id
+        }
+        // Rows the filters hide stay unselected.
+        selectedValues.formIntersection(shown.map(\.id))
+        valuesSelected()
+    }
+
+    /// Selects every row the filters leave.
+    func selectAllValues() {
+        selectedValues = Set(visibleValues.map(\.id))
+        valuesSelected()
+    }
+
+    private func valuesSelected() {
+        guard selectedValues.count == 1, let id = selectedValues.first, let row = values.first(where: { $0.id == id }) else {
+            if draft?.source == .panel || selectedValues.count > 1 { draft = nil }
+            return
+        }
+        notice = nil
+        pick = Pick()
+        draft = Self.draft(for: row.finding, source: .panel)
+        reveal = Reveal(original: row.finding.original, standIn: row.finding.standIn, count: (reveal?.count ?? 0) + 1)
+    }
+
+    /// The selected rows' values, as Scrub made them (a mark as the person made it).
+    private func targets(_ ids: Set<Finding.ID>) -> [Finding] {
+        guard case .finished(let done) = state else { return [] }
+        let made = done.result.findings
+        return values.filter { ids.contains($0.id) }.map { row in row.id >= 0 && made.indices.contains(row.id) ? made[row.id] : row.finding }
+    }
+
+    /// Reads the selected values as `kind`, each with a new stand-in of that kind.
+    func changeKind(of ids: Set<Finding.ID>, to kind: String) {
+        guard case .finished(let done) = state, let latest, !applyingReview else { return }
+        let chosen = targets(ids).filter { done.result.revised($0).entity != kind }
+        guard !chosen.isEmpty else { return }
+        guard let edited = try? done.result.editing(chosen, kind: kind, replacement: nil, choices: latest.choices, marks: latest.marks, edits: latest.edits) else { return }
+        let (choices, marks, edits) = edited
+        let originals = chosen.map(\.original), places = chosen.reduce(0) { $0 + $1.places.count }
+        record(Step(choices: choices, marks: marks, edits: edits, reviewed: latest.reviewed, name: Copy.editStep(originals, kind: kind)))
+        rewrite(history[position]) { _ in Notice(text: Copy.changed(originals, to: kind, places: places), undone: false) }
+    }
+
+    /// Leaves the selected values as written everywhere, and takes the selected marks off.
+    func keepValues(_ ids: Set<Finding.ID>) {
+        guard case .finished(let done) = state, let latest, !applyingReview else { return }
+        let chosen = targets(ids)
+        guard !chosen.isEmpty else { return }
+        let (choices, marks) = done.result.keeping(chosen, choices: latest.choices, marks: latest.marks)
+        let originals = chosen.map(\.original), places = chosen.reduce(0) { $0 + $1.places.count }
+        let unmarking = chosen.allSatisfy { $0.id < 0 }
+        record(Step(choices: choices, marks: marks, edits: latest.edits, reviewed: latest.reviewed, name: unmarking ? "Remove Mark on \(Copy.quoted(originals))" : Copy.keepOriginal(originals)))
+        rewrite(history[position]) { _ in Notice(text: Copy.kept(originals, places: places, unmarking: unmarking), undone: false) }
+    }
+
+    /// Replaces the selected values again wherever they were left as written.
+    func replaceValuesAgain(_ ids: Set<Finding.ID>) {
+        guard case .finished = state, let latest, !applyingReview else { return }
+        let chosen = targets(ids)
+        var choices = latest.choices
+        for finding in chosen { choices.set(finding, leave: false) }
+        guard choices != latest.choices else { return }
+        let originals = chosen.map(\.original)
+        let places = chosen.reduce(0) { total, finding in total + finding.places.filter { latest.choices.leaves($0, of: finding) }.count }
+        record(Step(choices: choices, marks: latest.marks, edits: latest.edits, reviewed: latest.reviewed, name: Copy.replaceAgainStep(originals)))
+        rewrite(history[position]) { _ in Notice(text: Copy.replacedAgain(originals, places: places), undone: false) }
+    }
+
+    /// Opens the choice of one value's places, one by one.
+    func choosePlaces(_ id: Finding.ID) {
+        placing = values.first { $0.id == id }?.finding
+    }
+
+    /// Writes the choices made place by place for one value.
+    func finishPlaces(_ choices: Choices) {
+        guard let placing, let latest else { return }
+        self.placing = nil
+        guard choices != latest.choices else { return }
+        record(Step(choices: choices, marks: latest.marks, edits: latest.edits, reviewed: latest.reviewed, name: Copy.placesStep(placing.original)))
+        rewrite(history[position]) { _ in Notice(text: Copy.chosePlaces(placing.original), undone: false) }
     }
 
     /// ⌘E: replaces what the selection holds that Scrub missed, or else keeps
     /// the originals of the stand-ins it is on.
     func applySelection() {
         if !pick.missed.isEmpty { mark(pick.missed, as: markKind) } else if !pick.isEmpty { keepOriginal() }
+        else if showingValues, !selectedValues.isEmpty { keepValues(selectedValues) }
+    }
+
+    /// The editor's Keep original, or Remove mark for the person's own.
+    func keepDraft() {
+        guard let draft else { return }
+        if draft.source == .preview, !pick.isEmpty { keepOriginal() } else { keepValues(Set(draft.targets.map(\.id))) }
+    }
+
+    var isFinished: Bool {
+        if case .finished = state { return true }
+        return false
     }
 
     /// Replaces `texts` as `entity` everywhere they and their variants are written.
@@ -259,7 +499,7 @@ final class AppModel {
         guard case .finished(let done) = state, !texts.isEmpty, let latest else { return }
         let (choices, marks) = done.result.marking(texts, as: entity, choices: latest.choices, marks: latest.marks)
         let keys = Set(texts.map { $0.lowercased() })
-        record(Step(choices: choices, marks: marks, reviewed: latest.reviewed, name: "Replace \(Copy.quoted(texts))"))
+        record(Step(choices: choices, marks: marks, edits: latest.edits, reviewed: latest.reviewed, name: "Replace \(Copy.quoted(texts))"))
         rewrite(history[position]) { revised in
             let places = revised.byHand.filter { keys.contains($0.original.lowercased()) }.reduce(0) { $0 + $1.places.count }
             return Notice(text: Copy.replaced(texts, places: places, as: entity), undone: false)
@@ -276,7 +516,7 @@ final class AppModel {
         let places = (picked.replaced + done.result.byHand.filter { unmarked.contains($0.original) }).reduce(0) { $0 + $1.places.count }
         let originals = ResultView.originals(of: picked)
         let unmarking = picked.replaced.isEmpty
-        record(Step(choices: choices, marks: marks, reviewed: latest.reviewed, name: unmarking ? "Remove Mark on \(Copy.quoted(originals))" : Copy.keepOriginal(originals)))
+        record(Step(choices: choices, marks: marks, edits: latest.edits, reviewed: latest.reviewed, name: unmarking ? "Remove Mark on \(Copy.quoted(originals))" : Copy.keepOriginal(originals)))
         rewrite(history[position]) { _ in Notice(text: Copy.kept(originals, places: places, unmarking: unmarking), undone: false) }
     }
 
@@ -317,17 +557,20 @@ final class AppModel {
     /// rewrite replaces one still running.
     private func rewrite(_ step: Step, then next: Shortcut? = nil, notice told: (@MainActor @Sendable (ScrubResult) -> Notice?)? = nil) {
         guard case .finished(let done) = state else { return }
-        let (choices, marks, reviewed) = (step.choices, step.marks, step.reviewed)
+        let (choices, marks, edits, reviewed) = (step.choices, step.marks, step.edits, step.reviewed)
         let ticket = generation
         let result = done.result
         rewrites += 1
         let mine = rewrites
         pick = Pick()
         notice = nil
+        draft = nil
         applyingReview = true
         work?.cancel()
         work = Task.detached(priority: .userInitiated) { [weak self] in
-            let outcome = Result { try result.applying(choices, marks: marks) }
+            let outcome = Result { try result.applying(choices, marks: marks, edits: edits) }
+            // Built here, off the main thread, so thousands of values never hold up the window.
+            let rows = (try? outcome.get()).map { ValueRow.rows(of: $0, choices: choices, edits: edits, reviewed: reviewed) }
             await MainActor.run {
                 guard let self, self.generation == ticket, self.rewrites == mine, case .finished(var current) = self.state else { return }
                 self.applyingReview = false
@@ -338,9 +581,16 @@ final class AppModel {
                     current.result = revised
                     current.choices = choices
                     current.marks = marks
+                    current.edits = edits
                     current.reviewed = reviewed
                     current.copied = false
                     self.state = .finished(current)
+                    self.values = rows ?? []
+                    // A row still selected alone opens again, as it now reads; a value marked again has a new row.
+                    self.selectedValues.formIntersection(self.values.map(\.id))
+                    if self.showingValues, self.selectedValues.count == 1, let id = self.selectedValues.first, let row = self.values.first(where: { $0.id == id }) {
+                        self.draft = Self.draft(for: row.finding, source: .panel)
+                    }
                     self.notice = told?(revised)
                     switch after {
                     case .copy: self.copy()
@@ -409,6 +659,16 @@ final class AppModel {
         history = []
         position = 0
         notice = nil
+        draft = nil
+        showingValues = false
+        valueSearch = ""
+        valueKind = nil
+        valueFilter = .all
+        selectedValues = []
+        selectionAnchor = nil
+        values = []
+        reveal = nil
+        placing = nil
     }
 
     private func fail(_ name: String, _ source: Source, _ code: String) {
@@ -431,11 +691,13 @@ final class AppModel {
                     }
                 }
             }
+            let rows = (try? outcome.get()).map { ValueRow.rows(of: $0, choices: $0.choices, edits: Edits(), reviewed: false) }
             await MainActor.run {
                 guard let self, self.generation == ticket else { return }
                 switch outcome {
                 case .success(let result):
                     self.state = .finished(Finished(name: name, source: source, result: result, choices: result.choices))
+                    self.values = rows ?? []
                     self.history = [Step(choices: result.choices, marks: Marks(), reviewed: false, name: "")]
                     self.position = 0
                     // The first selection in a large file then answers at once.

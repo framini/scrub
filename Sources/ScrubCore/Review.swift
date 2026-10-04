@@ -111,34 +111,39 @@ public struct Choices: Sendable, Equatable {
 /// back writes its original wherever its stand-in stood (or only in the
 /// places chosen), and every other stand-in stays as it was.
 final class Review: @unchecked Sendable {
-    private let values: [DocumentValue]
+    let values: [DocumentValue]
     private let counts: [String: Int]
     private let render: ([DocumentValue], [String: Int]) throws -> ScrubResult
     let findings: [Finding]
     /// For each place, by its id: the value and mark it is, or for a place
     /// left as written, the value and its index among the unresolved.
-    private let spots: [(value: Int, mark: Int, suspected: Bool)]
-    private let lock = NSLock()
+    let spots: [(value: Int, mark: Int, suspected: Bool)]
+    let lock = NSLock()
     private let records: [Int?]
     /// Values written as bare numbers (a JSON number), which only a number may replace.
-    private let numeric: Set<Int>
+    let numeric: Set<Int>
+    /// The people the scrub drew names for, and for each finding of a name,
+    /// or of an email, username or initials built from one, whose it is.
+    let people: PersonLinks
+    let personOf: [Finding.ID: Int]
     /// Mixed into every stand-in drawn for a mark: the scrub's seed when it
     /// had one, so the same scrub and marks write the same bytes.
     var salt: UInt64 = 0
     /// What marking reads, built once on first use (see `Marking`).
-    private var marking: Marking?
+    var marking: Marking?
 
     /// Secrets, keys and IDs are told apart by case; names, places and emails are not.
     private static let caseSensitive: Set<String> = ["SECRET", "ID_NUMBER", "CRYPTO", "US_DRIVER_LICENSE", "US_PASSPORT", "MEDICAL_LICENSE", "IBAN_CODE"]
     static func matchKey(_ text: String, entity: String) -> String { caseSensitive.contains(entity) ? text : text.lowercased() }
 
     /// `records` holds the record each value sits in, when the file has records.
-    init(values: [DocumentValue], counts: [String: Int], records: [Int?] = [], numeric: Set<Int> = [], render: @escaping ([DocumentValue], [String: Int]) throws -> ScrubResult) {
+    init(values: [DocumentValue], counts: [String: Int], records: [Int?] = [], people: PersonLinks = PersonLinks(), numeric: Set<Int> = [], render: @escaping ([DocumentValue], [String: Int]) throws -> ScrubResult) {
         self.values = values
         self.counts = counts
         self.render = render
         self.records = records
         self.numeric = numeric
+        self.people = people
         struct Group {
             let entity: String, original: String, standIn: String, suspected: Bool, doubt: Doubt?
             var places: [(spot: Int, record: Int?, confidence: Double, range: Range<Int>, value: Int, standIn: String?)] = []
@@ -172,6 +177,11 @@ final class Review: @unchecked Sendable {
             }
         }
         self.spots = spots
+        var owners: [Finding.ID: Int] = [:]
+        for (id, group) in groups.enumerated() where !people.isEmpty {
+            if let person = people.person(original: group.original, standIn: group.standIn) { owners[id] = person }
+        }
+        personOf = owners
         // Each value's text bridged once, not once a place.
         var bridged: [Int: NSString] = [:]
         func text(_ value: Int) -> NSString {
@@ -214,46 +224,74 @@ final class Review: @unchecked Sendable {
 
     /// The file with each place left as written or replaced as `choices` say,
     /// each value in `marks` replaced where it stands unless a choice leaves
-    /// it, and every other stand-in as it was.
-    func applying(_ choices: Choices, marks: Marks = Marks()) throws -> ScrubResult {
+    /// it, each finding `edits` revise written with its new stand-in and kind,
+    /// and every other stand-in as it was.
+    func applying(_ choices: Choices, marks: Marks = Marks(), edits: Edits = Edits()) throws -> ScrubResult {
         lock.lock()
         defer { lock.unlock() }
         var revised = values
         var changed: [String: Int] = [:]
         var reverts: [Int: Set<Int>] = [:], applies: [Int: Set<Int>] = [:]
+        let revisions = try self.revisions(edits)
+        // Each place of a revised finding that stays replaced, by value and the
+        // index of its stand-in (or of its suspect, where one is replaced).
+        var rewrites: [Int: [Int: Revision]] = [:], appliedAs: [Int: [Int: Revision]] = [:]
         for finding in findings {
-            for place in finding.places where choices.leaves(place, of: finding) != finding.suspected {
-                let spot = spots[place.id]
-                if spot.suspected { applies[spot.value, default: []].insert(spot.mark) } else { reverts[spot.value, default: []].insert(spot.mark) }
+            let revision = revisions[finding.id]
+            for place in finding.places {
+                let spot = spots[place.id], leaves = choices.leaves(place, of: finding)
+                if leaves != finding.suspected {
+                    if spot.suspected { applies[spot.value, default: []].insert(spot.mark) } else { reverts[spot.value, default: []].insert(spot.mark) }
+                }
+                guard let revision, !leaves else { continue }
+                if spot.suspected { appliedAs[spot.value, default: [:]][spot.mark] = revision } else { rewrites[spot.value, default: [:]][spot.mark] = revision }
             }
         }
         // Marked by hand: each place a choice does not leave.
         var added: [Int: [(range: Range<Int>, value: String, entity: String, original: String)]] = [:]
-        for (entry, places) in try placements(marks) {
+        for (entry, places) in try placements(marks, edits: edits) {
             let finding = Self.findingID(entry)
             for (index, place) in places where !(choices.places[Self.placeID(entry, index)] ?? choices.left.contains(finding)) {
                 let original = (values[place.value].text as NSString).substring(with: NSRange(location: place.range.lowerBound, length: place.range.count))
                 added[place.value, default: []].append((place.range, place.written, place.entity, original))
             }
         }
-        for valueIndex in Set(reverts.keys).union(applies.keys).union(added.keys).sorted() {
+        for valueIndex in Set(reverts.keys).union(applies.keys).union(added.keys).union(rewrites.keys).sorted() {
             try Scrubber.checkCancellation()
             let value = values[valueIndex]
             let marks = value.marks, reverted = reverts[valueIndex] ?? [], applied = applies[valueIndex] ?? [], manual = added[valueIndex] ?? []
-            // Each edit, in order: a stand-in taken back to its original, a suspect given its stand-in, or a value marked by hand.
+            // A revised stand-in, written as its place writes one; none where it cannot be (a word for a JSON number).
+            var redrawn: [Int: (written: String, revision: Revision)] = [:], suspects: [Int: (written: String, revision: Revision)] = [:]
+            for (index, revision) in rewrites[valueIndex] ?? [:] {
+                if let written = written(revision, over: TextRanges.substring(value.text, marks[index].range), value: valueIndex, range: marks[index].range) { redrawn[index] = (written, revision) }
+            }
+            for (index, revision) in appliedAs[valueIndex] ?? [:] where applied.contains(index) {
+                let range = value.unresolved[index].range
+                if let written = written(revision, over: TextRanges.substring(value.text, range), value: valueIndex, range: range) { suspects[index] = (written, revision) }
+            }
+            // Each edit, in order: a stand-in taken back to its original, a suspect given its stand-in,
+            // a stand-in written again as a person revised it, or a value marked by hand.
             var edits: [(range: Range<Int>, value: String, made: Mark?)] = reverted.map { (marks[$0].range, marks[$0].original ?? "", nil) }
             edits += applied.map { index in
-                let suspect = value.unresolved[index]
-                return (suspect.range, value.proposals[index], Mark(range: suspect.range, entity: suspect.entity, original: suspect.original, confidence: suspect.confidence, doubt: suspect.doubt))
+                let suspect = value.unresolved[index], revised = suspects[index]
+                return (suspect.range, revised?.written ?? value.proposals[index], Mark(range: suspect.range, entity: revised?.revision.entity ?? suspect.entity, original: suspect.original, confidence: suspect.confidence, doubt: suspect.doubt))
+            }
+            edits += redrawn.map { index, made in
+                let old = marks[index]
+                return (old.range, made.written, Mark(range: old.range, entity: made.revision.entity, original: old.original, confidence: old.confidence, doubt: old.doubt))
             }
             edits += manual.map { ($0.range, $0.value, Mark(range: $0.range, entity: $0.entity, original: $0.original, confidence: 1, byHand: true)) }
             edits.sort { $0.range.lowerBound < $1.range.lowerBound }
             for index in reverted { changed[marks[index].entity, default: 0] -= 1 }
-            for index in applied { changed[value.unresolved[index].entity, default: 0] += 1 }
+            for index in applied { changed[suspects[index]?.revision.entity ?? value.unresolved[index].entity, default: 0] += 1 }
+            for (index, made) in redrawn where made.revision.entity != marks[index].entity {
+                changed[marks[index].entity, default: 0] -= 1
+                changed[made.revision.entity, default: 0] += 1
+            }
             for place in manual { changed[place.entity, default: 0] += 1 }
             let plain = edits.map { (range: $0.range, value: $0.value) }
             let (text, placed) = TextRanges.apply(plain, to: value.text)
-            var kept = TextRanges.shift(marks.indices.filter { !reverted.contains($0) }.map { marks[$0] }, by: plain)
+            var kept = TextRanges.shift(marks.indices.filter { !reverted.contains($0) && redrawn[$0] == nil }.map { marks[$0] }, by: plain)
             for (range, edit) in zip(placed, edits) {
                 if let made = edit.made { kept.append(made.moved(to: range)) }
             }
@@ -269,6 +307,7 @@ final class Review: @unchecked Sendable {
         result.review = self
         result.made = choices
         result.marked = marks.isEmpty ? nil : marks
+        result.edited = edits.isEmpty ? nil : edits
         return result
     }
 }
@@ -313,11 +352,18 @@ extension Review {
         let originals: Set<String>
         /// The stand-ins and suspects of each value, in order, which a mark never overlaps.
         var taken: [Int: [Range<Int>]] = [:]
-        var located: [Marks.Entry: Located] = [:]
+        /// Where each mark stands, by the mark and the replacement typed for it, if any.
+        var located: [Locating: Located] = [:]
         /// The findings' values and parts, read as the leak gate reads them.
         var known: LeakGate?
         /// The last marks shown as findings, which every redraw of the result asks for.
-        var shown: (marks: Marks, findings: [Finding])?
+        var shown: (marks: Marks, edits: Edits, findings: [Finding])?
+        /// The last edits read as revisions, which every redraw and pick asks for (see `revisions`).
+        var revised: (edits: Edits, revisions: [Finding.ID: Revision], byStandIn: [String: [Finding.ID]])?
+        /// The findings of each value as it reads (see `sameValues`).
+        var sameValues: [String: [Finding.ID]]?
+        /// Every original found, folded for comparing, each with how it is written (see `refusal`).
+        var folded: [(folded: String, written: String)]?
         /// The values as they read where that differs from how they are written, built on first use.
         var readings: Readings?
         /// Each value's link parts, read once a mark stands in the value.
@@ -342,6 +388,11 @@ extension Review {
         let part: URLPart?
     }
     typealias Place = (value: Int, range: Range<Int>, written: String, entity: String)
+    /// A mark, and the replacement typed for it, if any: what a mark's places are found by.
+    struct Locating: Hashable {
+        let entry: Marks.Entry
+        let typed: String?
+    }
     /// Where one marked value stands, and the stand-in it takes.
     struct Located {
         let standIn: String
@@ -363,7 +414,7 @@ extension Review {
     }
 
     /// The marking state, built on first use. Every caller holds the lock.
-    private func prepared() throws -> Marking {
+    func prepared() throws -> Marking {
         if let marking { return marking }
         let joined = NSMutableString()
         var starts: [Int] = []
@@ -395,7 +446,7 @@ extension Review {
     }
 
     /// The parts of the links in a value, read once. Every caller holds the lock.
-    private func links(_ value: Int) -> [URLs.Component] {
+    func links(_ value: Int) -> [URLs.Component] {
         if let known = marking?.links[value] { return known }
         let found = URLs.components(in: values[value].text)
         marking?.links[value] = found
@@ -511,29 +562,40 @@ extension Review {
         return found
     }
 
-    /// The findings and marks whose stand-in is `standIn`, as written anywhere:
-    /// for a finding, every finding of the same original.
-    func owners(ofStandIn standIn: String, marks: Marks) -> (findings: [Finding], entries: [Marks.Entry]) {
+    /// The findings and marks whose stand-in is `standIn`, as written anywhere
+    /// once `edits` revise them: for a finding, every finding of the same original.
+    func owners(ofStandIn standIn: String, marks: Marks, edits: Edits = Edits()) -> (findings: [Finding], entries: [Marks.Entry]) {
         lock.lock()
         defer { lock.unlock() }
-        guard let marking = try? prepared() else { return ([], []) }
+        guard let marking = try? prepared(), let revisions = try? revisions(edits) else { return ([], []) }
         var owned: [Finding] = []
-        for index in marking.byStandIn[standIn.lowercased()] ?? [] {
+        let lowered = standIn.lowercased()
+        // A revised finding is no longer written with its stand-in as made.
+        let made = (marking.byStandIn[lowered] ?? []).filter { revisions[$0] == nil }
+        for index in made + (self.marking?.revised?.byStandIn[lowered] ?? []) {
             let finding = findings[index]
-            guard Self.matchKey(finding.standIn, entity: finding.entity) == Self.matchKey(standIn, entity: finding.entity) else { continue }
-            let key = Self.matchKey(finding.original, entity: finding.entity)
-            for same in findings where !owned.contains(where: { $0.id == same.id }) && Self.matchKey(same.original, entity: same.entity) == key { owned.append(same) }
+            let current = revisions[index]?.standIn ?? finding.standIn
+            guard Self.matchKey(current, entity: finding.entity) == Self.matchKey(standIn, entity: finding.entity) else { continue }
+            // The same value as it reads, plainly or inside a link, whatever kind it was read as.
+            let read = Self.read(finding.original), key = Self.matchKey(read, entity: finding.entity)
+            let groups = sameValues()
+            for entity in Set(findings.map(\.entity)) {
+                for id in groups[Self.matchKey(read, entity: entity)] ?? [] where findings[id].entity == entity && !owned.contains(where: { $0.id == id }) {
+                    if Self.matchKey(Self.read(findings[id].original), entity: entity) == key { owned.append(findings[id]) }
+                }
+            }
         }
-        let entries = marks.entries.filter { entry in (try? locate(entry))?.written.contains(standIn.lowercased()) == true }
+        let entries = marks.entries.filter { entry in (try? locate(entry, as: edits.replacements[Self.findingID(entry)]))?.written.contains(lowered) == true }
         return (owned, entries)
     }
 
-    /// Each marked value as a finding, with the places it takes.
-    func marked(_ marks: Marks) -> [Finding] {
+    /// Each marked value as a finding, with the places it takes and the
+    /// stand-in `edits` give it.
+    func marked(_ marks: Marks, edits: Edits = Edits()) -> [Finding] {
         lock.lock()
         defer { lock.unlock() }
-        if let shown = marking?.shown, shown.marks == marks { return shown.findings }
-        guard let placed = try? placements(marks) else { return [] }
+        if let shown = marking?.shown, shown.marks == marks, shown.edits == edits { return shown.findings }
+        guard let placed = try? placements(marks, edits: edits) else { return [] }
         var bridged: [Int: NSString] = [:]
         let made = placed.map { entry, places in
             var excerpts: [Excerpt] = []
@@ -544,22 +606,23 @@ extension Review {
                 if excerpts.count < 3, !excerpts.contains(excerpt) { excerpts.append(excerpt) }
                 return Occurrence(id: Self.placeID(entry, index), record: records.indices.contains(place.value) ? records[place.value] : nil, confidence: 1, excerpt: excerpt)
             }
-            let standIn = (try? locate(entry))?.standIn ?? ""
+            let standIn = (try? locate(entry, as: edits.replacements[Self.findingID(entry)]))?.standIn ?? ""
             return Finding(id: Self.findingID(entry), entity: entry.entity, original: entry.text, standIn: standIn, confidence: 1, places: occurrences, excerpts: excerpts, suspected: false, doubt: nil)
         }
-        marking?.shown = (marks, made)
+        marking?.shown = (marks, edits, made)
         return made
     }
 
     /// Each mark's places with their index among all it found, without those
     /// an earlier mark took: marks apply in the order made, so the same marks
-    /// place the same way whatever choices are made.
-    private func placements(_ marks: Marks) throws -> [(Marks.Entry, [(Int, Place)])] {
+    /// place the same way whatever choices are made. A mark `edits` give a
+    /// typed replacement is written with it.
+    private func placements(_ marks: Marks, edits: Edits = Edits()) throws -> [(Marks.Entry, [(Int, Place)])] {
         guard !marks.isEmpty else { return [] }
         var claimed: [Int: [Range<Int>]] = [:]
         var result: [(Marks.Entry, [(Int, Place)])] = []
         for entry in marks.entries {
-            let located = try locate(entry)
+            let located = try locate(entry, as: edits.replacements[Self.findingID(entry)])
             let kept = located.places.enumerated().filter { _, place in !(claimed[place.value] ?? []).contains { $0.overlaps(place.range) } }
             for (_, place) in kept { claimed[place.value, default: []].append(place.range) }
             result.append((entry, kept.map { ($0.offset, $0.element) }))
@@ -571,11 +634,13 @@ extension Review {
     /// case, a name with its initial or last name first, and what the leak
     /// gate reads as written from it (a name's part alone or inside a handle,
     /// an email's local part, a number with other separators). None overlaps
-    /// a stand-in or a suspect, which their own choices decide.
-    private func locate(_ entry: Marks.Entry) throws -> Located {
+    /// a stand-in or a suspect, which their own choices decide. A replacement
+    /// typed for the mark is its stand-in, and its variants follow it.
+    private func locate(_ entry: Marks.Entry, as typed: String? = nil) throws -> Located {
         let marking = try prepared()
-        if let known = marking.located[entry] { return known }
-        let standIn = try self.standIn(for: entry.text, entity: entry.entity)
+        let key = Locating(entry: entry, typed: typed)
+        if let known = marking.located[key] { return known }
+        let standIn = try typed ?? self.standIn(for: entry.text, entity: entry.entity)
         let joined = marking.joined
         let caseless = !Self.caseSensitive.contains(entry.entity)
         var found: [(range: Range<Int>, written: String, entity: String, encoded: Bool)] = []
@@ -647,11 +712,11 @@ extension Review {
             end = item.range.upperBound
         }
         let located = Located(standIn: standIn, places: places, written: Set([standIn.lowercased()] + places.map { $0.written.lowercased() }))
-        self.marking?.located[entry] = located
+        self.marking?.located[key] = located
         return located
     }
 
-    private static let names: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME"]
+    static let names: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME"]
 
     /// A marked value and the ways a person's name is also written, each with
     /// its stand-in written the same way. The leak gate hunts a name's handles
@@ -677,7 +742,9 @@ extension Review {
     /// value it is part of, is kept, so a marked surname matches the full
     /// name's stand-in. Otherwise one is drawn as any other, from the scrub's
     /// salt and the value alone, so marks made in any order draw the same.
-    private func standIn(for text: String, entity: String) throws -> String {
+    /// `fresh` for a value changed to a new kind: its own stand-in as the old
+    /// kind is no part of it, and it draws one of the new kind.
+    func standIn(for text: String, entity: String, fresh: Bool = false) throws -> String {
         let key = Self.matchKey(text, entity: entity)
         func kin(_ other: String) -> Bool { other == entity || Self.names.contains(other) && Self.names.contains(entity) }
         if let same = findings.first(where: { kin($0.entity) && Self.matchKey($0.original, entity: $0.entity) == key && $0.standIn != $0.original }) {
@@ -689,7 +756,7 @@ extension Review {
             marking?.known = gate
         }
         let length = (text as NSString).length
-        if let leak = marking?.known?.scan(text, suspects: false).leaks.first(where: { $0.range == 0..<length }), let fake = leak.fake { return fake }
+        if let leak = marking?.known?.scan(text, suspects: false).leaks.first(where: { $0.range == 0..<length && !(fresh && Self.matchKey($0.source, entity: entity) == key) }), let fake = leak.fake { return fake }
         // A part of a name too short or too common for the gate ("Rose"): the same part of the name's stand-in.
         if Self.names.contains(entity), !text.contains(where: \.isWhitespace) {
             for finding in findings where Self.names.contains(finding.entity) && !finding.suspected {

@@ -61,7 +61,11 @@ final class StandIns {
     /// Kinds that are read off another value, or that others are read off:
     /// their stand-ins depend on where they sit (see `scopes`).
     static func anchored(_ entity: String) -> Bool { derived.contains(entity) || numbered.contains(entity) || entity == "DATE_OF_BIRTH" }
+    /// The person the last stand-in was drawn from: a name, or an email,
+    /// username or initials built from one. Nil for anything else.
+    private(set) var owner: Persona?
     func replace(_ entity: String, _ original: String, persona: Persona? = nil, address: AddressParts? = nil) -> String {
+        owner = nil
         let fake = drawn(entity, original, persona: persona, address: address)
         noteSource(entity, original, fake)
         // "ODALYS@KESTREL.EXAMPLE" is the same address as in lowercase, and keeps its capitals.
@@ -1026,15 +1030,31 @@ final class StandIns {
                 let parts = original.split(separator: separator)
                 if parts.count == 2 {
                     let person = people.registerFull(parts.joined(separator: " ")).0
+                    owner = person
                     let handle = person.first + String(separator) + person.last
                     return original == original.lowercased() ? handle.lowercased() : handle
                 }
             }
-            return persona?.full ?? people.name(for: original)
-        case "FIRST_NAME": return (persona ?? people.register(original, nil)).first
-        case "LAST_NAME": return (persona ?? people.register(nil, original)).last
+            if let persona {
+                owner = persona
+                return persona.full
+            }
+            let name = people.name(for: original)
+            owner = people.lastNamed
+            return name
+        case "FIRST_NAME":
+            let person = persona ?? people.register(original, nil)
+            owner = person
+            return person.first
+        case "LAST_NAME":
+            let person = persona ?? people.register(nil, original)
+            owner = person
+            return person.last
         case "EMAIL_ADDRESS":
-            if let owner = persona ?? people.find(email: original), original.contains("@") { return people.email(for: owner, original: original) }
+            if let owner = persona ?? people.find(email: original), original.contains("@") {
+                self.owner = owner
+                return people.email(for: owner, original: original)
+            }
             if let local = handleKey(String(original.prefix { $0 != "@" })), let handle = handles[local], original.contains("@") {
                 return handle.lowercased() + "@" + (pick(Names.emailDomains) ?? "example.com")
             }
@@ -1051,6 +1071,7 @@ final class StandIns {
             if let parsed = AddressBlock.read(original), !Self.english(parsed.country) { return block(original, parsed) }
             return street(like: original)
         case "INITIALS":
+            owner = persona
             let letters = persona.map { [$0.first.first, $0.last.first].compactMap { $0 } } ?? []
             let count = original.filter(\.isLetter).count
             var drawn = (count == letters.count ? letters : count == 3 && letters.count == 2 ? [letters[0], pick(Array("ABCDEFGHJKLMNPRSTW")) ?? "A", letters[1]] : (0..<count).map { _ in pick(Array("ABCDEFGHJKLMNPRSTW")) ?? "A" }).makeIterator()
@@ -1081,7 +1102,10 @@ final class StandIns {
         case "USERNAME":
             // "@odalysf" keeps its at sign.
             if original.hasPrefix("@"), original.count > 1 { return "@" + make(entity, String(original.dropFirst()), persona, place) }
-            if let owner = persona ?? people.find(handle: original), let handle = people.handle(for: owner, original: original, digits: { self.digits($0) }) { return handle }
+            if let owner = persona ?? people.find(handle: original), let handle = people.handle(for: owner, original: original, digits: { self.digits($0) }) {
+                self.owner = owner
+                return handle
+            }
             if let key = handleKey(original), let handle = handles[key] { return handle }
             return people.unrelatedName(first: true).lowercased() + digits(3)
         case "SECRET":

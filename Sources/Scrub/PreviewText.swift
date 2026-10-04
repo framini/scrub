@@ -8,7 +8,25 @@ import SwiftUI
 struct PreviewText: NSViewRepresentable {
     let text: String
     let marks: [Mark]
+    /// A value to scroll to and show, once each time it is asked for.
+    var reveal: Reveal?
     let model: AppModel
+
+    static func substring(_ text: String, _ range: Range<Int>) -> String {
+        let ns = text as NSString
+        guard range.lowerBound >= 0, range.upperBound <= ns.length else { return "" }
+        return ns.substring(with: NSRange(location: range.lowerBound, length: range.count))
+    }
+
+    /// Where the value first stands in the preview: the first stand-in that
+    /// replaced it, or one written as its stand-in, or else its original,
+    /// where it was left as written.
+    static func place(of reveal: Reveal, in text: String, marks: [Mark]) -> Range<Int>? {
+        let original = reveal.original.lowercased(), standIn = reveal.standIn.lowercased()
+        if let mark = marks.first(where: { $0.original?.lowercased() == original }) ?? marks.first(where: { substring(text, $0.range).lowercased() == standIn }) { return mark.range }
+        let found = (text as NSString).range(of: reveal.original, options: .caseInsensitive)
+        return found.location == NSNotFound ? nil : found.location..<NSMaxRange(found)
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -50,6 +68,14 @@ struct PreviewText: NSViewRepresentable {
             view.setSelectedRange(NSRange(location: 0, length: 0))
             context.coordinator.updating = false
         }
+        if let reveal, context.coordinator.revealed != reveal {
+            context.coordinator.revealed = reveal
+            if let range = Self.place(of: reveal, in: text, marks: marks) {
+                let shown = NSRange(location: range.lowerBound, length: range.count)
+                view.scrollRangeToVisible(shown)
+                view.showFindIndicator(for: shown)
+            }
+        }
     }
 
     @MainActor
@@ -58,6 +84,7 @@ struct PreviewText: NSViewRepresentable {
         var shown: String?
         var shownMarks: [Mark] = []
         var updating = false
+        var revealed: Reveal?
         init(_ parent: PreviewText) { self.parent = parent }
 
         func textViewDidChangeSelection(_ notification: Notification) {

@@ -21,9 +21,13 @@ struct ResultView: View {
                 Divider().overlay(Color.line)
             }
             preview
-            if !model.pick.isEmpty || model.notice != nil {
+            if model.draft != nil || !model.pick.isEmpty || model.notice != nil {
                 Divider().overlay(Color.line)
                 selectionBar
+            }
+            if model.showingValues {
+                Divider().overlay(Color.line)
+                ValuesPanel(model: model)
             }
             Divider().overlay(Color.line)
             footer
@@ -31,7 +35,11 @@ struct ResultView: View {
         .background(Color.snow, in: .rect(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.rule))
         .sheet(isPresented: Binding(get: { model.reviewing }, set: { if !$0 { model.cancelReview() } })) {
-            ReviewView(findings: finished.result.uncertain, marked: finished.result.byHand, kept: kept, choices: finished.choices, onDone: { model.finishReview($0) }, onCancel: { model.cancelReview() })
+            ReviewView(findings: finished.result.uncertain.map(finished.result.revised), choices: finished.choices, onDone: { model.finishReview($0) }, onCancel: { model.cancelReview() })
+                .preferredColorScheme(.light)
+        }
+        .sheet(item: Binding(get: { model.placing }, set: { model.placing = $0 })) { finding in
+            ReviewView(findings: [finding], title: Copy.placesTitle(finding.original), body: Copy.placesBody, choices: finished.choices, onDone: { model.finishPlaces($0) }, onCancel: { model.placing = nil })
                 .preferredColorScheme(.light)
         }
     }
@@ -42,19 +50,16 @@ struct ResultView: View {
         return (pick.replaced.map(\.original) + pick.marked.map(\.text)).filter { seen.insert($0).inserted }
     }
 
-    /// Findings Scrub was sure of that the person chose to keep as written somewhere.
-    private var kept: [Finding] {
-        guard !finished.choices.left.isEmpty || finished.choices.places.values.contains(true) else { return [] }
-        return finished.result.findings.filter { finding in !finding.needsReview && finding.places.contains { finished.choices.leaves($0, of: finding) } }
-    }
-
     /// What the preview's selection stands on, and the one action for it (⌘E):
     /// replace what Scrub missed, as the kind it guessed or one chosen, or keep
-    /// the original of what it replaced.
+    /// the original of what it replaced. One value's stand-in, clicked in the
+    /// preview or selected in the Values panel, opens its editor here.
     private var selectionBar: some View {
         HStack(spacing: 10) {
             let pick = model.pick
-            if pick.isEmpty, let notice = model.notice {
+            if let draft = model.draft {
+                ValueEditor(draft: draft, model: model)
+            } else if pick.isEmpty, let notice = model.notice {
                 Image(systemName: notice.undone ? "arrow.uturn.backward" : "checkmark").foregroundStyle(Color.evergreen)
                 Text(notice.text).lineLimit(1).truncationMode(.middle)
                 Spacer()
@@ -123,7 +128,8 @@ struct ResultView: View {
                 HStack(spacing: 6) { Text("Start over"); KeyHint(key: "esc") }
             }
             .buttonStyle(SecondaryButton())
-            .keyboardShortcut(.cancelAction)
+            // While a value's editor is open, esc closes it instead.
+            .keyboardShortcut(model.draft == nil ? .cancelAction : nil)
             Button { model.copy() } label: {
                 HStack(spacing: 6) { Text(finished.copied ? "Copied" : "Copy"); KeyHint(key: "⌘C") }
             }
@@ -187,7 +193,7 @@ struct ResultView: View {
         case .text(let text, let marks, let truncated):
             VStack(spacing: 0) {
                 // Selectable always, so a value can be marked; it leaves the app only as `AppModel.selectionMayLeave` allows.
-                PreviewText(text: text, marks: marks, model: model)
+                PreviewText(text: text, marks: marks, reveal: model.reveal, model: model)
                 if truncated {
                     Text("Showing the start of the file. The saved or copied file has everything.")
                         .font(.system(size: 12))
@@ -199,7 +205,7 @@ struct ResultView: View {
                 }
             }
         case .table(let columns, let rows, let rowCount, let marks):
-            TablePreview(columns: columns, rows: rows, rowCount: rowCount, marks: marks, model: model)
+            TablePreview(columns: columns, rows: rows, rowCount: rowCount, marks: marks, reveal: model.reveal, model: model)
         }
     }
 
@@ -219,15 +225,22 @@ struct ResultView: View {
                 .fixedSize()
                 .help("See the replacements Scrub was least sure of again")
             }
-            let marked = finished.result.byHand.count, keptCount = kept.count
-            if marked + keptCount > 0 {
-                Button { model.review() } label: {
-                    Text(Copy.changes(marked: marked, kept: keptCount)).fontWeight(.semibold).foregroundStyle(Color.slate)
+            let values = model.values
+            let marked = values.filter { $0.id < 0 }.count, keptCount = values.filter(\.kept).count, edited = values.filter { $0.id >= 0 && $0.edited }.count
+            if marked + keptCount + edited > 0 {
+                Button { model.showValues(.yours) } label: {
+                    Text(Copy.changes(marked: marked, kept: keptCount, edited: edited)).fontWeight(.semibold).foregroundStyle(Color.slate)
                 }
                 .buttonStyle(.plain)
                 .fixedSize()
-                .help("See the values you marked or kept, and undo any of them, place by place")
+                .help(Copy.changesHelp)
             }
+            Button { model.toggleValues() } label: {
+                Label(Copy.values, systemImage: "list.bullet").foregroundStyle(model.showingValues ? Color.evergreen : Color.slate)
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .help(Copy.valuesHelp)
             if model.canUndo || model.canRedo {
                 HStack(spacing: 2) {
                     Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward").frame(width: 24, height: 22) }
@@ -276,14 +289,18 @@ private struct TablePreview: View {
     let columns: [String]
     let rows: [[String]]
     let rowCount: Int
+    let reveal: Reveal?
     let model: AppModel
     private let widths: [CGFloat]
     private let cellMarks: [Int: [Int: [Mark]]]
+    /// The row a value was last shown in, lit for a moment.
+    @State private var lit: Int?
 
-    init(columns: [String], rows: [[String]], rowCount: Int, marks: [TableMark], model: AppModel) {
+    init(columns: [String], rows: [[String]], rowCount: Int, marks: [TableMark], reveal: Reveal? = nil, model: AppModel) {
         self.columns = columns
         self.rows = rows
         self.rowCount = rowCount
+        self.reveal = reveal
         self.model = model
         widths = columns.indices.map { column in
             let longest = max(columns[column].count, rows.prefix(100).compactMap { column < $0.count ? $0[column].count : nil }.max() ?? 0)
@@ -311,21 +328,34 @@ private struct TablePreview: View {
                     .frame(height: 36)
                     .background(Color.snow)
                     .overlay(alignment: .bottom) { Divider().overlay(Color.line) }
-                    ScrollView(.vertical) {
-                        LazyVStack(spacing: 0) {
-                            ForEach(rows.indices, id: \.self) { row in
-                                HStack(spacing: 0) {
-                                    ForEach(columns.indices, id: \.self) { column in
-                                        cell(row: row, column: column)
-                                            .font(.system(size: 13))
-                                            .lineLimit(1)
-                                            .frame(width: widths[column], alignment: .leading)
-                                            .padding(.trailing, 24)
+                    ScrollViewReader { reader in
+                        ScrollView(.vertical) {
+                            LazyVStack(spacing: 0) {
+                                ForEach(rows.indices, id: \.self) { row in
+                                    HStack(spacing: 0) {
+                                        ForEach(columns.indices, id: \.self) { column in
+                                            cell(row: row, column: column)
+                                                .font(.system(size: 13))
+                                                .lineLimit(1)
+                                                .frame(width: widths[column], alignment: .leading)
+                                                .padding(.trailing, 24)
+                                        }
                                     }
+                                    .padding(.horizontal, 20)
+                                    .frame(height: 44)
+                                    .background(lit == row ? Color.lichen : Color.clear)
+                                    .overlay(alignment: .bottom) { Divider().overlay(Color.fog) }
+                                    .id(row)
                                 }
-                                .padding(.horizontal, 20)
-                                .frame(height: 44)
-                                .overlay(alignment: .bottom) { Divider().overlay(Color.fog) }
+                            }
+                        }
+                        .onChange(of: reveal) { _, reveal in
+                            guard let reveal, let row = Self.row(of: reveal, rows: rows, marks: cellMarks) else { return }
+                            reader.scrollTo(row, anchor: .center)
+                            lit = row
+                            Task {
+                                try? await Task.sleep(for: .seconds(1.2))
+                                if lit == row { withAnimation(.easeOut(duration: 0.3)) { lit = nil } }
                             }
                         }
                     }
@@ -342,6 +372,16 @@ private struct TablePreview: View {
             }
         }
     }
+    /// The first row shown that holds the value: its stand-in where one is
+    /// marked, or else its original, where it was left as written.
+    static func row(of reveal: Reveal, rows: [[String]], marks: [Int: [Int: [Mark]]]) -> Int? {
+        let standIn = reveal.standIn.lowercased()
+        for (row, cells) in rows.enumerated() {
+            for (column, cell) in cells.enumerated() where (marks[row]?[column] ?? []).contains(where: { PreviewText.substring(cell, $0.range).lowercased() == standIn }) { return row }
+        }
+        return rows.firstIndex { $0.contains { $0.range(of: reveal.original, options: .caseInsensitive) != nil } }
+    }
+
     @ViewBuilder private func cell(row: Int, column: Int) -> some View {
         let value = column < rows[row].count ? rows[row][column] : ""
         let marks = cellMarks[row]?[column] ?? []

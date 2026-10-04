@@ -3,20 +3,20 @@ import SwiftUI
 
 /// The findings Scrub is least sure of, each with where it stands, to keep
 /// replaced or leave as written before the file goes anywhere. A choice
-/// covers every place the value appears, or one place at a time. Below them,
-/// the values the person marked or kept, each to undo everywhere or place by place.
+/// covers every place the value appears, or one place at a time. The same
+/// sheet chooses one value's places from the Values panel, under its own title.
 struct ReviewView: View {
     let findings: [Finding]
-    let marked: [Finding]
-    let kept: [Finding]
+    let title: String?
+    let message: String?
     let onDone: (Choices) -> Void
     let onCancel: () -> Void
     @State private var choices: Choices
 
-    init(findings: [Finding], marked: [Finding] = [], kept: [Finding] = [], choices: Choices, onDone: @escaping (Choices) -> Void, onCancel: @escaping () -> Void) {
+    init(findings: [Finding], title: String? = nil, body: String? = nil, choices: Choices, onDone: @escaping (Choices) -> Void, onCancel: @escaping () -> Void) {
         self.findings = findings
-        self.marked = marked
-        self.kept = kept
+        self.title = title
+        self.message = body
         self.onDone = onDone
         self.onCancel = onCancel
         _choices = State(initialValue: choices)
@@ -27,8 +27,8 @@ struct ReviewView: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(findings.isEmpty ? Copy.yourChanges : Copy.reviewTitle(findings.count)).font(.system(size: 17, weight: .semibold))
-                Text(findings.isEmpty ? Copy.yourChangesBody : Copy.reviewBody).font(.system(size: 13)).foregroundStyle(Color.slate).fixedSize(horizontal: false, vertical: true)
+                Text(title ?? Copy.reviewTitle(findings.count)).font(.system(size: 17, weight: .semibold))
+                Text(message ?? Copy.reviewBody).font(.system(size: 13)).foregroundStyle(Color.slate).fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(20)
@@ -36,11 +36,9 @@ struct ReviewView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(findings) { finding in
-                        ReviewRow(finding: finding, choices: $choices)
+                        ReviewRow(finding: finding, choices: $choices, placeByPlace: title != nil)
                         Divider().overlay(Color.fog)
                     }
-                    section(Copy.markedSection, marked)
-                    section(Copy.keptSection, kept)
                 }
             }
             Divider().overlay(Color.line)
@@ -75,28 +73,18 @@ struct ReviewView: View {
         .foregroundStyle(Color.ink)
     }
 
-    /// The person's own changes, under a heading of their own.
-    @ViewBuilder private func section(_ title: String, _ rows: [Finding]) -> some View {
-        if !rows.isEmpty {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.slate)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-                .background(Color.mist)
-            ForEach(rows) { finding in
-                ReviewRow(finding: finding, choices: $choices)
-                Divider().overlay(Color.fog)
-            }
-        }
-    }
 }
 
 private struct ReviewRow: View {
     let finding: Finding
     @Binding var choices: Choices
-    @State private var placeByPlace = false
+    @State private var placeByPlace: Bool
+
+    init(finding: Finding, choices: Binding<Choices>, placeByPlace: Bool = false) {
+        self.finding = finding
+        _choices = choices
+        _placeByPlace = State(initialValue: placeByPlace)
+    }
 
     /// Replace or leave everywhere; neither while places differ.
     private enum Everywhere: Hashable { case replace, leave, mixed }
