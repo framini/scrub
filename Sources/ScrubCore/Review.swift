@@ -358,12 +358,13 @@ extension Review {
         var known: LeakGate?
         /// The last marks shown as findings, which every redraw of the result asks for.
         var shown: (marks: Marks, edits: Edits, findings: [Finding])?
-        /// The last edits read as revisions, which every redraw and pick asks for (see `revisions`).
-        var revised: (edits: Edits, revisions: [Finding.ID: Revision], byStandIn: [String: [Finding.ID]])?
+        /// The last edits read as revisions, which every redraw and pick asks for, and
+        /// the findings whose revision cannot be written (see `revisions`).
+        var revised: (edits: Edits, revisions: [Finding.ID: Revision], byStandIn: [String: [Finding.ID]], blocked: Set<Finding.ID>)?
         /// The findings of each value as it reads (see `sameValues`).
         var sameValues: [String: [Finding.ID]]?
-        /// Every original found, folded for comparing, each with how it is written (see `refusal`).
-        var folded: [(folded: String, written: String)]?
+        /// Every original found as it reads, for checking what an edit writes (see `held`).
+        var readable: Readable?
         /// The values as they read where that differs from how they are written, built on first use.
         var readings: Readings?
         /// Each value's link parts, read once a mark stands in the value.
@@ -589,7 +590,7 @@ extension Review {
     /// an email's local part, a number with other separators). None overlaps
     /// a stand-in or a suspect, which their own choices decide. A replacement
     /// typed for the mark is its stand-in, and its variants follow it.
-    private func locate(_ entry: Marks.Entry, as typed: String? = nil) throws -> Located {
+    func locate(_ entry: Marks.Entry, as typed: String? = nil) throws -> Located {
         let marking = try prepared()
         let key = Locating(entry: entry, typed: typed)
         if let known = marking.located[key] { return known }
@@ -657,7 +658,7 @@ extension Review {
             let local = (item.range.lowerBound - marking.starts[value])..<(item.range.upperBound - marking.starts[value])
             guard local.upperBound <= (values[value].text as NSString).length, !taken(value).contains(where: { $0.overlaps(local) }) else { continue }
             // A JSON number stays a number.
-            if numeric.contains(value), !(item.written + joined.substring(with: NSRange(location: item.range.lowerBound, length: item.range.count))).allSatisfy({ $0.isASCII && $0.isNumber }) { continue }
+            if numeric.contains(value), !Self.isJSONNumber(TextRanges.replace(values[value].text, local, with: item.written)) { continue }
             // Inside a link's part, written as the link writes it ("near=Quillmere+North" keeps a valid link).
             var written = item.written
             if !item.encoded, let component = links(value).first(where: { $0.range.lowerBound <= local.lowerBound && local.upperBound <= $0.range.upperBound }) {
@@ -677,7 +678,7 @@ extension Review {
     /// its stand-in written the same way. The leak gate hunts a name's handles
     /// only when no part is a word; a person who marked the name has said it
     /// is one, so its handles are looked for here too, each as a whole word.
-    private static func forms(_ text: String, entity: String, standIn: String) -> [(String, String)] {
+    static func forms(_ text: String, entity: String, standIn: String) -> [(String, String)] {
         var forms = [(text, standIn)]
         guard names.contains(entity) else { return forms }
         let real = text.split(whereSeparator: \.isWhitespace).map(String.init), made = standIn.split(whereSeparator: \.isWhitespace).map(String.init)

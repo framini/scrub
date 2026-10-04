@@ -60,10 +60,16 @@ struct ResultView: View {
             if let draft = model.draft {
                 ValueEditor(draft: draft, model: model)
             } else if pick.isEmpty, let notice = model.notice {
-                Image(systemName: notice.undone ? "arrow.uturn.backward" : "checkmark").foregroundStyle(Color.evergreen)
-                Text(notice.text).lineLimit(1).truncationMode(.middle)
+                if notice.refused {
+                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Color.ember)
+                } else {
+                    Image(systemName: notice.undone ? "arrow.uturn.backward" : "checkmark").foregroundStyle(Color.evergreen)
+                }
+                Text(notice.text).lineLimit(1).truncationMode(.middle).help(notice.text)
                 Spacer()
-                if notice.undone {
+                // A change refused made nothing to undo.
+                if notice.refused {
+                } else if notice.undone {
                     Button { model.redo() } label: { HStack(spacing: 6) { Text("Redo"); KeyHint(key: "⇧⌘Z") } }
                         .buttonStyle(SecondaryButton())
                         .disabled(!model.canRedo)
