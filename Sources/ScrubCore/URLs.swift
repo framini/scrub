@@ -211,6 +211,69 @@ enum URLs {
         return spaced.removingPercentEncoding ?? spaced
     }
 
+    /// A link's part as it reads, percent-decoded and in a query with "+" a
+    /// space (as `URLs.decode` reads it), with the range of the part each
+    /// UTF-16 unit is read from; nil when it reads as written or is no UTF-8.
+    static func decoded(_ raw: String, _ part: URLPart) -> (text: String, sources: [Range<Int>])? {
+        let units = Array(raw.utf16)
+        func hex(_ unit: UInt16) -> UInt8? {
+            switch unit {
+            case 48...57: UInt8(unit - 48)
+            case 65...70: UInt8(unit - 55)
+            case 97...102: UInt8(unit - 87)
+            default: nil
+            }
+        }
+        var bytes: [(byte: UInt8, from: Range<Int>)] = []
+        var index = 0
+        while index < units.count {
+            let unit = units[index]
+            if unit == 37, index + 2 < units.count, let high = hex(units[index + 1]), let low = hex(units[index + 2]) {
+                bytes.append((high << 4 | low, index..<(index + 3)))
+                index += 3
+            } else if unit == 43, part == .query {
+                bytes.append((32, index..<(index + 1)))
+                index += 1
+            } else {
+                // A character written as itself: each of its bytes is read from it.
+                let width = UTF16.isLeadSurrogate(unit) && index + 1 < units.count ? 2 : 1
+                let from = index..<(index + width)
+                for byte in String(decoding: units[from], as: UTF16.self).utf8 { bytes.append((byte, from)) }
+                index += width
+            }
+        }
+        var text: [UInt16] = [], sources: [Range<Int>] = []
+        var at = 0
+        while at < bytes.count {
+            let lead = bytes[at].byte
+            let width = lead < 0x80 ? 1 : lead >> 5 == 0b110 ? 2 : lead >> 4 == 0b1110 ? 3 : lead >> 3 == 0b11110 ? 4 : 0
+            guard width > 0, at + width <= bytes.count, let scalar = String(bytes: bytes[at..<(at + width)].map(\.byte), encoding: .utf8), scalar.unicodeScalars.count == 1 else { return nil }
+            let from = bytes[at].from.lowerBound..<bytes[at + width - 1].from.upperBound
+            for unit in scalar.utf16 {
+                text.append(unit)
+                sources.append(from)
+            }
+            at += width
+        }
+        let read = String(decoding: text, as: UTF16.self)
+        return read == raw ? nil : (read, sources)
+    }
+
+    /// A link's part as a reader reads it: decoded as `decoded` reads it, and
+    /// without the characters no one sees (see `Visible`), so "%51uill%E2%80%8Bmere"
+    /// reads "Quillmere". Each UTF-16 unit maps to the range of the part it is
+    /// read from; nil when the part reads as written.
+    static func reading(_ raw: String, _ part: URLPart) -> (text: String, sources: [Range<Int>])? {
+        let read = decoded(raw, part) ?? (raw, (0..<(raw as NSString).length).map { $0..<($0 + 1) })
+        guard let view = Visible(read.text) else { return read.text == raw ? nil : read }
+        let clean = view.clean as NSString
+        let sources = (0..<clean.length).map { index -> Range<Int> in
+            let from = view.raw(index..<(index + 1))
+            return read.sources[from.lowerBound].lowerBound..<read.sources[from.upperBound - 1].upperBound
+        }
+        return (view.clean, sources)
+    }
+
     private static let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
     /// `value` written as `original` writes its own: what the original left

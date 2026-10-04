@@ -334,15 +334,20 @@ public enum KeyHints {
         // One unknown word ("NORTHWIND") names a business or product more often than a person.
         if parts.count < 2 && !known { return false }
         if let parent, notPeople.contains(words(parent).last.map { singular($0) ?? $0 } ?? "") { return false }
+        return isPersonsRecord(siblings: siblings, parent: parent, inObject: inObject) || known
+    }
+    /// Whether a record says a bare "name" in it is a person's, whatever the
+    /// name: it holds personal details or a person's own ID, or its parent is
+    /// about people ("customers", "manager") and not about a business.
+    static func isPersonsRecord(siblings: [String], parent: String?, inObject: Bool = true) -> Bool {
+        if let parent, notPeople.contains(words(parent).last.map { singular($0) ?? $0 } ?? "") { return false }
         if siblings.contains(where: { !isBareName($0) && hint($0).map(personalSiblings.contains) == true }) { return true }
         // A person's own ID beside it ("customer_id", "patient_id") says the record is theirs.
         if inObject, siblings.contains(where: { hint($0) == nil && RecordIDs.isPersonKey($0) }) { return true }
-        if let parent {
-            let compact = parent.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
-            let last = words(parent).last ?? ""
-            if isRole(parent) || [compact, last, singular(compact) ?? "", singular(last) ?? ""].contains(where: people.contains) { return true }
-        }
-        return known
+        guard let parent else { return false }
+        let compact = parent.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+        let last = words(parent).last ?? ""
+        return isRole(parent) || [compact, last, singular(compact) ?? "", singular(last) ?? ""].contains(where: people.contains)
     }
     // Keys naming a person's role ("assigned_to", "manager") often hold an ID
     // or an email, so they only mark a value that is written like a name.

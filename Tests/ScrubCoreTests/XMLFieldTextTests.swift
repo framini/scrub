@@ -85,6 +85,52 @@ import Testing
         #expect(XMLParser(data: result.output).parse())
     }
 
+    /// A field named by its own name or by an attribute keeps its key beside
+    /// any text of the record's own: before it, after it, between several
+    /// fields, and inside formatting. A formatting element (<data>, <span>)
+    /// that names a field is a field too.
+    @Test(arguments: [
+        #"<record>Active<data name="national_id">ZX4829137</data></record>"#,
+        #"<record><data name="national_id">ZX4829137</data> on file since 2019</record>"#,
+        #"<record>Active <span name="nationalId">ZX4829137</span> and <data key="password">Tamsel!Brook-2291</data> reset</record>"#,
+        #"<record>Status <span>primary <data field="national_id">ZX4829137</data></span> checked</record>"#,
+        #"<record>Active<data name="password">Tamsel!Brook-2291</data></record>"#,
+        #"<record>Held <b>until</b> review<field name="password">Tamsel!Brook-2291</field></record>"#,
+    ])
+    func aFieldInMixedContentKeepsItsName(_ record: String) throws {
+        let result = try Scrubber.scrub(Data("<records>\(record)</records>".utf8), name: "records.xml", forceFullDetection: false, seed: 6)
+        let output = String(decoding: result.output, as: UTF8.self)
+        #expect(XMLParser(data: result.output).parse(), "\(output)")
+        let document = try XMLDocument(data: result.output, options: [])
+        for (original, fits) in [("ZX4829137", { (s: String) in Self.shape(s) == Self.shape("ZX4829137") }), ("Tamsel!Brook-2291", { !$0.isEmpty && !$0.contains(where: \.isWhitespace) })] where record.contains(original) {
+            #expect(!output.contains(original), "\(original) left as written: \(output)")
+            #expect(!result.uncertain.contains { $0.original == original }, "\(output)")
+            // Type oracle: the field's element holds a stand-in of its kind.
+            let field = try #require(try document.nodes(forXPath: "//*[@name or @key or @field]").first { node in
+                (node as? XMLElement)?.attributes?.contains { record.contains("\"\($0.stringValue ?? "")\">\(original)") } == true
+            }?.stringValue, "\(output)")
+            #expect(field != original && fits(field), "\(field) for \(original)")
+        }
+        // The record's own words stay.
+        for word in ["Active", "on file since 2019", "reset", "checked", "review"] where record.contains(word) { #expect(output.contains(word), "\(output)") }
+    }
+
+    /// A person's name field beside the record's own text is a field too, in
+    /// any case, and stays one stand-in person with the record's other fields.
+    @Test(arguments: [
+        "<customer>Active<name>odalys ferriter</name></customer>",
+        "<customer><name>Odalys Ferriter</name> since 2019</customer>",
+        "<customer>Active <name>Odalys Ferriter</name> <email>odalys.ferriter@corvane.test</email> verified</customer>",
+    ])
+    func aNameFieldInMixedContentIsReplaced(_ record: String) throws {
+        let result = try Scrubber.scrub(Data("<customers>\(record)</customers>".utf8), name: "customers.xml", forceFullDetection: false, seed: 7)
+        let output = String(decoding: result.output, as: UTF8.self)
+        #expect(XMLParser(data: result.output).parse(), "\(output)")
+        let read = try XMLDocument(data: result.output, options: []).rootElement()?.stringValue?.lowercased() ?? ""
+        for part in ["odalys", "ferriter"] { #expect(!read.contains(part), "\(part) left in \(output)") }
+        let name = try #require(try Self.element("name", in: result.output))
+        #expect(name.split(separator: " ").count == 2 && name.allSatisfy { $0.isLetter || " '-".contains($0) }, "\(name)")    }
+
     /// Formatting inside a word is still read through: the name it splits is
     /// found as one, and replaced in pieces that keep the markup valid.
     @Test(arguments: [
@@ -111,5 +157,11 @@ import Testing
         #expect(XMLFile.inline(try element("<account>Active<password>x</password></account>")) == nil)
         #expect(XMLFile.inline(try element("<account>Active<span><nationalId>QX-1</nationalId></span></account>")) == nil)
         #expect(XMLFile.inline(try element(#"<entry>Sent <field name="email">a@corvane.test</field></entry>"#)) == nil)
+        #expect(XMLFile.inline(try element(#"<record>Active<data name="national_id">ZX4829137</data></record>"#)) == nil)
+        #expect(XMLFile.inline(try element(#"<record>Active <span key="ssn">536-21-7784</span></record>"#)) == nil)
+        #expect(XMLFile.inline(try element("<customer>Active<name>odalys ferriter</name></customer>")) == nil)
+        // Formatting with an attribute that names no field is still formatting.
+        #expect(XMLFile.inline(try element(#"<note>Odal<span class="hl">ys</span> wrote</note>"#)) != nil)
+        #expect(XMLFile.inline(try element(#"<note>Odal<data value="3">ys</data> wrote</note>"#)) != nil)
     }
 }
