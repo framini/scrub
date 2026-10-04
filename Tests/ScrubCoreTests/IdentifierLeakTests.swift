@@ -235,3 +235,59 @@ struct IdentifierLeakTests {
         for link in plain { #expect(output.contains(link), "\(link) changed: \(output)") }
     }
 }
+
+/// IDs made of a word and a number, written in a sentence with nothing to
+/// say whose they are, and no other mention of the person in the document.
+/// One built on a name the lists hold is replaced whole; one built on a
+/// word no dictionary holds may be a surname, and waits for the review,
+/// left as written until then. Words, short codes and versions stay.
+struct UnlabelledIdentifierTests {
+    typealias Path = IdentifierLeakTests.Path
+
+    static func render(_ note: String, _ path: Path) -> (Data, String) {
+        switch path {
+        case .text: return (Data(note.utf8), "note.txt")
+        case .json: return (Data(#"{"ticket": {"status": "open", "note": "\#(note)"}}"#.utf8), "ticket.json")
+        case .csv: return (Data("status,note\nopen,\"\(note)\"\n".utf8), "tickets.csv")
+        case .xml: return (Data("<ticket><status>open</status><note>\(note)</note></ticket>".utf8), "ticket.xml")
+        }
+    }
+
+    @Test(arguments: Path.allCases)
+    func anIDBuiltOnANameIsReplacedWhole(_ path: Path) throws {
+        for (id, piece) in [("0042_odalys", "odalys"), ("MARGUERITE-0042", "marguerite"), ("okonkwo-tavern-17", "okonkwo")] {
+            for seed in UInt64(0)..<3 {
+                let (data, name) = Self.render("Please close \(id) before Friday, then reply.", path)
+                let result = try Scrubber.scrub(data, name: name, forceFullDetection: false, seed: seed)
+                let output = String(decoding: result.output, as: UTF8.self)
+                let label = "[\(path) \(seed) \(id)]"
+                #expect(!IdentifierLeakTests.words(output).contains(piece), "\(label) \(output)")
+                let finding = try #require(result.findings.first { $0.original == id }, "\(label) not found: \(result.findings.map(\.original))")
+                #expect(["RECORD_ID", "ID_NUMBER"].contains(finding.entity) && IdentifierLeakTests.shaped(finding.standIn, like: id), "\(label) → \(finding.entity) \(finding.standIn)")
+                #expect(output.contains("Please close ") && output.contains(" before Friday, then reply."), "\(label) \(output)")
+            }
+        }
+    }
+
+    @Test(arguments: Path.allCases)
+    func anIDBuiltOnAnUnknownWordWaitsForTheReview(_ path: Path) throws {
+        for id in ["QUILLMERE-0042", "ferriter-4821", "4821_tavish_brightwater"] {
+            let (data, name) = Self.render("Please close \(id) before Friday, then reply.", path)
+            let result = try Scrubber.scrub(data, name: name, forceFullDetection: false, seed: 1)
+            let label = "[\(path) \(id)]"
+            // Left as written only until it is checked: Copy and Save ask first.
+            let held = try #require(result.findings.first { $0.original == id }, "\(label) not asked about: \(result.findings.map(\.original))")
+            #expect(["RECORD_ID", "ID_NUMBER"].contains(held.entity) && held.needsReview && result.uncertain.contains(held), "\(label) \(held.entity) \(held.standIn)")
+        }
+    }
+
+    @Test(arguments: Path.allCases)
+    func wordsCodesAndVersionsStay(_ path: Path) throws {
+        let note = "Router-0042 runs build 2024 with SHA-256 per RFC-2616, page-42 of chapter_12, UTF-8 on x86_64 and kubernetes-1.28."
+        let (data, name) = Self.render(note, path)
+        let result = try Scrubber.scrub(data, name: name, forceFullDetection: false, seed: 1)
+        let output = String(decoding: result.output, as: UTF8.self)
+        #expect(output.contains(note), "[\(path)] \(output)")
+        #expect(result.findings.isEmpty, "[\(path)] \(result.findings.map(\.original))")
+    }
+}

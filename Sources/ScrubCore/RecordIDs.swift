@@ -168,6 +168,34 @@ enum RecordIDs {
         }
     }
 
+    /// A word and a number joined as one ID, in either order ("QUILLMERE-0042",
+    /// "0042_odalys", "ferriter-tavish-17"): letters of four or more beside digits.
+    private static let wordNumberID = TextPattern(
+        #"(?<![\w./@#-])(?:[A-Za-z]{4,}(?:[_-][A-Za-z]{2,})*[_-][0-9]{2,}|[0-9]{2,}(?:[_-][A-Za-z]{2,})*[_-][A-Za-z]{4,})(?![\w-]|[.,][0-9A-Za-z])"#)
+    /// IDs written in prose with nothing labelling them, made of a word and a
+    /// number. A word the name lists hold as a name and not a word ("odalys",
+    /// "ferriter") is someone's: the ID is replaced whole. A word no dictionary
+    /// holds ("quillmere") may be a surname the lists lack, so the ID is asked
+    /// about. Words ("router-0042", "alpha_7") and short codes ("SHA-256",
+    /// "RFC-2616") are no one's and stay.
+    static func worded(in text: String) -> (named: [Span], unsure: [Span]) {
+        // Only a letter or digit beside "_" or "-" can start one.
+        guard text.contains(where: { $0 == "_" || $0 == "-" }), text.contains(where: \.isNumber) else { return ([], []) }
+        var named: [Span] = [], unsure: [Span] = []
+        for match in TextRanges.matches(wordNumberID, in: text) {
+            let range = match.range.location..<NSMaxRange(match.range)
+            let value = TextRanges.substring(text, range)
+            guard !isUUID(value), !fieldName(value), !technical(value) else { continue }
+            let words = value.split(whereSeparator: { $0 == "_" || $0 == "-" }).filter { $0.allSatisfy(\.isLetter) }.map(String.init)
+            if words.contains(where: { $0.count >= 4 && NameLists.isName($0) && !NameLists.isOrdinary($0) }) {
+                named.append(Span(range: range, entity: "RECORD_ID", score: 0.9))
+            } else if words.contains(where: { $0.count >= 5 && !NameLists.isWord($0) && !NameLists.isOrdinary($0) }) {
+                unsure.append(Span(range: range, entity: "RECORD_ID", score: 0.5))
+            }
+        }
+        return (named, unsure)
+    }
+
     static func spans(in text: String) -> [Span] {
         // Every match has one of the prefixes and its "_": read only around those.
         // One pass: each "_" with a prefix's lowercase letters right before it.
