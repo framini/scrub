@@ -299,7 +299,7 @@
         "words" : 25172
       },
       "email" : {
-        "changedWords" : 504,
+        "changedWords" : 516,
         "documents" : 64,
         "documentsWithLeft" : 17,
         "labels" : {
@@ -342,7 +342,7 @@
         },
         "paths" : 3,
         "plainWords" : 17007,
-        "reviewFindings" : 213,
+        "reviewFindings" : 216,
         "words" : 6359
       },
       "manpages" : {
@@ -358,7 +358,7 @@
         "words" : 4169
       },
       "social" : {
-        "changedWords" : 90,
+        "changedWords" : 96,
         "documents" : 191,
         "documentsWithLeft" : 40,
         "labels" : {
