@@ -266,3 +266,19 @@ func bareNameKeyNeedsAPersonRecord(_ input: String, _ replaced: Bool) throws {
     }
     #expect(output.range(of: #""locality": "[^"]+""#, options: .regularExpression).map { !output[$0].contains("San Francisco") && !output[$0].contains(" Hill") } == true)
 }
+
+@Test func jsonIsWrittenInTimeLinearInItsLengthWhateverItHolds() throws {
+    // A character outside ASCII early on ("Café Lumen"), then many numbers, each set where it is written.
+    func time(_ count: Int) throws -> Duration {
+        let text = #"{"venue":"Café Lumen","readings":["# + (0..<count).map { (index: Int) -> String in String(1000 + index) }.joined(separator: ",") + "]}"
+        let value = try OrderedJSON.parse(text)
+        let clock = ContinuousClock()
+        let started = clock.now
+        let (output, _) = OrderedJSON.render(value)
+        #expect(output.contains("Café Lumen"))
+        return clock.now - started
+    }
+    let short = try time(4_000), long = try time(32_000)
+    // Eight times the numbers take about eight times as long; measured afresh each time, sixty-four.
+    #expect(long < short * 16 + .milliseconds(500), "\(short) then \(long)")
+}

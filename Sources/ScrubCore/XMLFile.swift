@@ -161,21 +161,26 @@ public enum XMLFile: FileFormat {
         }
         for child in document.children ?? [] { try walk(child, records: [], keys: [], parentKey: nil) }
         progress(.finding, 0, leaves.count)
+        // A name's own long digits ("order_48213907") are drawn first, namespaces
+        // first, as any value's: the same number written in a value is then theirs.
+        let order = namedNodes.indices.filter { namedNodes[$0].kind == .namespace } + namedNodes.indices.filter { namedNodes[$0].kind != .namespace }
+        let drawn = JSONFile.drawDigits(order.map { leaves[nameIDs[$0]].text }, job: job)
         var values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
         let records = leaves.map(\.lastRecord)
         progress(.finding, leaves.count, leaves.count)
         progress(.checking, 0, 1)
-        // An element's or an attribute's name, read as a value: its own long digits
-        // and a person's name written into it ("OdalysFerriter", "odalys_ferriter")
-        // are replaced here, once, namespaces first; each writing of the file then
+        // An element's or an attribute's name, read as a value: its own long digits,
+        // as drawn above, and a person's name written into it ("OdalysFerriter",
+        // "odalys_ferriter") are replaced here, once, namespaces first; each writing of the file then
         // names the node from the value as edits and choices leave it. A name so
         // written is a handle of its person's, so their edits and a person keeping
         // it as written reach it.
         var rewritten: [String: (String, [Mark])] = [:]
         func rewrite(_ own: String) -> (String, [Mark]) {
             if let known = rewritten[own] { return known }
-            var candidate = JSONFile.replaceDigits(own, job: job).0 as NSString
-            var marks: [Mark] = []
+            let (digits, numbers) = JSONFile.replaceDigits(own, drawn: drawn)
+            var candidate = digits as NSString
+            var marks = numbers
             // In a fixed order: a stand-in drawn here, or one name's replacement
             // reaching into another's, must not follow a set's hash order.
             for person in (job.gazetteer["PERSON"] ?? []).sorted() {
@@ -206,7 +211,6 @@ public enum XMLFile: FileFormat {
             rewritten[own] = made
             return made
         }
-        let order = namedNodes.indices.filter { namedNodes[$0].kind == .namespace } + namedNodes.indices.filter { namedNodes[$0].kind != .namespace }
         for index in order { values[nameIDs[index]] = JSONFile.rewritingOwnText(values[nameIDs[index]], with: rewrite) }
         let originalNames = namedNodes.map(\.name)
         let takenNames = Set(originalNames.compactMap { $0 })
@@ -265,8 +269,11 @@ public enum XMLFile: FileFormat {
                 renamedNames[seen] = replacement
                 if replacement != name {
                     if node.kind == .namespace { prefixes[name] = replacement }
+                    // Each stand-in as the name writes it, so a click on one reaches its finding.
+                    let pieces = value.marks.map { (Review.squeezed(TextRanges.substring(value.text, $0.range)), $0.entity, $0.byHand) }
+                        .filter { !$0.0.isEmpty && replacement.contains($0.0) }
                     let mark = value.marks.first
-                    marked.append((replacement, mark?.entity ?? "PERSON", mark?.byHand ?? false))
+                    marked += pieces.isEmpty ? [(replacement, mark?.entity ?? "PERSON", mark?.byHand ?? false)] : pieces
                 }
                 if node.name != replacement { node.name = replacement }
             }

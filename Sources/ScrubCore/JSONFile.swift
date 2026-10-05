@@ -12,9 +12,11 @@ public enum JSONFile: FileFormat {
         var valueIDs: [String: Int] = [:]
         var keyIDs: [String: Int] = [:]
         var nextRecord = 0
+        var names: [String] = []
         func collect(_ value: JSONValue, key: String?, path: String, records: [Int], keys: [String]) {
             switch value {
             case .object(let pairs):
+                names += pairs.map(\.0)
                 nextRecord += 1
                 let ancestry = KeyHints.isWrapper(pairs.map(\.0)) && !records.isEmpty ? records : records + [nextRecord]
                 let named = pairs.compactMap { pair in pair.1.stringValue.map { (pair.0, $0) } }
@@ -45,35 +47,30 @@ public enum JSONFile: FileFormat {
             }
         }
         collect(root, key: nil, path: "", records: [], keys: [])
+        // A key's own long digits ("order_48213907") are drawn first, as any
+        // value's: the same number written in a value ("Archived under 48213907")
+        // is then found as theirs and replaced alike.
+        let drawn = drawDigits(names, job: job)
         progress(.finding, 0, leaves.count)
         var values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
         let records = leaves.map(\.lastRecord)
         progress(.finding, leaves.count, leaves.count)
-        // A key's own long digits ("order_48213907") are replaced here, once, in the
-        // order the file is written; each later writing reads them from the key's text.
-        var numbered: [String: String] = [:], fakes: Set<String> = []
-        func ownDigits(_ own: String) -> String {
-            if let known = numbered[own] { return known }
-            let (written, marks) = replaceDigits(own, job: job)
-            for mark in marks { fakes.insert(TextRanges.substring(written, mark.range)) }
-            numbered[own] = written
-            return written
-        }
+        // Each key then writes them, with marks holding what they replaced, so
+        // the review reports them and every edit writes them as reported.
         func numberKeys(_ value: JSONValue, path: String) {
             switch value {
             case .object(let pairs):
                 for (index, pair) in pairs.enumerated() {
                     let childPath = path + "/" + String(index)
                     numberKeys(pair.1, path: childPath)
-                    if let id = keyIDs[childPath] { values[id] = rewritingOwnText(values[id]) { (ownDigits($0), []) } }
+                    if let id = keyIDs[childPath] { values[id] = rewritingOwnText(values[id]) { replaceDigits($0, drawn: drawn) } }
                 }
             case .array(let children):
                 for (index, child) in children.enumerated() { numberKeys(child, path: path + "/" + String(index)) }
             default: break
             }
         }
-        numberKeys(root, path: "")
-        let keyNumbers = fakes
+        if !drawn.isEmpty { numberKeys(root, path: "") }
         func render(_ values: [DocumentValue], counts: [String: Int]) throws -> ScrubResult {
             var valueMarks: [String: [Mark]] = [:]
             var keyMarks: [String: [Mark]] = [:]
@@ -87,7 +84,7 @@ public enum JSONFile: FileFormat {
                         let child = try process(pair.1, key: pair.0, path: childPath)
                         let scrubbed = keyIDs[childPath].map { values[$0] }
                         let written = scrubbed?.text ?? pair.0
-                        keyMarks[childPath] = Self.marks(of: scrubbed, numbers: keyNumbers)
+                        keyMarks[childPath] = scrubbed?.marks ?? []
                         var unique = written
                         while output.contains(where: { $0.0 == unique }) { unique += "_" }
                         output.append((unique, child))
@@ -120,28 +117,12 @@ public enum JSONFile: FileFormat {
         progress(.checking, 1, 1)
         return result
     }
-    /// A key's marks: its findings' stand-ins, and the numbers written in its own text.
-    private static func marks(of key: DocumentValue?, numbers: Set<String>) -> [Mark] {
-        guard let key else { return [] }
-        var marks = key.marks
-        if !numbers.isEmpty {
-            for match in TextRanges.matches(longDigits, in: key.text) {
-                let range = match.range.location..<NSMaxRange(match.range)
-                guard numbers.contains(TextRanges.substring(key.text, range)), !marks.contains(where: { $0.range.overlaps(range) }) else { continue }
-                marks.append(Mark(range: range, entity: "ID_NUMBER"))
-            }
-        }
-        return marks.sorted { $0.range.lowerBound < $1.range.lowerBound }
-    }
     /// `value` with each run of its own text, outside every stand-in and
     /// suspect, written as `rewrite` writes it, right to left, the marks and
-    /// suspects moved to where they now stand. A key's or a tag's own digits
-    /// are replaced so, once, when the file is scrubbed: the value's text then
-    /// carries them into every later writing, and an edit, which writes only
-    /// its findings' ranges, never draws them again or reaches into a typed
-    /// replacement, a kept original or another finding's stand-in.
-    /// `value` with each run of its text no mark holds written as `rewrite`
-    /// writes it, and the marks `rewrite` gives each, set where it is written.
+    /// suspects moved to where they now stand, and the marks `rewrite` gives
+    /// each set where it is written. A key's or a tag's own digits and names
+    /// are replaced so, once, when the file is scrubbed: their marks make them
+    /// findings, which every later writing writes as edits and choices leave them.
     static func rewritingOwnText(_ value: DocumentValue, with rewrite: (String) -> (String, [Mark])) -> DocumentValue {
         let length = (value.text as NSString).length
         var own: [Range<Int>] = []
@@ -170,14 +151,31 @@ public enum JSONFile: FileFormat {
         return DocumentValue(text: TextRanges.apply(edits, to: value.text).0, marks: marks,
                              unresolved: TextRanges.shift(value.unresolved, by: edits), proposals: value.proposals, held: TextRanges.shift(value.held, by: edits))
     }
-    static func replaceDigits(_ text: String, job: Job) -> (String, [Mark]) {
+    /// The long digits in `names` (keys, or element and attribute names), each
+    /// drawn its stand-in once, in the order they are written, before any value
+    /// is read: the pipeline then finds each where a value writes it too.
+    static func drawDigits(_ names: [String], job: Job) -> [String: String] {
+        var drawn: [String: String] = [:]
+        for name in names {
+            for match in TextRanges.matches(longDigits, in: name) {
+                let digits = TextRanges.substring(name, match.range.location..<NSMaxRange(match.range))
+                if drawn[digits] == nil { drawn[digits] = job.digits(digits) }
+            }
+        }
+        return drawn
+    }
+    /// `text` with each of its long digits written as drawn, each marked with what it replaced.
+    static func replaceDigits(_ text: String, drawn: [String: String]) -> (String, [Mark]) {
         var output = text
         var marks: [Mark] = []
         for match in TextRanges.matches(longDigits, in: text).reversed() {
             let range = match.range.location..<NSMaxRange(match.range)
-            let fake = job.digits(TextRanges.substring(text, range))
+            let digits = TextRanges.substring(text, range)
+            guard let fake = drawn[digits] else { continue }
             output = TextRanges.replace(output, range, with: fake)
-            marks.append(Mark(range: range.lowerBound..<(range.lowerBound + (fake as NSString).length), entity: "ID_NUMBER"))
+            let length = (fake as NSString).length - range.count
+            marks = marks.map { $0.moved(to: ($0.range.lowerBound + length)..<($0.range.upperBound + length)) }
+            marks.insert(Mark(range: range.lowerBound..<(range.lowerBound + (fake as NSString).length), entity: "ID_NUMBER", original: digits), at: 0)
         }
         return (output, marks)
     }

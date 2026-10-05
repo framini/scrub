@@ -82,8 +82,14 @@ public enum CSVFile: FileFormat {
                 leaves.append(DocumentLeaf(columns[column], fieldName: true))
             }
         }
+        // A heading's own long digits ("order_48213907") are drawn first, as in
+        // a JSON key, so a cell writing the same number is replaced alike.
+        let drawn = hasHeader ? JSONFile.drawDigits(columns, job: job) : [:]
         progress(.finding, 0, leaves.count)
-        let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
+        var values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
+        if !drawn.isEmpty {
+            for index in headerIDs { values[index] = JSONFile.rewritingOwnText(values[index]) { JSONFile.replaceDigits($0, drawn: drawn) } }
+        }
         let records = leaves.map(\.lastRecord)
         let found = leaves.count
         leaves.removeAll(keepingCapacity: false)
