@@ -66,10 +66,10 @@ struct ReviewView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
-            .background(Color.mist)
+            .background(Color.mist, in: .rect)
         }
         .frame(width: 680, height: 540)
-        .background(Color.snow)
+        .background(Color.snow, in: .rect)
         .foregroundStyle(Color.ink)
     }
 

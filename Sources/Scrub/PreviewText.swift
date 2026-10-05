@@ -33,6 +33,8 @@ struct PreviewText: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
+        // Shown only when the text is longer than the view, even with scroll bars set to always show.
+        scroll.autohidesScrollers = true
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         let view = PreviewTextView(frame: NSRect(origin: .zero, size: scroll.contentSize))
