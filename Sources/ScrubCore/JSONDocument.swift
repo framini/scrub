@@ -76,11 +76,15 @@ final class JSONDocument {
                     return
                 }
                 document.valueIDs[path] = leaves.count
-                leaves.append(DocumentLeaf(string, key: key, records: records, contextWords: Set(keys.flatMap { KeyHints.words($0) })))
+                var leaf = DocumentLeaf(string, key: key, records: records, contextWords: Set(keys.flatMap { KeyHints.words($0) }))
+                leaf.field = keys.joined(separator: ".")
+                leaves.append(leaf)
             case .number(let number):
                 guard let entity = JSONFile.numericEntity(key: key, number: number) else { break }
                 document.valueIDs[path] = leaves.count
-                leaves.append(DocumentLeaf(number, key: key, records: records, numericEntity: entity))
+                var leaf = DocumentLeaf(number, key: key, records: records, numericEntity: entity)
+                leaf.field = keys.joined(separator: ".")
+                leaves.append(leaf)
             default: break
             }
         }

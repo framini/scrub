@@ -33,6 +33,9 @@ struct DocumentLeaf: Sendable {
     /// or a secret's key over a value that is none (an object's reference, a placeholder).
     /// A secret's bytes found in one are the field's own, never the secret written again.
     let nonPersonal: Bool
+    /// The field the value is one of across its document: its keys from the root, a list's
+    /// items one field ("people.aka"). Nil outside a document's structure.
+    var field: String?
     private static let nonPersonalWords: Set<String> = ["status", "state", "type", "kind", "result", "outcome", "decision", "amount", "currency", "total", "balance", "fee",
                                                         "price", "count", "quantity", "at", "time", "timestamp", "date", "created", "updated", "version", "method", "code", "level", "score", "reason", "category", "channel", "mode"]
 
@@ -299,10 +302,12 @@ enum DocumentPipeline {
             if hint(leaves[index].key) == "MRZ" { zones.append(index) } else if later(index) { derived.append(index) } else { order.append(index) }
         }
         order += derived + zones.filter { MachineZone.opensCard(leaves[$0].text) } + zones.filter { !MachineZone.opensCard(leaves[$0].text) }
+        // What each value holds, read first for all of them: a field then decides
+        // across its values (see `Fields`) before any is replaced.
+        var founds = [[Span]](repeating: [], count: leaves.count)
         for index in order {
             try Scrubber.checkCancellation()
             let (leaf, stored) = (leaves[index], bases[index])
-            job.enter(value: index, records: leaf.enclosing, part: leaf.datePart, object: leaf.objectPath)
             var found = detected(leaf, base: base(leaf, stored: stored), gazetteer: gazetteer, detector: job.detector)
             if found.isEmpty, leaf.numericEntity == nil, hint(leaf.key) == nil, mayName(leaf.rawKey ?? leaf.key), RecordIDs.isPersonal(leaf, spelled: spelled, ownRecord: object(leaf).map(personal.contains) ?? false) {
                 found = [Span(range: 0..<(leaf.seen as NSString).length, entity: "RECORD_ID", score: 1)]
@@ -316,6 +321,14 @@ enum DocumentPipeline {
                !found.contains(where: { $0.entity == "ADDRESS" && $0.range.count * 2 >= (leaf.seen as NSString).length }) {
                 found = [Span(range: 0..<(leaf.seen as NSString).length, entity: KeyHints.hint(leaf.addressKey) == "REGION" ? "REGION" : "ADDRESS", score: 1)]
             }
+            founds[index] = found
+        }
+        Fields.decide(leaves, &founds)
+        for index in order {
+            try Scrubber.checkCancellation()
+            let leaf = leaves[index]
+            job.enter(value: index, records: leaf.enclosing, part: leaf.datePart, object: leaf.objectPath)
+            var found = founds[index]
             job.recordOriginals([(leaf.seen, found)])
             // Read in the text as seen, replaced in the text as written.
             if let view = leaf.view { found = found.map(view.raw) }

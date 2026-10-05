@@ -249,3 +249,14 @@ private func check(_ body: String, gone: [String], seed: UInt64 = 7, _ more: (Ro
         #expect(value(root, "sample_api_key") == "YOUR_API_KEY" && value(root, "secret_key") == "your-secret-key", "\(route): \(output)")
     }
 }
+
+/// A field read across its values: names most of a list's entries are read as make the rest names
+/// too, and a few codes written again and again are a category, kept as written.
+@Test func fieldsAreReadAcrossTheirValues() throws {
+    let body = #"{"hits":[{"aka":["Linnea Achterberg","Odile Vandermeer","Qorwyn Tessaly","Brightwater Rosalind"],"source":"WATCHLIST"},{"aka":["Ysolde Marrick"],"source":"WATCHLIST"}],"checks":[{"part":"FRONT"},{"part":"BACK"},{"part":"FRONT"},{"part":"BACK"},{"part":"FACE"}]}"#
+    try check(body, gone: ["Achterberg", "Vandermeer", "Qorwyn", "Tessaly", "Brightwater", "Ysolde", "Marrick"]) { route, root, output in
+        #expect(value(root, "checks", "4", "part") == "FACE" && value(root, "hits", "0", "source") == "WATCHLIST", "\(route): \(output)")
+    }
+    #expect(Fields.categorical(["FACE", "FRONT", "FACE", "BACK", "FACE"].map { DocumentLeaf($0) }))
+    #expect(!Fields.categorical(["Rosalind", "Odile", "Linnea", "Ysolde"].map { DocumentLeaf($0) }))
+}
