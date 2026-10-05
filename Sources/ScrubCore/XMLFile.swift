@@ -215,23 +215,35 @@ public enum XMLFile: FileFormat {
         func name(_ values: [DocumentValue]) -> [(String, String, Bool)] {
             var marked: [(String, String, Bool)] = []
             var usedNames = takenNames
+            // The local names of the nodes renamed: what a repaired name may never become.
+            let renamedOriginals = Set(order.compactMap { index in
+                originalNames[index].flatMap { name in values[nameIDs[index]].text == name ? nil : (name.split(separator: ":").last.map(String.init) ?? name).lowercased() }
+            })
             var renamedNames: [String: String] = [:]
             var prefixes: [String: String] = [:]
             func safeName(_ local: String, original: String, prefix: String? = nil) -> String {
                 let candidate = prefix.map { $0 + ":" + local } ?? local
                 guard candidate != original else { return original }
-                var value = Review.squeezed(local)
-                if value.first.map({ !$0.isLetter && $0 != "_" }) ?? true { value = "n" + value }
-                let base = value
-                var qualified = prefix.map { $0 + ":" + value } ?? value
-                var counter = 2
-                while usedNames.contains(qualified) && qualified != original {
-                    value = base + String(counter)
-                    qualified = prefix.map { $0 + ":" + value } ?? value
+                let squeezed = Review.squeezed(local)
+                let own = (original.split(separator: ":").last.map(String.init) ?? original).lowercased()
+                // What a name is made valid or told apart with never spells an original:
+                // "123" for <n123> is not written <n123>, nor "n12" beside an <n12> as <n123>.
+                func safe(_ value: String) -> Bool {
+                    let folded = value.lowercased()
+                    return !(folded.contains(own) && !squeezed.lowercased().contains(own)) && !renamedOriginals.contains(folded)
+                }
+                let starts = squeezed.first.map({ !$0.isLetter && $0 != "_" }) ?? true ? ["n", "x", "v", "k", "q"].map { $0 + squeezed } : [squeezed]
+                var counter = 1
+                while true {
+                    for base in starts {
+                        let value = counter == 1 ? base : base + String(counter)
+                        let qualified = prefix.map { $0 + ":" + value } ?? value
+                        guard !usedNames.contains(qualified), safe(value) else { continue }
+                        usedNames.insert(qualified)
+                        return qualified
+                    }
                     counter += 1
                 }
-                usedNames.insert(qualified)
-                return qualified
             }
             for index in order {
                 let node = namedNodes[index], value = values[nameIDs[index]]

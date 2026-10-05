@@ -18,14 +18,22 @@ public enum CSVFile: FileFormat {
         var leaves: [DocumentLeaf] = []
         // Exports flatten nested records into headers ("billing.address.city").
         let keys = columns.map { KeyHints.header($0) ?? $0 }
+        // Each header's words read once, and the columns under each path, so a header of many
+        // columns is read in one pass, never once per column.
+        let words = try columns.indices.map { column in
+            if column.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
+            return KeyHints.words(columns[column])
+        }
+        var namesUnder: [[String]: [Int]] = [:]
+        for column in columns.indices where words[column].last.map(KeyHints.fieldNameKeys.contains) == true {
+            namesUnder[Array(words[column].dropLast()), default: []].append(column)
+        }
         // A flattened form field ("fields.0.value") is named by its sibling column ("fields.0.name").
         let named: [Int: [Int]] = Dictionary(uniqueKeysWithValues: columns.indices.compactMap { column in
-            let parts = KeyHints.words(columns[column])
+            let parts = words[column]
             guard let last = parts.last, KeyHints.fieldValueKeys.contains(last), KeyHints.hint(keys[column]) == nil else { return nil }
-            let siblings = columns.indices.filter { other in
-                let words = KeyHints.words(columns[other])
-                return other != column && words.dropLast() == parts.dropLast() && words.last.map(KeyHints.fieldNameKeys.contains) == true
-            }
+            // The first few: an export names a field once, and a header that repeats it must not cost a pass per column.
+            let siblings = Array((namesUnder[Array(parts.dropLast())] ?? []).lazy.filter { $0 != column }.prefix(4))
             return siblings.isEmpty ? nil : (column, siblings)
         })
         let naming = Set(named.values.flatMap { $0 })
@@ -34,26 +42,31 @@ public enum CSVFile: FileFormat {
         // ("application.dob"): then it is read as a bare "name" is in JSON.
         // The object a column sits under: its path before the last dot, so a field of several
         // words ("application.date_of_birth") is one field; without a dot, all but its last word.
-        func parent(_ column: Int) -> [String] {
+        let parents: [[String]] = columns.indices.map { column in
             let header = columns[column]
             if let dot = header.lastIndex(of: ".") { return KeyHints.words(String(header[..<dot])) }
-            return Array(KeyHints.words(header).dropLast())
+            return Array(words[column].dropLast())
         }
-        let owned: [Int: [String]] = Dictionary(uniqueKeysWithValues: columns.indices.compactMap { column in
-            let parts = KeyHints.words(columns[column]), under = parent(column)
-            guard parts.count >= 2, !under.isEmpty, KeyHints.isBareName(parts.last), KeyHints.hint(keys[column]) == nil,
-                  KeyHints.isNotPeople(under.joined(separator: "_")) else { return nil }
-            let siblings = columns.indices.filter { other in other != column && parent(other) == under }
-            return siblings.isEmpty ? nil : (column, siblings.map { keys[$0] })
+        var under: [[String]: [Int]] = [:]
+        for column in columns.indices { under[parents[column], default: []].append(column) }
+        // Each object's fields read once: a name column is never among them, being a bare name.
+        let fieldsUnder = under.mapValues { KeyHints.RecordFields($0.map { keys[$0] }) }
+        let owned: [Int: KeyHints.RecordFields] = Dictionary(uniqueKeysWithValues: columns.indices.compactMap { column in
+            let parts = words[column], parent = parents[column]
+            guard parts.count >= 2, !parent.isEmpty, KeyHints.isBareName(parts.last), KeyHints.hint(keys[column]) == nil,
+                  KeyHints.isNotPeople(parent.joined(separator: "_")), (under[parent]?.count ?? 0) > 1, let fields = fieldsUnder[parent] else { return nil }
+            return (column, fields)
         })
+        // Whether the columns make a bare "name" a person's, read once for every cell.
+        let personsRecord = KeyHints.isPersonsRecord(siblings: keys, parent: nil)
         for row in rows.indices {
             if row.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
             for column in rows[row].indices {
                 var key = column < keys.count ? keys[column] : nil
                 // A column naming fields holds field names ("zip", "email"), and a bare
                 // "name" is a person's only as it is in JSON.
-                if naming.contains(column) || KeyHints.isBareName(key) && !KeyHints.bareNameIsPerson(rows[row][column], siblings: keys, parent: nil) { key = nil }
-                if let siblings = owned[column], KeyHints.ownRecord(siblings, value: rows[row][column]) { key = "name" }
+                if naming.contains(column) || KeyHints.isBareName(key) && !KeyHints.bareNameIsPerson(rows[row][column], personsRecord: personsRecord) { key = nil }
+                if let fields = owned[column], KeyHints.ownRecord(fields, value: rows[row][column]) { key = "name" }
                 if let siblings = named[column] {
                     let texts = siblings.compactMap { $0 < rows[row].count ? (KeyHints.words(columns[$0]).last!, rows[row][$0]) : nil }
                     key = KeyHints.namedField("value", siblings: texts) ?? key

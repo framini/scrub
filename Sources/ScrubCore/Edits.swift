@@ -432,7 +432,7 @@ extension Review {
             }
         }
         guard let own else { return nil }
-        for (id, revision) in will.sorted(by: { $0.key < $1.key }) where was[id]?.standIn != revision.standIn {
+        for (id, revision) in will.sorted(by: { $0.key < $1.key }) where was[id]?.standIn != revision.standIn || was[id]?.entity != revision.entity && after.replacements[id] != nil {
             let asName = findings[id].places.contains { spots.indices.contains($0.id) && squeezed.contains(spots[$0.id].value) }
             if let refusal = held(revision.standIn, own: own + [findings[id].original], marks: marks, asName: asName) { return refusal }
         }
@@ -707,7 +707,10 @@ extension ScrubResult {
             if review == nil, replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw Refusal.empty }
         }
         let made = edited(targets, kind: kind, replacement: replacement, choices: choices, marks: marks, edits: edits)
-        if let review, let refusal = try review.refusal(writing: made.2, marks: made.1, over: edits, marks: marks, typedFor: replacement.map { _ in targets.map(\.original) }) { throw refusal }
+        // Another kind writes a replacement typed before in forms of its own ("odalys" for a
+        // person's handle), so a kind changed under a typed replacement is checked as typed.
+        let typed = replacement != nil || kind != nil && !made.2.replacements.isEmpty
+        if let review, let refusal = try review.refusal(writing: made.2, marks: made.1, over: edits, marks: marks, typedFor: typed ? targets.map(\.original) : nil) { throw refusal }
         return made
     }
 
