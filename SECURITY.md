@@ -102,9 +102,22 @@ certificate, notarizes and staples the app and the disk image, and prints
 
 ## What Scrub does not promise
 
-Scrub finds personal data by reading it, and can miss some. The user reviews
-every finding before saving, and can mark what it missed. The known gaps are
-in [README › Limits](README.md#limits).
+Scrub finds personal data by reading it, and can miss some. It is a strong
+first pass, not a guarantee that a file holds no personal data, and the person
+using it is the last check:
+
+- **Review is enforced.** What Scrub is least sure of is put to the user, and
+  Copy, Save and dragging or sending a selection out wait until every question
+  is answered (`mayExport` in `Sources/Scrub/AppModel.swift`, tested in
+  `Tests/ScrubTests/ExportGateTests.swift`).
+- **Finishing by hand.** The user can mark a value Scrub missed, which replaces
+  it and its other written forms everywhere, change a stand-in, or keep an
+  original.
+- **No claim of clean.** A result says *Review before sharing*, and its counts
+  are what was found and replaced, not proof of what is left.
+
+The measured detection rates and the known gaps are in
+[README › Limits](README.md#limits).
 
 ## Reporting
 
