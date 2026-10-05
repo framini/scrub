@@ -82,6 +82,9 @@ enum ProseLabels {
             let label = ns.substring(with: match.range(at: 1)).lowercased()
             let joined = match.range(at: 2).location != NSNotFound
             guard let value = token(ns, from: NSMaxRange(match.range)), secretLike(ns.substring(with: NSRange(location: value.lowerBound, length: value.count)), label: label, joined: joined) else { continue }
+            // An object's reference under a key an API calls its "token" ("entity_token: P-MSBW…", see `KeyHints.fits`).
+            if let key = Patterns.keyBefore(ns, value.lowerBound), KeyHints.hint(key) == "SECRET",
+               !KeyHints.fits(key, ns.substring(with: NSRange(location: value.lowerBound, length: value.count))) { continue }
             found.labels.append(range(match.range(at: 1)))
             found.spans.append(Span(range: value, entity: "SECRET", score: 0.9))
         }

@@ -136,6 +136,8 @@ enum ContextStage {
         // unless the sentence calls it a key or token.
         if ["SECRET", "ID"].contains(found.kind), !TextRanges.matches(objectID, in: value).isEmpty,
            TextRanges.matches(secretWord, in: sentence(around: range, in: text).text).isEmpty { return nil }
+        // So is one under a key an API calls its "token" ("entity_token": "P-MSBW…", see `KeyHints.fits`).
+        if found.kind == "SECRET", let key = Patterns.keyBefore(ns, range.lowerBound), KeyHints.hint(key) == "SECRET", !KeyHints.fits(key, value) { return nil }
         let entity: String
         switch found.kind {
         case "PERSON":

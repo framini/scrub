@@ -11,14 +11,17 @@ struct ReviewView: View {
     let message: String?
     let onDone: (Choices) -> Void
     let onCancel: () -> Void
+    /// Reads a finding as another kind ("VIA GARIBALDI" as a street, not a name); nil where the sheet can't.
+    let onKind: ((Finding, String) -> Void)?
     @State private var choices: Choices
 
-    init(findings: [Finding], title: String? = nil, body: String? = nil, choices: Choices, onDone: @escaping (Choices) -> Void, onCancel: @escaping () -> Void) {
+    init(findings: [Finding], title: String? = nil, body: String? = nil, choices: Choices, onDone: @escaping (Choices) -> Void, onCancel: @escaping () -> Void, onKind: ((Finding, String) -> Void)? = nil) {
         self.findings = findings
         self.title = title
         self.message = body
         self.onDone = onDone
         self.onCancel = onCancel
+        self.onKind = onKind
         _choices = State(initialValue: choices)
     }
 
@@ -36,7 +39,7 @@ struct ReviewView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(findings) { finding in
-                        ReviewRow(finding: finding, choices: $choices, placeByPlace: title != nil)
+                        ReviewRow(finding: finding, choices: $choices, placeByPlace: title != nil, onKind: onKind)
                         Divider().overlay(Color.fog)
                     }
                 }
@@ -79,11 +82,13 @@ private struct ReviewRow: View {
     let finding: Finding
     @Binding var choices: Choices
     @State private var placeByPlace: Bool
+    let onKind: ((Finding, String) -> Void)?
 
-    init(finding: Finding, choices: Binding<Choices>, placeByPlace: Bool = false) {
+    init(finding: Finding, choices: Binding<Choices>, placeByPlace: Bool = false, onKind: ((Finding, String) -> Void)? = nil) {
         self.finding = finding
         _choices = choices
         _placeByPlace = State(initialValue: placeByPlace)
+        self.onKind = onKind
     }
 
     /// Replace or leave everywhere; neither while places differ.
@@ -99,17 +104,44 @@ private struct ReviewRow: View {
     }
     private var replaced: Bool { everywhere.wrappedValue != .leave }
 
+    /// The kind, as a menu of the others where the sheet can change it: picking
+    /// one replaces the value as that kind everywhere it appears.
+    @ViewBuilder private var kindBadge: some View {
+        let label = HStack(spacing: 3) {
+            Text(Copy.kind(finding.entity))
+            if onKind != nil { Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)) }
+        }
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(Color.evergreen)
+        .padding(.horizontal, 6)
+        .frame(height: 18)
+        .background(Color.lichen, in: .rect(cornerRadius: 4))
+        if let onKind {
+            Menu {
+                ForEach(ValueEditor.kinds(including: finding.entity), id: \.self) { kind in
+                    Button(Copy.kind(kind)) {
+                        choices.set(finding, leave: false)
+                        onKind(finding, kind)
+                    }
+                    .disabled(Copy.kind(kind) == Copy.kind(finding.entity))
+                }
+            } label: { label }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help(Copy.kindHelp)
+        } else {
+            label
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
-                        Text(Copy.kind(finding.entity))
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Color.evergreen)
-                            .padding(.horizontal, 6)
-                            .frame(height: 18)
-                            .background(Color.lichen, in: .rect(cornerRadius: 4))
+                        kindBadge
                         Text(finding.original).font(.system(size: 13, weight: .semibold, design: .monospaced)).lineLimit(1).truncationMode(.middle)
                         Image(systemName: "arrow.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.slate)
                         Text(finding.standIn).font(.system(size: 13, design: .monospaced)).foregroundStyle(Color.slate).lineLimit(1).truncationMode(.middle)

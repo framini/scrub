@@ -10,8 +10,8 @@ enum Patterns {
         ("US_SSN", #"(?<![\d-])\d{3}([- ])\d{2}\1\d{4}(?![\d-])"#, 0.85, ["ssn", "social", "security"], []),
         ("US_SSN", #"\b\d{5}-\d{4}\b|\b\d{3}-\d{6}\b|\b\d{9}\b|\b\d{3}[- .]\d{2}[- .]\d{4}\b"#, 0.05, ["ssn", "ssns", "ssid", "social", "security"], []),
         ("US_SSN", #"\b\d{3}[- .]\d{2}[- .]\d{4}\b"#, 0.5, ["ssn", "ssns", "ssid", "social", "security"], []),
-        ("SECRET", #"\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{10,}\b|\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,})\b|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bxox[abposr]-[A-Za-z0-9-]{10,}\b|\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}|(?<=[Bb]earer )[A-Za-z0-9._~+/=-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----"#, 0.9, [], [.dotMatchesLineSeparators]),
-        ("SECRET", #"(?<=(?:password|passwd|pwd|passphrase|secret|api[_-]?key|access[_-]?key|private[_-]?key|token|session[_-]?id)["']?\s{0,3}[:=]\s{0,3}["']?)[^\s"',;`]{4,}(?!`)"#, 0.9, [], [.caseInsensitive]),
+        ("SECRET", #"\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{10,}\b|\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,})\b|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bxox[abposr]-[A-Za-z0-9-]{10,}\b|\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}|\beyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*|(?<=[Bb]earer )[A-Za-z0-9._~+/=-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----"#, 0.9, [], [.dotMatchesLineSeparators]),
+        ("SECRET", #"(?<=(?:password|passwd|pwd|passphrase|secret|api[_-]?key|access[_-]?key|private[_-]?key|token|session[_-]?id)["']?\s{0,3}[:=]\s{0,3}["']?)[^\s"',;`}\])]{4,}(?!`)"#, 0.9, [], [.caseInsensitive]),
         // The display name in "Priya Raghunathan <priya@northwind.io>" is a person
         // even when the name model has never seen it, also quoted or as "Raghunathan, Priya".
         ("PERSON", #"(?<![\p{L}'’.-])\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*){1,3}(?="?[ \t]*<[^<>\s@]+@[^<>\s]+>)|(?<![\p{L}'’.,-][ \t]{0,3})\p{Lu}[\p{L}'’.-]*,[ \t]*\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*)?(?="?[ \t]*<[^<>\s@]+@[^<>\s]+>)"#, 0.9, [], []),
@@ -21,6 +21,8 @@ enum Patterns {
         ("PERSON", #"(?<![\p{L}'’.-])\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*){1,3}(?=[ \t]*\([ \t]*[^()\s@]+@[^()\s]+[ \t]*\))"#, 0.9, [], []),
         ("DATE_OF_BIRTH", #"\b\d{4}([-/.])\d{1,2}\1\d{1,2}\b|\b\d{1,2}([-/.])\d{1,2}\2\d{4}\b"#, 0.1, Context.birth, []),
         ("ADDRESS", #"\b\d{1,6}[A-Z]?\s+(?:[A-Z][a-z]+\.?\s+){1,4}(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Way|Lane|Ln|Drive|Dr|Court|Ct|Place|Pl|Terrace|Ter|Parkway|Pkwy|Highway|Hwy|Circle|Cir|Square|Sq|Trail|Trl|Alley|Row|Crescent|Close)\b\.?(?:\s+(?:N|S|E|W|NE|NW|SE|SW)\b)?(?:,?\s+(?:Apt|Apartment|Suite|Ste|Unit|Floor|Fl|#)\.?\s*[A-Za-z0-9-]+)?"#, 0.6, [], []),
+        // A passport's, ID card's or visa's machine-readable zone: all its lines, or one (see `MachineZone`).
+        ("MRZ", #"(?<![A-Za-z0-9<])(?:[A-Z0-9<]{30}(?:\r?\n|\\n|\\r\\n| )[A-Z0-9<]{30}(?:\r?\n|\\n|\\r\\n| )[A-Z0-9<]{30}|[A-Z0-9<]{44}(?:\r?\n|\\n|\\r\\n| )[A-Z0-9<]{44}|[A-Z0-9<]{36}(?:\r?\n|\\n|\\r\\n| )[A-Z0-9<]{36}|[A-Z0-9<]{44}|[A-Z0-9<]{36}|[A-Z0-9<]{30})(?![A-Za-z0-9<])"#, 0.97, [], []),
         ("US_BANK_NUMBER", #"\b\d{8,17}\b"#, 0.05, ["check", "account", "acct", "bank", "save", "debit"], []),
         ("US_DRIVER_LICENSE", #"\b(?:[A-Z]\d{1,12}|[A-Z]{1,2}\d{5,6}|[A-Z]{2}\d{3,7}|\d{2}[A-Z]{3}\d{5,6}|[A-Z]\d{13,14}|[A-Z]\d{18}|[A-Z]\d{6}R|\d{9}[A-Z]|[A-Z]{2}\d{6}[A-Z]|\d{8}[A-Z]{2}|\d{3}[A-Z]{2}\d{4}|[A-Z]\d[A-Z]\d[A-Z]|\d{7,8}[A-Z])\b"#, 0.3, ["driver", "license", "permit", "lic", "identification", "dls", "cdls", "driving"], []),
         ("US_DRIVER_LICENSE", #"\b(?:\d{6,14}|\d{16})\b"#, 0.01, ["driver", "license", "permit", "lic", "identification", "dls", "cdls", "driving"], []),
@@ -67,6 +69,10 @@ enum Patterns {
                 if entity == "SECRET", let cut = URLs.queryValueEnd(ns, range) { range = range.lowerBound..<cut }
                 let value = TextRanges.substring(text, range)
                 if entity == "PERSON" && NameTagger.namesOrganisation(value) { return }
+                // "token": null is no secret, nor "pwd": undefined.
+                if entity == "SECRET", Detector.literals.contains(value) { return }
+                // An object's reference under a key an API calls its "token" ("entity_token": "P-MSBW…") unlocks nothing (see `KeyHints.fits`).
+                if entity == "SECRET", let key = keyBefore(ns, range.lowerBound), KeyHints.hint(key) == "SECRET", !KeyHints.fits(key, value) { return }
                 // "https://deploy:hunter2@git.example.test" holds a password and a host, no address.
                 if entity == "EMAIL_ADDRESS", inURLCredentials(text, at: range.lowerBound) { return }
                 // "social.example/@odalys.ferriter" is a link to a handle (see `URLs`), no address.
@@ -135,6 +141,14 @@ enum Patterns {
         }
         return Array(Set(found)).sorted()
     }
+    private static let keyTail = TextPattern(#"([A-Za-z0-9_-]+)["']?\s{0,3}[:=]\s{0,3}["']?$"#)
+    /// The key written just before a value: "entity_token" of `"entity_token": "P-…"`.
+    static func keyBefore(_ ns: NSString, _ start: Int) -> String? {
+        let from = max(0, start - 64)
+        let before = ns.substring(with: NSRange(location: from, length: start - from))
+        guard let match = TextRanges.matches(keyTail, in: before).last else { return nil }
+        return (before as NSString).substring(with: match.range(at: 1))
+    }
     private static let credentials = TextPattern(#"[A-Za-z][A-Za-z0-9+.\-]*://[^\s/@]*:$"#)
     /// Whether `start` follows a URL's scheme and user name ("https://deploy:").
     private static func inURLCredentials(_ text: String, at start: Int) -> Bool {
@@ -165,14 +179,18 @@ enum Patterns {
         switch entity {
         case "CREDIT_CARD":
             let digits = value.compactMap(\.wholeNumberValue)
-            return (13...19).contains(digits.count) && luhn(digits)
+            return (13...19).contains(digits.count) && luhn(digits) && !Self.epochMilliseconds(digits)
         case "IBAN_CODE": return iban(value)
+        case "MRZ": return MachineZone.isZone(value)
         case "IP_ADDRESS":
             var v4 = in_addr(); var v6 = in6_addr()
             return value.withCString { inet_pton(AF_INET, $0, &v4) == 1 || inet_pton(AF_INET6, $0, &v6) == 1 }
         default: return true
         }
     }
+    /// Only a Visa card is 13 digits, and it opens with a 4; 13 digits opening
+    /// with a 1 is a time in milliseconds ("sent_at": 1668455936404).
+    static func epochMilliseconds(_ digits: [Int]) -> Bool { digits.count == 13 && digits.first != 4 }
     static func luhn(_ digits: [Int]) -> Bool {
         var sum = 0
         for (i, digit) in digits.reversed().enumerated() {

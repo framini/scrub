@@ -378,7 +378,7 @@ public final class Job {
         for index in spans.indices {
             guard let leaf = leafOf[index] else { continue }
             addresses[index] = placed[leaf]
-            if ["FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "USERNAME", "INITIALS"].contains(spans[index].entity) { owners[index] = people.of(leaves[leaf]) }
+            if ["FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "USERNAME", "INITIALS", "MRZ"].contains(spans[index].entity) { owners[index] = people.of(leaves[leaf]) }
         }
         return (addresses, owners)
     }
@@ -448,10 +448,14 @@ public final class Job {
         // Stand-ins are drawn last span first, as seeded runs have always done;
         // a username after the email and name it may follow ("user quillpen77"
         // below "quillpen77@…"), and an age or last four digits after what they are read from.
-        let later = { (index: Int) in StandIns.derived.contains(ordered[index].entity) || StandIns.isMasked(TextRanges.substring(text, ordered[index].range)) }
+        let later = { (index: Int) in StandIns.derived.contains(ordered[index].entity) || ordered[index].entity == "MRZ" || StandIns.isMasked(TextRanges.substring(text, ordered[index].range)) }
         let handle = { (index: Int) in ordered[index].entity == "USERNAME" && !later(index) }
         for span in ordered where span.entity == "LAST_DIGITS" { standIns.noteEnding(TextRanges.substring(text, span.range)) }
-        let drawOrder = ordered.indices.reversed().filter { !later($0) && !handle($0) } + ordered.indices.reversed().filter(handle) + ordered.indices.reversed().filter(later)
+        // Zones last, in the text's order, an ID card's first lines stored alone before any second line (see `MachineZone.opensCard`).
+        let zone = { (index: Int) in ordered[index].entity == "MRZ" }
+        let opens = { (index: Int) in zone(index) && MachineZone.opensCard(TextRanges.substring(text, ordered[index].range)) }
+        let drawOrder = ordered.indices.reversed().filter { !later($0) && !handle($0) } + ordered.indices.reversed().filter(handle) + ordered.indices.reversed().filter { later($0) && !zone($0) }
+            + ordered.indices.filter(opens) + ordered.indices.filter { zone($0) && !opens($0) }
         // Numbers, birth dates and what is read off them note where they sit.
         let spots = ordered.contains { StandIns.anchored($0.entity) } ? self.spots(text) : nil
         var unclear: Set<Int> = []

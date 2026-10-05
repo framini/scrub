@@ -500,6 +500,8 @@ extension Review {
     /// value holds it (or it is an original a person kept), or else line by
     /// line, each without the markup around it (a JSON key, an XML tag, the
     /// quotes and commas between them).
+    /// A key and its string value, either end's quote possibly cut by the selection.
+    private static let stringValue = TextPattern(#""?[^",{}\[\]]*"\s*:\s*"((?:[^"\\]|\\.)*)(?:"|$)"#)
     func candidates(_ text: String) -> [String] {
         lock.lock()
         defer { lock.unlock() }
@@ -508,8 +510,22 @@ extension Review {
             !candidate.isEmpty && (marking.originals.contains(candidate.lowercased()) || marking.joined.range(of: candidate).location != NSNotFound)
         }
         if held(text) { return [text] }
+        // A value written with JSON's escapes ("Qz\\u0061x") is the value it decodes to.
+        func decoded(_ written: String) -> String? {
+            guard written.contains("\\"), let value = try? JSONSerialization.jsonObject(with: Data(("\"" + written + "\"").utf8), options: [.fragmentsAllowed]) as? String else { return nil }
+            return value
+        }
+        if let plain = decoded(text), held(plain) { return [plain] }
         var found: [String] = []
         for line in text.split(whereSeparator: \.isNewline) {
+            // JSON written on one line holds several values: each string a key holds is one.
+            if line.contains("\":") {
+                for match in TextRanges.matches(Self.stringValue, in: String(line)) where match.numberOfRanges > 1 {
+                    let written = ((String(line) as NSString).substring(with: match.range(at: 1)) as String).trimmingCharacters(in: .whitespaces)
+                    let candidate = decoded(written) ?? written
+                    if held(candidate), !found.contains(candidate) { found.append(candidate) }
+                }
+            }
             var piece = String(line).replacingOccurrences(of: #"<[^>]*>"#, with: " ", options: .regularExpression)
             if let key = piece.range(of: #"^\s*"?[^"]*"\s*:\s*"#, options: .regularExpression) { piece.removeSubrange(key) }
             let ns = piece as NSString

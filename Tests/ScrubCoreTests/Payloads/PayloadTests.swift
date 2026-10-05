@@ -4,7 +4,8 @@ import Testing
 
 /// Realistic API payloads, each rendered every way it reaches the app, judged
 /// field by field against what the generator knows each value to be.
-/// SCRUB_PROPERTY_CASES sets how many payloads; SCRUB_PROPERTY_SEED replays a run.
+/// SCRUB_PROPERTY_CASES sets how many payloads; SCRUB_PROPERTY_SEED replays a run;
+/// SCRUB_PAYLOAD_SHAPE keeps one shape.
 @Suite(.serialized)
 struct PayloadProperties {
 
@@ -21,6 +22,8 @@ struct PayloadProperties {
         for index in 0..<run.count {
             var payloads = PayloadGen(seed: run.seed(index))
             let shape = PayloadGen.shapes[index % PayloadGen.shapes.count]
+            // SCRUB_PAYLOAD_SHAPE=identity runs one shape alone.
+            if let only = ProcessInfo.processInfo.environment["SCRUB_PAYLOAD_SHAPE"], only != shape { continue }
             let payload = payloads.payload(shape)
             for rendering in renderings {
                 guard let rendered = Render.render(payload, as: rendering, gen: &payloads.gen) else { continue }

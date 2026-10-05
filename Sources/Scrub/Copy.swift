@@ -40,7 +40,7 @@ enum Copy {
         case "PERSON", "FIRST_NAME", "LAST_NAME", "INITIALS": "Name"
         case "EMAIL_ADDRESS": "Email"
         case "PHONE_NUMBER": "Phone"
-        case "ADDRESS", "POSTAL_CODE": "Address"
+        case "ADDRESS", "POSTAL_CODE": "Street or address"
         case "LOCATION", "REGION", "LATITUDE", "LONGITUDE", "COORDINATES", "TIME_ZONE": "Place"
         case "DATE_OF_BIRTH", "AGE": "Birth date"
         case "SECRET": "Secret"

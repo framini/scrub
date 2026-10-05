@@ -7,6 +7,15 @@ enum Kind: String {
     case fullName, firstName, lastName, middleName, email, phone, ssn, ssnLast4, taxID, dob, dobYear
     case street, city, zip, ip, card, account, license, passport, username
     case region, unit, addressLine, latitude, longitude, lastDigits, age, initials
+    /// An address split into its parts, as identity APIs send it: the house
+    /// number and the street's name in fields of their own, beside the line
+    /// that joins them. A province written as a code of a country with no US-style regions ("TO").
+    case houseNumber, streetName, province
+    /// A birth date's month or day in a field of its own: it changes with the
+    /// date, but may by chance come out the same, so only the relations judge it.
+    case dobMonth, dobDay
+    /// A passport's or ID card's machine-readable zone: one line, or all of them.
+    case mrz
     /// A person's or account's record ID ("customer_id"), replaced in its own shape (see README).
     case recordID
     var isName: Bool { [.fullName, .firstName, .lastName, .middleName].contains(self) }
@@ -269,6 +278,7 @@ struct PayloadGen {
     }
     static let userAgents = ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                              "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+                             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0",
                              "okhttp/4.12.0", "python-requests/2.32.3", "PostmanRuntime/7.39.0"]
     static let companies = ["Northwind Traders LLC", "Harborview Logistics Inc.", "Bluebird Dental Group", "Cascade Mountain Outfitters", "Riverside Community Credit Union"]
     static let titles = ["Senior Accountant", "Staff Engineer", "Registered Nurse", "Operations Manager", "Customer Success Lead"]

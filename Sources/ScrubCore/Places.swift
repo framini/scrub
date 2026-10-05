@@ -251,6 +251,18 @@ enum Places {
         }
     }
 
+    /// A country written as a code ("IT", "ITA", "UK") or a name ("Italy"), as its two-letter code.
+    static func code(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespaces).uppercased()
+        if trimmed == "UK" { return "GB" }
+        if trimmed.count == 2, trimmed.allSatisfy({ $0.isASCII && $0.isLetter }), ["US", "CA", "GB", "AU"].contains(trimmed) || abroad.contains(where: { $0.country == trimmed }) { return trimmed }
+        if trimmed.count == 3, let code = alpha3[trimmed] { return code }
+        return AddressBlock.countryName(value)
+    }
+    private static let alpha3 = ["USA": "US", "CAN": "CA", "GBR": "GB", "AUS": "AU", "DEU": "DE", "FRA": "FR", "NLD": "NL", "BEL": "BE", "ESP": "ES", "ITA": "IT", "PRT": "PT", "AUT": "AT",
+                                 "CHE": "CH", "SWE": "SE", "DNK": "DK", "NOR": "NO", "FIN": "FI", "POL": "PL", "CZE": "CZ", "IRL": "IE", "NZL": "NZ", "ZAF": "ZA", "IND": "IN", "SGP": "SG",
+                                 "MEX": "MX", "BRA": "BR", "JPN": "JP"]
+
     private static let canadian = TextPattern(#"^[A-Za-z]\d[A-Za-z] ?\d[A-Za-z]\d$"#)
     private static let british = TextPattern(#"^[A-Za-z]{1,2}\d[A-Za-z\d]? ?\d[A-Za-z]{2}$"#)
     /// The country a postcode is written for, from its shape alone.

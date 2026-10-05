@@ -203,8 +203,10 @@ enum RecordIDs {
         return (named, unsure)
     }
 
+    // Each repeated piece starts with its separator: with the separator optional, a long run
+    // of letters can be split into pieces in exponentially many ways before the match fails.
     private static let nameNumberID = TextPattern(
-        #"(?<![\w./@#-])(?:[A-Za-z]{3,}(?:[_.-]?[A-Za-z]{2,})*[_.-]?[0-9]{2,}|[0-9]{2,}[_-][A-Za-z]{3,}(?:[_-][A-Za-z]{2,})*)(?![\w-]|[.,][0-9A-Za-z])"#)
+        #"(?<![\w./@#-])(?:[A-Za-z]{3,}(?:[_.-][A-Za-z]{2,})*[_.-]?[0-9]{2,}|[0-9]{2,}[_-][A-Za-z]{3,}(?:[_-][A-Za-z]{2,})*)(?![\w-]|[.,][0-9A-Za-z])"#)
     /// IDs in prose built from the name of someone the same text names, and
     /// a number ("pat-1987" or "ferriter07" beside Pat Ferriter): theirs,
     /// however short or unlisted the name. `names` holds the words, of three

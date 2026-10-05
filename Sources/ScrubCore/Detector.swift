@@ -49,6 +49,15 @@ public final class Detector {
             var spans = found(text, key: key, contextWords: contextWords, modelled: modelled, context: context).compactMap { span in
                 span.entity != "PERSON" ? span : span.score < 0.95 ? NameShape.trimmed(span, in: text) : NameShape.withoutCommand(span, in: text)
             }
+            // A literal of the code or JSON around a value ("livemode": false, None) is no one, whatever a model reads.
+            // In quotes it is a string ("pin": "null"), which may be a secret.
+            let units = text.utf16
+            func quoted(_ range: Range<Int>) -> Bool {
+                guard range.lowerBound > 0, range.upperBound < units.count else { return false }
+                let before = units[units.index(units.startIndex, offsetBy: range.lowerBound - 1)], after = units[units.index(units.startIndex, offsetBy: range.upperBound)]
+                return before == after && (before == 34 || before == 39)
+            }
+            spans.removeAll { Self.literals.contains(TextRanges.substring(text, $0.range)) && ($0.entity != "SECRET" || !quoted($0.range)) }
             // An ID made of a name after the word for whose it is ("account Quillmere_Tavish"), where nothing else was read.
             spans += RecordIDs.labelled(in: text).filter { id in !spans.contains { $0.range.overlaps(id.range) } }
             // One made of a word and a number, with nothing labelling it ("close QUILLMERE-0042"):
@@ -399,8 +408,13 @@ public final class Detector {
                 index < ns.length && Unicode.Scalar(ns.character(at: index)).map(CharacterSet.uppercaseLetters.contains) == true
             }
             // A lowercase name part counts only as the head of a camelCase word ("mariaGonzalez").
+            // Inside a pasted object's key, a name counts only as the whole key: "ledgerlyFees" beside a
+            // "Ledgerly" read as someone is still the field's name, and renaming it breaks the object.
+            var keys: [Range<Int>]?
             for match in matcher.matcher.matches(in: text, accepting: { wholeWord($0, in: text) })
             where !matcher.capitalOnly[match.index] || capital(match.range.lowerBound) || capital(match.range.upperBound) {
+                if keys == nil { keys = text.contains(":") || text.contains("=") ? KeyedValues.scan(text).keys : [] }
+                if keys!.contains(where: { $0.overlaps(match.range) && $0 != match.range }) { continue }
                 if matcher.cuedOnly[match.index] && !NameCues.position(match.range, in: text) { continue }
                 if matcher.unlisted[match.index] && !NameCues.namedWord(match.range, in: text) { continue }
                 // "Okafor, Ama" is one person unless it is two names' ends in a list: "Ama Okafor, Ama Lind".
@@ -686,6 +700,7 @@ public final class Detector {
         let ns = text as NSString
         return !TextRanges.joinsWord(ns, at: range.lowerBound, underscore: true) && !TextRanges.joinsWord(ns, at: range.upperBound, underscore: true)
     }
+    static let literals: Set<String> = ["true", "false", "null", "True", "False", "None", "nil", "undefined", "NaN", "TRUE", "FALSE", "NULL"]
     static func resolve(_ spans: [Span]) -> [Span] {
         let ordered = spans.sorted { a, b in
             if a.score != b.score { return a.score > b.score }

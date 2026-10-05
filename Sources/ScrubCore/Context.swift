@@ -43,26 +43,33 @@ enum Context {
 
 public enum KeyHints {
     private static let groups: [(String, String)] = [
-        ("name fullname contactname customername displayname ownername managername authorname reportername assigneename requestername sendername recipientname holdername cardholder cardholdername accountholder accountholdername patientname employeename legalname callername nameoncard nameonaccount payeename beneficiaryname billingname shippingname insuredname guarantorname subscribername policyholdername", "PERSON"),
-        ("firstname givenname middlename fname forename preferredname", "FIRST_NAME"),
-        ("lastname surname familyname lname maidenname", "LAST_NAME"),
+        ("name fullname contactname customername displayname ownername managername authorname reportername assigneename requestername sendername recipientname holdername cardholder cardholdername accountholder accountholdername patientname employeename legalname callername nameoncard nameonaccount payeename beneficiaryname billingname shippingname insuredname guarantorname subscribername policyholdername embossname embossedname chosenname debtorname creditorname receivername originatorname matchedname nameinenglish namelatin aka akas alsoknownas", "PERSON"),
+        ("firstname givenname middlename fname forename preferredname namefirst namemiddle namegiven", "FIRST_NAME"),
+        ("lastname surname familyname lname maidenname namelast namefamily", "LAST_NAME"),
         ("email emailaddress emailaddr mail", "EMAIL_ADDRESS"),
-        ("phone phonenumber mobile cell telephone tel fax mobilenumber mobilephone cellphone cellnumber phoneno telno telephonenumber contactnumber msisdn", "PHONE_NUMBER"),
+        ("phone phonenumber mobile cell telephone tel fax mobilenumber mobilephone cellphone cellnumber phoneno telno telephonenumber contactnumber msisdn nationalformat internationalformat e164", "PHONE_NUMBER"),
         ("ssn socialsecuritynumber socialsecurity ssnnumber", "US_SSN"),
-        ("address streetaddress street addressline1 addressline2 addressline line1 line2 addr address1 street1 addr1 streetline1 street2 address2 addr2 streetline2 addressline3 line3 aptsuite apartmentnumber aptnumber suitenumber unitnumber unit apt apartment formattedaddress fulladdress physicaladdress mailingaddress homeaddress residentialaddress billingaddress shippingaddress", "ADDRESS"),
+        ("address streetaddress street addressline1 addressline2 addressline line1 line2 addr address1 street1 addr1 streetline1 street2 address2 addr2 streetline2 addressline3 line3 address3 addr3 street3 extendedaddress streetaddress2 aptsuite apartmentnumber aptnumber suitenumber unitnumber flatnumber unit apt apartment housenumber housenum houseno housename buildingnumber buildingno streetnumber streetnum streetno civicnumber premisenumber streetname thoroughfare buildingname formattedaddress fulladdress physicaladdress mailingaddress homeaddress residentialaddress billingaddress shippingaddress", "ADDRESS"),
         ("dob dateofbirth birthdate birthday birthyear yearofbirth yob birthmonth monthofbirth dobmonth dobday dayofbirth dobyear", "DATE_OF_BIRTH"),
+        // Where someone was born is theirs as their address is.
+        // A card's number, whole or masked ("999911XXXXXX1234").
+        ("cardnumber creditcardnumber debitcardnumber ccnumber cardno primaryaccountnumber pan", "CREDIT_CARD"),
+        ("cityofbirth placeofbirth birthplace birthcity townofbirth municipalityofbirth", "LOCATION"),
+        ("birthregion birthstate stateofbirth provinceofbirth regionofbirth", "REGION"),
+        // A passport's or ID card's machine-readable zone, one line or all of them.
+        ("mrz mrz1 mrz2 mrz3 mrzline mrzline1 mrzline2 mrzline3 mrzlines mrzcode machinereadablezone", "MRZ"),
         ("age ageyears currentage", "AGE"),
         ("initials nameinitials monogram", "INITIALS"),
         ("latitude lat geolat", "LATITUDE"),
         ("longitude lng lon long geolng geolon", "LONGITUDE"),
         ("coordinates coords latlng latlong latlon geolocation geopoint geocoordinates", "COORDINATES"),
         ("ip ipaddress ipaddr clientip remoteip remoteaddr xforwardedfor", "IP_ADDRESS"),
-        ("city town locality", "LOCATION"),
-        ("zip zipcode postcode postalcode zip5 zipplus4", "POSTAL_CODE"),
-        ("state stateprovince stateorprovince province provincestate region addressregion administrativearea administrativearealevel1 statecode provincecode regioncode stateabbr stateabbreviation countrysubdivision", "REGION"),
+        ("city town locality municipality municipalityname cityname townname", "LOCATION"),
+        ("zip zipcode postcode postalcode zip5 zipplus4 postal postalzip", "POSTAL_CODE"),
+        ("state stateprovince stateorprovince province provincestate region addressregion administrativearea administrativearealevel1 statecode provincecode regioncode stateabbr stateabbreviation countrysubdivision majoradmindivision administrativedistrictlevel1", "REGION"),
         ("password passwd pwd passphrase secret clientsecret apisecret apikey accesskey secretkey privatekey token accesstoken refreshtoken idtoken authtoken sessiontoken bearertoken authorization cookie sessionid otp credential credentials cvv cvc cvv2 securitycode pin", "SECRET"),
         ("username login handle screenname nickname", "USERNAME"),
-        ("nationalid nationalidnumber nationalidentifier nationalinsurancenumber nino personalnumber personalidnumber personnummer idnumber identitynumber identitycard idcard idcardnumber governmentid passport passportnumber passportno passportid taxid taxnumber taxpayerid tin sin socialinsurancenumber driverlicense driverslicense driverlicensenumber licensenumber nif nie dni cpf curp pesel bsn aadhaar documentnumber accountnumber bankaccountnumber acctnumber accountno acctno acctnum routingnumber ein creditfilenumber", "ID_NUMBER")
+        ("nationalid nationalidnumber nationalidentifier nationalinsurancenumber nino personalnumber personalidnumber personnummer idnumber identitynumber identitycard idcard idcardnumber governmentid identitydocument passport passportnumber passportno passportid taxid taxnumber taxpayerid tin sin socialinsurancenumber driverlicense driverslicense driverlicensenumber licensenumber driverlicence driverslicence drivinglicence drivinglicense licencenumber driverlicencenumber nif nie dni cpf curp pesel bsn aadhaar documentnumber accountnumber bankaccountnumber acctnumber accountno acctno acctnum routingnumber ein creditfilenumber cpfnumber nis nisnumber cic electorkey electornumber docnumber documentno licenseplate platenumber", "ID_NUMBER")
     ]
     private static let hints = Dictionary(uniqueKeysWithValues: groups.flatMap { names, entity in
         names.split(separator: " ").map { (String($0), entity) }
@@ -78,7 +85,7 @@ public enum KeyHints {
         // Lists of one field ("names", "phone_numbers", "email_addresses") hint like the field.
         if let singular = singular(compact), !unpluralised.contains(singular), let plural = hints[singular] { return plural }
         // "ssn_last4", "card.last4", "last_four_digits": the end of a number, not a count.
-        if compact.contains("last4") || compact.contains("lastfour") || compact == "ssn4" { return "LAST_DIGITS" }
+        if compact.contains("last4") || compact.contains("lastfour") || compact == "ssn4" || compact == "mask" || compact == "accountmask" { return "LAST_DIGITS" }
         // "ssn_masked": "***-**-7784" still shows the real last digits.
         if compact.contains("masked") || compact.contains("redacted") || compact.contains("obfuscated") { return words(key).contains(where: { ["ssn", "card", "pan", "phone", "account", "acct", "number", "tin", "taxid"].contains($0) }) ? "LAST_DIGITS" : nil }
         let parts = words(key)
@@ -132,12 +139,28 @@ public enum KeyHints {
     /// value ("id_number": {"value": …}, "emails": [{"data": …}]). Parts of a
     /// field are read as the part: "name": {"first": …}, "phones": [{"number": …}],
     /// "emails": [{"address": …}], "address": {"line": […]}, "dob": {"year": …}.
-    static func resolve(_ key: String?, parent: String?) -> String? {
+    /// The key an object or a list is read under: as `resolve`, but a secret's
+    /// map's meaning reaches every map in it ("credentials": {"primary": {"value": …}}),
+    /// but a list's record ("credentials": [{"parts": […]}], an ID document's) is its own.
+    static func resolveContainer(_ key: String?, parent: String?, listed: Bool = false) -> String? {
+        hint(parent) == "SECRET" && hint(key) == nil && listed && !secretParts.contains(words(key).joined()) ? key : resolve(key, parent: parent)
+    }
+    /// `listed`: the value sits in a record of a list ("credentials": [{…}]), whose fields
+    /// describe a document or a check, and only a credential's own parts are secret there,
+    /// or a `value` written as a token is ("primary": "t7Pq9mN2sV4bX6kL").
+    static func resolve(_ key: String?, parent: String?, listed: Bool = false, value: String? = nil) -> String? {
+        // An identity document's own number: "document": {"number": …}, "idDocs": [{"number": …}].
+        if hint(key) == nil, documentNumbers.contains(words(key).joined()), let last = words(parent).last, identityDocuments.contains(last) { return "document_number" }
         guard let parentHint = hint(parent) else { return key }
         let own = hint(key)
         let compact = words(key).joined()
         switch parentHint {
-        case "SECRET" where own == nil: return parent
+        // A credential's own parts ("credentials": {"user": …, "primary": …, "webhook": …}); never what a
+        // list of authorizations or of captured credentials describes them with ("amount", "category", "type").
+        case "SECRET" where own == nil && listed:
+            let token = value.map(isTokenShaped) == true && !describing.contains(compact) && !isStructural(key)
+            return secretParts.contains(compact) || token ? parent : key
+        case "SECRET" where own == nil && (["hash", "salt", "digest", "signature", "fingerprint"].contains(compact) || !describing.contains(compact) && !describing.contains(words(key).last ?? "") && !isStructural(key)): return parent
         case "PERSON":
             if ["first", "given", "givennames", "forenames", "firstnames"].contains(compact) { return "first_name" }
             if ["middle", "middlenames", "middles"].contains(compact) { return "middle_name" }
@@ -146,6 +169,8 @@ public enum KeyHints {
         case "PHONE_NUMBER" where ["number", "digits", "e164", "national", "nationalnumber", "international", "internationalnumber", "formatted", "raw", "full"].contains(compact): return parent
         case "EMAIL_ADDRESS" where ["address", "addr"].contains(compact): return parent
         case "ADDRESS" where ["line", "lines", "text", "formatted", "full"].contains(compact): return parent
+        // A document's own number under a bare key: "passport": {"number": …}, "national_ids": [{"number": …}].
+        case "ID_NUMBER" where own == nil && documentNumbers.contains(compact), "US_SSN" where own == nil && documentNumbers.contains(compact): return parent
         // Read as the part it is, so its stand-in is that part of the stand-in date: "dob": {"month": 3} is a "birth_month".
         case "DATE_OF_BIRTH" where ["year", "month", "day", "yyyy", "mm", "dd"].contains(compact):
             return ["year": "birth_year", "yyyy": "birth_year", "month": "birth_month", "mm": "birth_month", "day": "day_of_birth", "dd": "day_of_birth"][compact]
@@ -154,6 +179,53 @@ public enum KeyHints {
         return own == nil && valueKeys.contains(compact) ? parent : key
     }
     private static let valueKeys: Set<String> = ["value", "data"]
+    private static let objectReference = TextPattern(#"^[A-Z]{1,5}-[A-Za-z0-9]{5,40}$"#)
+    /// A key's or a token's shape: long, one word, letters and digits, no link and no UUID.
+    static func isTokenShaped(_ value: String) -> Bool {
+        value.utf16.count >= 12 && !value.contains(where: \.isWhitespace) && !value.contains("://") && value.contains(where: \.isNumber) && value.contains(where: \.isLetter)
+            && !RecordIDs.isUUID(value)
+    }
+    private static let secretParts: Set<String> = ["user", "username", "userid", "login", "pass", "passwd", "value", "data", "key", "secret", "pin", "hash", "salt", "bearer", "basic", "digest", "raw", "encoded"]
+    private static let describing: Set<String> = ["amount", "category", "categories", "name", "description", "label", "title", "count", "total", "reason", "result", "outcome", "message",
+                                                  "decision", "state", "enabled", "active", "mode", "environment", "env", "length", "last4", "lastfour", "expiration", "expirationdate", "provider", "source",
+                                                  "merchant", "descriptor", "mcc", "approved", "declined", "captured", "pending", "response", "responsecode", "avs", "level", "purpose", "usage", "owner"]
+    /// A template's slot in a sample, never a value: ":case_token", "{api_key}", "{{token}}", "<password>", "${SECRET}".
+    /// A brace may be left open: a pattern in text stops before the closing one. A sample's
+    /// "YOUR_API_KEY" is one too.
+    private static let placeholder = TextPattern(#"^(?::[A-Za-z][\w.-]*|\$\{[A-Za-z][\w.-]*\}|\{\{?\s*[A-Za-z][\w.-]*\s*(?:\}\}?)?|<[A-Za-z][\w .-]*>|(?:YOUR|MY|INSERT|REPLACE)_[A-Z0-9_]+|(?:your|my)[_-][a-z0-9_-]+)$"#)
+    private static let jsonLiterals: Set<String> = ["null", "true", "false", "nil", "none", "undefined"]
+    private static let credentialCollections: Set<String> = ["credentials", "credential", "secrets", "authorizations", "authorization", "tokens", "keys"]
+    /// A word a field's value often is ("pass", "string", "active"): a secret
+    /// that is one is replaced where it was found, never in every other place.
+    /// Whether a person key names someone in a role the record only mentions ("receiver_name",
+    /// "emboss_name", "matched_name", "aka"), not the record's own person ("name", "last_name").
+    static func namesARole(_ key: String?) -> Bool {
+        let compact = words(key).joined()
+        return roleNames.contains(compact) || roleNames.contains(singular(compact) ?? "")
+    }
+    private static let roleNames: Set<String> = ["embossname", "embossedname", "debtorname", "creditorname", "receivername", "originatorname", "matchedname", "aka", "alsoknownas",
+                                                 "sendername", "recipientname", "beneficiaryname", "payeename", "callername", "assigneename", "reportername", "requestername", "authorname", "managername"]
+    /// Whether a key is a field's own name as the table writes it ("password", "first_name",
+    /// "phone_numbers"), not one that only ends like one ("quillharbor_token").
+    static func isFieldName(_ key: String) -> Bool {
+        let compact = key.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+        return hints[compact] != nil || singular(compact).map { hints[$0] != nil } == true
+    }
+    /// A key written with a value in it, an email's "@" or digits, not a field's plain name.
+    static func holdsData(_ key: String) -> Bool { key.contains(where: { $0.isNumber || $0 == "@" }) }
+    static func isCommonValue(_ value: String) -> Bool {
+        let lower = value.lowercased()
+        return statusWords.contains(lower) || typeWords.contains(lower) || jsonLiterals.contains(lower)
+    }
+    private static let cardCodes: Set<String> = ["cvv", "cvc", "cvv2", "cvc2", "cvn", "csc", "securitycode", "cardsecuritycode", "pin"]
+    /// What an object a "*_token" key may name instead of a credential: under any
+    /// other qualifier ("access", "recovery", "invite") a token stays a secret.
+    private static let referenceQualifiers: Set<String> = ["entity", "request", "evaluation", "application", "group", "account", "journey", "model", "counterparty",
+                                                           "card", "list", "investigation", "append", "case", "document", "event", "review", "workflow", "alert",
+                                                           "task", "note", "file", "report", "transaction", "payment", "customer", "person", "business", "version",
+                                                           "batch", "job", "rule", "policy", "attachment", "decision", "screening", "watchlist", "error", "node", "event", "source"]
+    private static let documentNumbers: Set<String> = ["number", "no", "num", "nr", "numero", "documentnumber", "idnumber", "latin"]
+    private static let identityDocuments: Set<String> = ["document", "documents", "doc", "docs", "iddoc", "iddocs", "iddocument", "iddocuments", "identitydocument", "identitydocuments"]
     /// One part of a date written in a field of its own.
     public enum DatePart: Sendable { case year, month, day }
     /// The part of a birth date a key names on its own: "birth_month",
@@ -239,7 +311,9 @@ public enum KeyHints {
         guard let key, hint(key) == nil, let last = words(key).last else { return false }
         return structuralWords.contains(last)
     }
-    private static let structuralWords: Set<String> = ["at", "time", "timestamp", "date", "created", "updated", "modified", "expires", "expiry", "timezone", "tz", "zone", "locale", "id", "uuid", "guid", "status", "type", "kind", "version", "agent", "useragent", "url", "uri", "href", "path", "method", "currency", "hash", "checksum", "signature", "fingerprint", "sku", "code", "codes", "scope", "role", "plan", "tier", "channel", "format", "encoding", "mime", "mimetype", "algorithm", "country", "nationality"]
+    private static let structuralWords: Set<String> = ["at", "time", "timestamp", "date", "created", "updated", "modified", "expires", "expiry", "timezone", "tz", "zone", "locale", "id", "uuid", "guid", "status", "type", "kind", "version", "agent", "useragent", "url", "uri", "href", "path", "method", "currency", "hash", "checksum", "signature", "fingerprint", "sku", "code", "codes", "scope", "role", "plan", "tier", "channel", "format", "encoding", "mime", "mimetype", "algorithm", "country", "nationality",
+                                                          // A business in a role, never a person: a card's issuer, a phone's carrier, a payment's network.
+                                                          "issuer", "carrier", "brand", "network", "processor", "provider", "institution", "merchant", "bank"]
     private static let needsDigit: Set<String> = ["DATE_OF_BIRTH", "POSTAL_CODE", "US_SSN", "ID_NUMBER", "PHONE_NUMBER", "IP_ADDRESS", "ADDRESS"]
     private static let statusWords: Set<String> = ["match", "mismatch", "matched", "success", "successful", "fail", "failed", "failure", "pass", "passed", "pending", "verified", "unverified", "valid", "invalid", "yes", "no", "true", "false", "null", "nil", "none", "unknown", "active", "inactive", "expired", "redacted", "completed", "canceled", "cancelled", "skipped", "error", "ok", "approved", "rejected", "declined", "missing", "present", "absent", "partial", "exact", "high", "medium", "low", "required", "optional", "enabled", "disabled", "unavailable", "available", "found", "notfound", "nomatch", "fuzzy", "inconclusive", "indeterminate", "review", "accept", "accepted", "reject", "refer", "referred", "flagged", "clear", "cleared", "blocked", "allowed", "confirmed", "unconfirmed", "hit", "nohit", "consider", "manual", "mixed", "masked", "suppressed", "withheld", "na", "n/a"]
     /// Whether a value can be what its key names. Result fields reuse personal
@@ -247,15 +321,53 @@ public enum KeyHints {
     /// and sources ("address": ["USPS"], "firstName": ["Government"]), which are
     /// left to detection instead of becoming names, dates and streets.
     static func fits(_ key: String?, _ value: String) -> Bool {
-        guard let entity = hint(key), entity != "SECRET" else { return true }
+        guard let entity = hint(key) else { return true }
         let trimmed = value.trimmingCharacters(in: .whitespaces)
+        // A sample that writes its own field's name ("LastName": "LastName") holds no value of it;
+        // a password that is the word "password" is still one.
+        if entity != "SECRET", trimmed.count >= 4, compactKey(trimmed) == compactKey(key) || compactKey(trimmed) == words(key).joined() { return false }
+        // An object's reference named a "token" by an API ("entity_token": "P-MSBW0ff3TQG7IYPvaoHs",
+        // "workflow_token", "source_evaluation_tokens"): an ID, which unlocks nothing. Under an
+        // "access_token" or "recovery_token" any shape is still a secret, and so is any
+        // word in a secret's place ("pass", "string"): a password can be one.
+        if entity == "SECRET" {
+            let parts = words(key)
+            // A template's slot (":case_token") holds none.
+            if trimmed.isEmpty || !TextRanges.matches(placeholder, in: trimmed).isEmpty { return false }
+            // An enum's word ("FACE", "CUSTOMER", "WEB") in a record a collection of credentials holds;
+            // under a credential's own key ("api_key", "client_secret") any spelling is one.
+            if let last = parts.last, credentialCollections.contains(last), trimmed.count <= 32,
+               trimmed.allSatisfy({ $0.isASCII && ($0.isUppercase || $0 == "_") }) { return false }
+            // A card's code and a PIN are digits; a word in their place is a check's result ("cvv": "match").
+            if cardCodes.contains(compactKey(key)) || cardCodes.contains(parts.last ?? "") { return trimmed.contains(where: \.isNumber) }
+            guard parts.last == "token" || parts.last == "tokens" else { return true }
+            // A bare "token" names an object when it is written as one: a type's code and an ID ("P-tZOLIOQGVxfixICuvkS0").
+            guard let qualifier = parts.dropLast().last else { return TextRanges.matches(objectReference, in: trimmed).isEmpty }
+            return !referenceQualifiers.contains(qualifier)
+        }
         if typeWords.contains(trimmed.lowercased()) { return false }
         if entity == "USERNAME" { return true }
         // A second address line is a unit ("Apt 4B", "Suite 210", "#12"), not a measure.
         if entity == "ADDRESS", unitKeys.contains(compactKey(key)) || unitKeys.contains(words(key).last ?? "") || unitKeys.contains(words(key).suffix(2).joined()) {
             let first = trimmed.split(whereSeparator: { $0 == " " || $0 == "." }).first.map { $0.lowercased() } ?? ""
-            return trimmed.contains(where: \.isNumber) && (["apt", "apartment", "suite", "ste", "unit", "floor", "fl", "room", "rm", "bldg", "building", "po", "p", "box"].contains(first) || trimmed.hasPrefix("#") || !trimmed.contains(" ") && trimmed.count <= 6)
+            let unitWords: Set<String> = ["apt", "apartment", "suite", "ste", "unit", "floor", "fl", "room", "rm", "bldg", "building", "po", "p", "box"]
+            // "Apt 23", "#12", "4B", and a floor named by its number ("11th floor").
+            return trimmed.contains(where: \.isNumber) && (unitWords.contains(first) || trimmed.hasPrefix("#") || !trimmed.contains(" ") && trimmed.count <= 6
+                || trimmed.split(separator: " ").count <= 3 && trimmed.lowercased().split(separator: " ").contains { ["floor", "fl", "suite", "unit"].contains(String($0)) })
         }
+        // A house number is short: "12", "12A", "12-14", "12 bis".
+        if entity == "ADDRESS", houseNumberKeys.contains(compactKey(key)) || houseNumberKeys.contains(words(key).suffix(2).joined()) {
+            return trimmed.contains(where: \.isNumber) && trimmed.count <= 10 && trimmed.split(separator: " ").count <= 2
+        }
+        // A street's or a building's name has no number: "Via Garibaldi", "Hauptstraße", "Kestrel House".
+        if entity == "ADDRESS", !trimmed.contains(where: \.isNumber), streetNameKeys.contains(compactKey(key)) || streetNameKeys.contains(words(key).suffix(2).joined()) || streetNameKeys.contains(words(key).last ?? "") {
+            return trimmed.contains(where: \.isLetter) && !statusWords.contains(trimmed.lowercased()) && !trimmed.contains("_")
+                && !placeholderOpenings.contains(where: { trimmed.lowercased().hasPrefix($0) })
+        }
+        // Under its own key a zone is replaced by its shape, whatever its check digits say.
+        if entity == "MRZ" { return MachineZone.isShaped(trimmed) }
+        // An IP address under "address" ("ip": {"address": "94.142.239.124"}) is no street.
+        if entity == "ADDRESS", trimmed.allSatisfy({ $0.isHexDigit || $0 == "." || $0 == ":" }), trimmed.contains(".") && trimmed.filter({ $0 == "." }).count == 3 || trimmed.filter({ $0 == ":" }).count >= 2 { return false }
         // A birth month may be written as its name: "birth_month": "March".
         if entity == "DATE_OF_BIRTH", StandIns.month(trimmed) != nil, datePart(key) == .month { return true }
         if needsDigit.contains(entity) {
@@ -308,8 +420,23 @@ public enum KeyHints {
               !placeholderOpenings.contains(where: { lower.hasPrefix($0) }) else { return false }
         return !lower.contains("_")
     }
+    /// A province's code that `fits` turns down for being no US, Canadian or
+    /// Australian region ("NA", "TO" beside an Italian city): replaced only
+    /// beside the rest of its address, as `numberlessLine` is.
+    static func regionCode(_ key: String?, _ value: String) -> Bool {
+        guard hint(key) == "REGION", !fits(key, value) else { return false }
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        return (2...3).contains(trimmed.count) && trimmed.allSatisfy { $0.isASCII && $0.isUppercase }
+    }
     private static let placeholderOpenings = ["same as", "see ", "as above", "as per", "not ", "no ", "none", "unknown", "n/a", "tbd", "tbc", "redacted", "withheld", "remote", "various", "pending", "to be ", "on file", "same"]
-    private static let unitKeys: Set<String> = ["unit", "apt", "apartment", "street2", "address2", "addr2", "line2", "addressline2", "streetline2", "aptsuite", "apartmentnumber", "aptnumber", "suitenumber", "unitnumber", "addressline3", "line3"]
+    /// A key that holds a house or a unit's number, which may be written as a bare number.
+    static func addressNumberKey(_ key: String?) -> Bool {
+        let parts = words(key)
+        return hint(key) == "ADDRESS" && [houseNumberKeys, unitKeys].contains { $0.contains(parts.joined()) || $0.contains(parts.suffix(2).joined()) || $0.contains(parts.last ?? "") }
+    }
+    static let houseNumberKeys: Set<String> = ["housenumber", "housenum", "houseno", "buildingnumber", "buildingno", "streetnumber", "streetnum", "streetno", "civicnumber", "premisenumber"]
+    static let streetNameKeys: Set<String> = ["streetname", "thoroughfare", "buildingname", "street", "housename"]
+    private static let unitKeys: Set<String> = ["unit", "apt", "apartment", "street2", "address2", "addr2", "line2", "addressline2", "streetline2", "aptsuite", "apartmentnumber", "aptnumber", "suitenumber", "unitnumber", "flatnumber", "addressline3", "line3"]
     private static func compactKey(_ key: String?) -> String { (key ?? "").lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) } }
     /// A coordinate written to at least two decimals ("47.2529"); a bare 47 is a count.
     private static func coordinate(_ text: String, limit: Double) -> Bool {
@@ -323,7 +450,7 @@ public enum KeyHints {
         words(key) == ["name"]
     }
     private static let personalSiblings: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "PHONE_NUMBER", "DATE_OF_BIRTH", "US_SSN", "ID_NUMBER", "USERNAME"]
-    private static let people: Set<String> = ["user", "customer", "contact", "employee", "patient", "person", "people", "member", "owner", "student", "applicant", "candidate", "passenger", "traveler", "traveller", "signer", "signatory", "holder", "accountholder", "cardholder", "author", "profile", "individual", "borrower", "tenant", "buyer", "seller", "payee", "payer", "driver", "worker", "staff", "teammate", "actor"]
+    private static let people: Set<String> = ["user", "customer", "contact", "employee", "patient", "person", "people", "member", "owner", "student", "applicant", "candidate", "passenger", "traveler", "traveller", "signer", "signatory", "holder", "accountholder", "cardholder", "author", "profile", "individual", "borrower", "tenant", "buyer", "seller", "payee", "payer", "driver", "worker", "staff", "teammate", "actor", "guest", "debtor", "creditor", "receiver", "originator", "beneficiary", "associate"]
     private static let notPeople: Set<String> = ["business", "company", "organization", "organisation", "merchant", "employer", "vendor", "institution", "bank", "product", "plan", "model", "account", "app", "application", "project", "team", "workflow", "enrichment", "template", "school"]
     /// Whether a bare "name" holds a person: its record also holds personal details,
     /// its parent is about people ("customers", "manager"), or the value uses a known

@@ -24,12 +24,16 @@ enum KeyedValues {
         var ids: [Range<Int>] = []
         /// Bare numbers in an array, read when it closes: a point's order is only known then.
         var numbers: [Range<Int>] = []
+        /// Province codes no region table knows ("NA"), read when the object closes: one beside a city or postcode is that address's.
+        var codes: [Range<Int>] = []
     }
     struct Found {
         var spans: [Span] = []
         /// Values under keys that hold timestamps, IDs, codes and settings, and
         /// the keys themselves: none of them is read as a name or a date.
         var structural: [Range<Int>] = []
+        /// The keys alone, inside their quotes.
+        var keys: [Range<Int>] = []
         /// The objects and lists the text nests, each with the one around it
         /// (0 stands for the text outside any), and every value read under a
         /// key with the one it sits in: what a JSON file's records tell.
@@ -57,6 +61,23 @@ enum KeyedValues {
 
     private static func identifier(_ unit: UInt16, first: Bool) -> Bool {
         (65...90).contains(unit) || (97...122).contains(unit) || unit == 95 || unit == 36 || !first && (48...57).contains(unit)
+    }
+
+    /// Spans less a part of a pasted object's key: "ledgerlyFees" stays the field's
+    /// name, though "Ledgerly" was read as someone, or the object it names breaks.
+    /// A span that is the whole key (a key that is a person's name) stays, but not
+    /// one that names a field ("password" beside a password that is the same word).
+    /// A key that holds data ("rosalind@example.org_token", "4417_pin") is read as any value.
+    static func outsideKeys(_ spans: [Span], in text: String) -> [Span] {
+        guard !spans.isEmpty, text.contains(":") || text.contains("=") else { return spans }
+        let keys = scan(text).keys
+        guard !keys.isEmpty else { return spans }
+        return spans.filter { span in
+            !keys.contains { key in
+                let name = TextRanges.substring(text, key)
+                return key.overlaps(span.range) && !KeyHints.holdsData(name) && (key != span.range || KeyHints.hint(name) != nil)
+            }
+        }
     }
 
     static func find(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
@@ -90,6 +111,9 @@ enum KeyedValues {
                     }
                 }
             }
+            if !level.codes.isEmpty, level.id > 0, level.keys.contains(where: { ["LOCATION", "POSTAL_CODE"].contains(KeyHints.hint($0) ?? "") }) {
+                for range in level.codes { found.spans.append(Span(range: range, entity: "REGION", score: 1)) }
+            }
             for (span, value) in level.names where KeyHints.bareNameIsPerson(value, siblings: level.keys, parent: level.key, inObject: level.id > 0) { found.spans.append(span) }
             // A person's own object: its "id" is theirs (see `RecordIDs`).
             let named = RecordIDs.isPersonCollection(KeyHints.words(level.key).last) || level.fields.contains(where: { RecordIDs.namesPersonType(key: $0.0, value: $0.1) })
@@ -106,6 +130,7 @@ enum KeyedValues {
             }
         }
         var pending: String?
+        var nested: [Range<Int>] = []
         var point: (list: Int, count: Int)?
         var index = 0
         func skipSpace(_ from: Int) -> Int {
@@ -158,8 +183,9 @@ enum KeyedValues {
         func take(_ content: Range<Int>, key explicit: String? = nil, unquoted: Bool = false) {
             let parent = parentKey()
             let own = pending
-            let key: String? = explicit ?? own.map { KeyHints.resolve($0, parent: parent) } ?? (levels.last?.isArray == true ? parent : nil)
+            let listed = levels.count >= 2 && !levels[levels.count - 1].isArray && levels[levels.count - 2].isArray
             let value = string(content)
+            let key: String? = explicit ?? own.map { KeyHints.resolve($0, parent: parent, listed: listed, value: value) } ?? (levels.last?.isArray == true ? parent : nil)
             let trimmed = value.trimmingCharacters(in: .whitespaces)
             pending = nil
             guard !trimmed.isEmpty else { return }
@@ -174,11 +200,19 @@ enum KeyedValues {
                     found.spans.append(Span(range: content, entity: "TIME_ZONE", score: 1))
                 }
             }
-            // Escapes other than an escaped quote ("O\'Sullivan") would shift offsets, so those values are left to detection.
-            if units[content].contains(backslash) {
-                for at in content where units[at] == backslash && !(at + 1 < content.upperBound && (units[at + 1] == doubleQuote || units[at + 1] == singleQuote)) { return }
+            // A value with escapes other than an escaped quote ("O\'Sullivan") is read decoded
+            // ("Ren\u00e9") and replaced whole: a part of it would shift offsets.
+            var decoded: String?
+            if units[content].contains(backslash),
+               content.contains(where: { units[$0] == backslash && !($0 + 1 < content.upperBound && (units[$0 + 1] == doubleQuote || units[$0 + 1] == singleQuote)) }) {
+                guard !unquoted, case .string(let text)? = try? OrderedJSON.parse("\"" + value + "\""), !text.isEmpty else { return }
+                decoded = text.trimmingCharacters(in: .whitespaces)
             }
             if unquoted, !plausible(trimmed, key: key) { return }
+            // A number written with an exponent (1.2e2), or a point anywhere but a coordinate, would lose its grammar to a stand-in written as text.
+            if unquoted, !trimmed.allSatisfy({ $0.isASCII && $0.isNumber }), trimmed.first.map({ $0.isNumber || $0 == "-" }) == true,
+               case .number? = try? OrderedJSON.parse(trimmed),
+               trimmed.lowercased().contains("e") || !["LATITUDE", "LONGITUDE", "COORDINATES"].contains(KeyHints.hint(key) ?? "") { return }
             var content = content
             // An unquoted secret is one token, after its scheme: "Authorization: Bearer 9f8e… rejected".
             if unquoted, KeyHints.hint(key) == "SECRET" {
@@ -194,13 +228,17 @@ enum KeyedValues {
                 let scheme = ["bearer", "basic", "token", "digest", "apikey"].contains(string(first).lowercased())
                 content = scheme && tokens.count > 1 ? tokens[1] : first
             }
-            let taken = string(content)
+            let taken = decoded ?? string(content)
             if var entity = KeyHints.hint(key), KeyHints.fits(key, taken) {
                 // A bare number keeps a bare number's stand-in, or the code around it breaks.
-                if unquoted, trimmed.allSatisfy({ $0.isASCII && $0.isNumber }), !["PHONE_NUMBER", "US_SSN", "ID_NUMBER", "POSTAL_CODE", "DATE_OF_BIRTH", "SECRET", "AGE", "LAST_DIGITS"].contains(entity) { entity = "ID_NUMBER" }
+                if unquoted, trimmed.allSatisfy({ $0.isASCII && $0.isNumber }), !["PHONE_NUMBER", "US_SSN", "ID_NUMBER", "POSTAL_CODE", "DATE_OF_BIRTH", "SECRET", "AGE", "LAST_DIGITS", "ADDRESS"].contains(entity) { entity = "ID_NUMBER" }
                 let span = Span(range: content, entity: entity, score: 1)
                 if KeyHints.isBareName(own) { levels[levels.count - 1].names.append((span, taken)) }
                 else { found.spans.append(span) }
+            } else if decoded != nil {
+                return
+            } else if KeyHints.regionCode(key, taken) {
+                levels[levels.count - 1].codes.append(content)
             } else if let own, KeyHints.fieldValueKeys.contains(KeyHints.words(own).joined()) {
                 levels[levels.count - 1].unnamed.append((content, own, taken))
             } else if KeyHints.hint(key) == nil, RecordIDs.identifying(key: key, value: taken) {
@@ -309,9 +347,12 @@ enum KeyedValues {
                 }
                 if let next = separator(after: end + 1) {
                     found.structural.append(content)
+                    found.keys.append(content)
                     startsKey(string(content), at: index, resumingAt: next, colon: units[skipSpace(end + 1)] == colon)
                     continue
                 }
+                // A body sent as a string ("body": "{\"password\": …}") is read inside, after its quotes.
+                if inner < end, units[inner] == openObject || units[inner] == openArray, units[content].contains(backslash) { nested.append(content) }
                 take(content)
                 index = end + 1
                 continue
@@ -319,7 +360,8 @@ enum KeyedValues {
             switch unit {
             case openObject, openArray:
                 let parent = parentKey()
-                let key = pending.map { KeyHints.resolve($0, parent: parent) } ?? (levels.last?.isArray == true ? parent : nil)
+                let listed = levels.count >= 2 && !levels[levels.count - 1].isArray && levels[levels.count - 2].isArray
+                let key = pending.map { KeyHints.resolveContainer($0, parent: parent, listed: listed) } ?? (levels.last?.isArray == true ? parent : nil)
                 found.parents.append(levels.last?.id)
                 levels.append(Level(key: key, isArray: unit == openArray, id: found.parents.count - 1))
                 pending = nil
@@ -374,7 +416,7 @@ enum KeyedValues {
                     while end < units.count, identifier(units[end], first: false) || units[end] == hyphen && end + 1 < units.count && identifier(units[end + 1], first: false) { end += 1 }
                     if let next = separator(after: end) {
                         // A capitalised word before a colon in prose may be a name ("Ticket from Daniel Ferreira: …").
-                        if !inYAML() || !(65...90).contains(unit) { found.structural.append(index..<end) }
+                        if !inYAML() || !(65...90).contains(unit) { found.structural.append(index..<end); found.keys.append(index..<end) }
                         startsKey(string(index..<end), at: index, resumingAt: next, colon: units[skipSpace(end)] == colon)
                         continue
                     }
@@ -391,6 +433,25 @@ enum KeyedValues {
             }
         }
         levels.reversed().forEach(close)
+        // Each escaped quote becomes a space and a quote, so the body keeps its length and every offset.
+        for range in nested {
+            var body = Array(units[range])
+            var at = 0
+            while at + 1 < body.count {
+                if body[at] == backslash, body[at + 1] == doubleQuote { body[at] = space }
+                at += body[at] == backslash ? 2 : 1
+            }
+            let inner = scan(String(utf16CodeUnits: body, count: body.count), isCancelled: isCancelled)
+            func moved(_ r: Range<Int>) -> Range<Int> { (r.lowerBound + range.lowerBound)..<(r.upperBound + range.lowerBound) }
+            // A value ends before the space its closing quote's backslash became.
+            found.spans += inner.spans.compactMap { span in
+                var end = span.range.upperBound
+                while end > span.range.lowerBound, body[end - 1] == space { end -= 1 }
+                return end > span.range.lowerBound ? Span(range: moved(span.range.lowerBound..<end), entity: span.entity, score: span.score) : nil
+            }
+            found.structural += inner.structural.map(moved)
+            found.keys += inner.keys.map(moved)
+        }
         found.spans.sort { $0.range.lowerBound < $1.range.lowerBound }
         return found
     }

@@ -28,13 +28,14 @@ enum Correction {
     }
     /// `held` marks places left as written (people the detectors doubted);
     /// they come back where they stand in the output, without any a replacement covers.
-    static func run(_ initial: String, marks initialMarks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, gate: LeakGate, passes: Int = 3, base: [Span]? = nil, held: inout [Mark]) throws -> (String, [Mark], [Mark]) {
+    /// `sparing`: kinds a value's own key says it never holds (a secret's bytes in a status or an amount), left where they stand.
+    static func run(_ initial: String, marks initialMarks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, gate: LeakGate, passes: Int = 3, base: [Span]? = nil, held: inout [Mark], sparing: Set<String> = []) throws -> (String, [Mark], [Mark]) {
         var output = initial
         var marks = initialMarks
         for pass in 0..<passes {
             try Scrubber.checkCancellation()
             let found = visibleLeftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer, gate: gate, base: pass == 0 ? base : nil)
-            let spans = Detector.resolve(found.spans)
+            let spans = KeyedValues.outsideKeys(Detector.resolve(found.spans), in: output).filter { !sparing.contains($0.entity) }
             if spans.isEmpty { return (output, marks, unresolved(found.suspects, in: output)) }
             var fakes = Array(repeating: "", count: spans.count)
             var sources = [String?](repeating: nil, count: spans.count)
@@ -211,6 +212,7 @@ struct OriginalMatcher {
         // A region code ("WA", "IN", "OR") is a word everywhere else, and
         // initials, ages, coordinates and time zones only mean something where they were found.
         if ["REGION", "INITIALS", "AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE", "COORDINATES", "TIME_ZONE"].contains(entity) { return false }
+        if entity == "SECRET", KeyHints.isCommonValue(original) { return false }
         let significant = original.filter { $0.isLetter || $0.isNumber }
         return significant.count >= (significant.allSatisfy(\.isNumber) ? 5 : 2)
     }

@@ -32,6 +32,12 @@ import Testing
     /// What a selection of `needle` in the preview picks, inside the first
     /// place `context` is written (a table's cell that is `context`, or else
     /// holds it); with `click`, a click inside it.
+    /// A key and its value as the preview writes them, however the document spaces them.
+    static func pair(_ result: ScrubResult, _ key: String, _ value: String) -> String? {
+        guard case .text(let text, _, _) = result.preview,
+              let range = text.range(of: "\"\(key)\"\\s*:\\s*\"\(NSRegularExpression.escapedPattern(for: value))\"", options: .regularExpression) else { return nil }
+        return String(text[range])
+    }
     static func pick(_ result: ScrubResult, _ needle: String, in context: String? = nil, click: Bool = false) -> Pick? {
         func at(_ text: String, _ marks: [Mark]) -> Pick? {
             let ns = text as NSString
@@ -356,7 +362,7 @@ import Testing
         let house = try Self.household(shape, layout)
         let result = house.result
         let context: String? = switch shape {
-        case .json: #""first_name": "\#(house.target.standIn)""#
+        case .json: Self.pair(result, "first_name", house.target.standIn)
         case .xml: "<first_name>\(house.target.standIn)</first_name>"
         case .csv: house.target.standIn
         case .text: nil

@@ -84,7 +84,7 @@ enum Judge {
             let ns = text as NSString
             for match in (try? NSRegularExpression(pattern: #"(\p{Lu}[\p{L}. ]+?), ([A-Z]{2,3}) (\d{5}(?:-\d{4})?|[A-Z]\d[A-Z] ?\d[A-Z]\d|\d{4})\b"#))?.matches(in: text, range: NSRange(location: 0, length: ns.length)) ?? [] {
                 let city = ns.substring(with: match.range(at: 1)).components(separatedBy: ", ").last ?? "", region = ns.substring(with: match.range(at: 2)), postal = ns.substring(with: match.range(at: 3))
-                let real = Places.all.contains { $0.city == city && regionMatches(region, $0) && postalMatches(postal, $0) }
+                let real = Places.all.contains { $0.city.caseInsensitiveCompare(city) == .orderedSame && regionMatches(region, $0) && postalMatches(postal, $0) }
                 if !real { add("placeMismatch", nil, "\(city), \(region) \(postal) is no real place") }
             }
         case .javascript, .python, .yaml:
@@ -108,8 +108,8 @@ enum Judge {
             add("keptChanged", leaf, "\(where_) = \(original.text) → \(output)")
         case .keepSoft where output != original.text:
             add("softChanged", leaf, "\(where_) = \(original.text) → \(output)")
-        // Initials may match by chance; the relations check they fit the new name.
-        case .pii(let kind) where output == original.text && !original.text.isEmpty && kind != .initials:
+        // Initials, or a birth date's month or day, may match by chance; the relations check they fit.
+        case .pii(let kind) where output == original.text && !original.text.isEmpty && ![.initials, .dobMonth, .dobDay].contains(kind):
             add("unchanged", leaf, "\(where_) = \(original.text)")
         case .pii(let kind):
             if let number, number != original.number { add("typeChanged", leaf, "\(where_) = \(original.text) → \(output) (JSON \(original.number ? "number" : "string") became \(number ? "number" : "string"))") }
@@ -155,6 +155,12 @@ enum Judge {
             }
             return prefix(original.text) == prefix(output) && mask(original.text) == mask(output) ? nil : "not an ID shaped like \(original.text)"
         case .lastDigits, .initials: return mask(original.text) == mask(output) ? nil : "shape \(mask(original.text)) → \(mask(output))"
+        case .houseNumber: return mask(original.text) == mask(output) ? nil : "not a house number like \(original.text)"
+        case .streetName: return output.contains(where: \.isLetter) && !output.contains(where: \.isNumber) ? nil : "not a street's name"
+        case .province: return mask(original.text) == mask(output) && output == output.uppercased() ? nil : "not a province code"
+        case .dobMonth: return Int(output).map { (1...12).contains($0) } == true ? nil : "not a month"
+        case .dobDay: return Int(output).map { (1...31).contains($0) } == true ? nil : "not a day"
+        case .mrz: return MRZ.misfit(original.text, output)
         case .age: return Int(output).map { (0...120).contains($0) } == true ? nil : "not an age"
         case .region:
             let countries = { (s: String) in Set(Places.regions.filter { $0.code == s || $0.name.caseInsensitiveCompare(s) == .orderedSame }.map(\.country)) }
@@ -204,6 +210,18 @@ enum Judge {
         for (link, members) in groups.sorted(by: { $0.key < $1.key }) {
             let first = members.first
             if link.hasPrefix("a") {
+                streetParts(link, members, seen, add: add)
+                // A city abroad stays a city of its country, with that city's province.
+                if let town = PayloadGen.towns.first(where: { t in members.contains { kind($0) == .city && $0.leaf.text.caseInsensitiveCompare(t.city) == .orderedSame } }) {
+                    guard let (cityLeaf, written) = outputs(members, .city).first else { continue }
+                    guard let stand = Places.abroad.first(where: { $0.city.caseInsensitiveCompare(written) == .orderedSame }) else {
+                        add("placeMismatch", cityLeaf, "\(link): \(written) is no city Scrub knows abroad"); continue
+                    }
+                    if stand.country != town.country { add("placeMismatch", cityLeaf, "\(link): moved from \(town.country) to \(stand.country)") }
+                    for (leaf, value) in outputs(members, .province) where value != stand.region { add("placeMismatch", leaf, "\(link): province \(value) is not \(stand.city)'s \(stand.region ?? "-")") }
+                    for (leaf, value) in outputs(members, .zip) where mask(value) != mask(leaf.leaf.text) { add("placeMismatch", leaf, "\(link): postcode \(value) is not written as \(leaf.leaf.text)") }
+                    continue
+                }
                 let city = outputs(members, .city).first, region = outputs(members, .region).first, postal = outputs(members, .zip).first
                 let originalCountry = (PayloadGen.usCities + PayloadGen.otherCities).first { c in members.contains { $0.leaf.text == c.name } }?.country
                 var place: Place?
@@ -248,6 +266,12 @@ enum Judge {
                 for (leaf, value) in outputs(members, .email) + outputs(members, .username) where !fold(String(value.split(separator: "@").first ?? "")).contains(l) {
                     add("personMismatch", leaf, "\(link): \(value) does not follow \(firstName) \(lastName)")
                 }
+                for (leaf, value) in outputs(members, .mrz) {
+                    guard let written = MRZ.writtenName(value) else { add("personMismatch", leaf, "\(link): no name in zone \(value)"); continue }
+                    if !fold(lastName).hasPrefix(fold(written.last)) || written.last.isEmpty || !fold(firstName).hasPrefix(fold(written.first)) {
+                        add("personMismatch", leaf, "\(link): zone names \(written.last) \(written.first), elsewhere \(firstName) \(lastName)")
+                    }
+                }
                 for (leaf, value) in outputs(members, .initials) where value.filter(\.isLetter) != (firstName.prefix(1) + lastName.prefix(1)).uppercased() {
                     add("personMismatch", leaf, "\(link): initials \(value) for \(firstName) \(lastName)")
                 }
@@ -257,12 +281,26 @@ enum Judge {
                     if !fits { add("personMismatch", leaf, "\(link): \(firstName) for \(leaf.key) \(leaf.leaf.text)") }
                 }
             } else if link.hasSuffix(".dob") {
+                // A zone's birth date is the date its parts write.
+                let year = outputs(members, .dobYear).first.flatMap { Int($0.1) }, month = outputs(members, .dobMonth).first.flatMap { Int($0.1) }, day = outputs(members, .dobDay).first.flatMap { Int($0.1) }
+                if let year, let month, let day {
+                    let date = String(format: "%02d%02d%02d", year % 100, month, day)
+                    for (leaf, value) in outputs(members, .mrz) where MRZ.data(value).birth.map({ $0 != date }) == true {
+                        add("dateMismatch", leaf, "\(link): zone born \(MRZ.data(value).birth!), parts say \(date)")
+                    }
+                }
                 let years = outputs(members, .dob).compactMap { value in value.1.range(of: #"(?<!\d)(19|20)\d\d(?!\d)"#, options: .regularExpression).map { Int(value.1[$0])! } }
                 guard let year = years.first ?? outputs(members, .dobYear).first.flatMap({ Int($0.1) }) else { continue }
                 for (leaf, value) in outputs(members, .dobYear) where Int(value) != year { add("dateMismatch", leaf, "\(link): year \(value), birth date in \(year)") }
                 let now = Calendar(identifier: .gregorian).component(.year, from: Date())
                 for (leaf, value) in outputs(members, .age) where !(Int(value).map { [now - year - 1, now - year].contains($0) } ?? false) {
                     add("dateMismatch", leaf, "\(link): age \(value), born \(year)")
+                }
+            } else if link.hasSuffix(".passport") {
+                // The zone writes the passport's own number.
+                guard let number = outputs(members, .passport).first else { continue }
+                for (leaf, value) in outputs(members, .mrz) where MRZ.data(value).number.map({ $0 != number.1.uppercased() }) == true {
+                    add("numberMismatch", leaf, "\(link): zone number \(MRZ.data(value).number!), passport \(number.1)")
                 }
             } else {
                 let normal = { (s: String) -> String in let d = s.filter(\.isNumber); return d.count == 11 && d.first == "1" ? String(d.dropFirst()) : d }
@@ -272,6 +310,24 @@ enum Judge {
                     let digits = value.filter(\.isNumber)
                     if let full = fulls.first, !full.1.hasSuffix(digits) { add("numberMismatch", leaf, "\(link): last digits \(value) do not end \(full.1)") }
                 }
+            }
+        }
+    }
+
+    /// An address split into its house number and street's name must still
+    /// be what the line joining them writes: "Via Garibaldi 12/3" beside
+    /// "Garibaldi" and 12 comes out as the same street and number in both.
+    static func streetParts(_ link: String, _ members: [PathLeaf], _ seen: [[Int]: String], add: (String, PathLeaf?, String) -> Void) {
+        func output(_ kind: Kind) -> [(PathLeaf, String)] {
+            members.compactMap { m in m.leaf.truth == .pii(kind) ? seen[m.path].map { (m, $0) } : nil }
+        }
+        func tokens(_ s: String) -> [String] { s.split(whereSeparator: { !$0.isNumber }).map(String.init) }
+        for (line, written) in output(.street) + output(.addressLine) {
+            for (part, value) in output(.streetName) where line.leaf.text.range(of: part.leaf.text, options: .caseInsensitive) != nil {
+                if written.range(of: value, options: .caseInsensitive) == nil { add("streetMismatch", line, "\(link): line \(written) is not on street \(value)") }
+            }
+            for (part, value) in output(.houseNumber) + output(.unit) where tokens(line.leaf.text).contains(part.leaf.text) {
+                if !tokens(written).contains(value) { add("streetMismatch", line, "\(link): line \(written) has no number \(value) (\(part.key))") }
             }
         }
     }
@@ -306,7 +362,17 @@ enum Judge {
                     && output.range(of: #"(?<![\p{L}])"# + NSRegularExpression.escapedPattern(for: word) + #"(?![\p{L}])"#, options: [.regularExpression, .caseInsensitive]) != nil
             }
         }
-        if kind == .street, let name = value.split(separator: " ", maxSplits: 1).last,
+        if kind == .streetName || kind == .street {
+            // Any word of a street's own name: "Garibaldi" of "Via Garibaldi 12", not "Via" or "Rue".
+            let kinds: Set<String> = ["via", "viale", "vicolo", "corso", "piazza", "rue", "avenue", "boulevard", "impasse", "calle", "avenida", "paseo", "de", "del", "la", "las", "los", "des", "du", "dei", "di", "san", "am", "rd", "ave", "ln", "ct", "dr", "blvd", "way", "street", "road", "lane"]
+            // Stand-in streets are named from these lists; only a word none of them uses proves a leak.
+            let standIns = Set((Names.streets + Places.streetWords.values.flatMap { $0 }).flatMap { $0.lowercased().split(separator: " ").map(String.init) })
+            for word in value.split(whereSeparator: { !$0.isLetter }) where word.count >= 4 && !kinds.contains(word.lowercased()) && !standIns.contains(word.lowercased())
+                && !Names.firstFolded.contains(word.lowercased()) && !Names.lastFolded.contains(word.lowercased()) {
+                if output.range(of: #"(?<![\p{L}])"# + NSRegularExpression.escapedPattern(for: String(word)) + #"(?![\p{L}])"#, options: [.regularExpression, .caseInsensitive]) != nil { return String(word) }
+            }
+        }
+        if kind == .street, value.first?.isNumber == true, let name = value.split(separator: " ", maxSplits: 1).last,
            output.range(of: String(name), options: .caseInsensitive) != nil { return String(name) }
         return nil
     }
@@ -321,7 +387,7 @@ enum Judge {
             case .fullName, .firstName, .lastName, .middleName: return .init(leaf.leaf.text, kind: .name)
             case .email: return .init(leaf.leaf.text, kind: .email)
             case .phone, .ssn, .taxID, .card, .account, .license, .passport: return .init(leaf.leaf.text, kind: .number)
-            case .username, .recordID: return .init(leaf.leaf.text, kind: .other)
+            case .username, .recordID, .mrz: return .init(leaf.leaf.text, kind: .other)
             default: return nil
             }
         }

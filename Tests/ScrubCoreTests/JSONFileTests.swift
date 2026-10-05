@@ -71,8 +71,8 @@ func orderedJSONFixtureOutput(_ name: String) throws {
     #expect(!output.contains("hunter2"))
     #expect(!output.contains("alice@example.com"))
     #expect(!output.contains("2128675309"))
-    #expect(output.contains(#""plain": 2"#))
-    #expect(!output.contains(#""plain": 1"#))
+    // Each of two keys written alike keeps its own value, as written.
+    #expect(output.contains(#""plain":2"#) && output.contains(#""plain":1"#))
 }
 
 @Test func jsonRepeatedValuesGetStableStandIns() throws {
@@ -213,9 +213,9 @@ func orderedJSONFixtureOutput(_ name: String) throws {
     """#
     let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
     for original in ["Alberta", "Charleson", "accountholder0", "2025550123", "Cameron", "Jane Smith"] { #expect(!output.contains(original)) }
-    for kept in [#""name": "Everyday Checking""#, #""subtype": "checking""#, #""type": "home""#, #""A1""#] { #expect(output.contains(kept)) }
+    for kept in [#""name":"Everyday Checking""#, #""subtype":"checking""#, #""type":"home""#, #""A1""#] { #expect(output.contains(kept)) }
     // The region moves with the address, still a state code.
-    #expect(!output.contains(#""region": "NY""#) && output.range(of: #""region": "[A-Z]{2}""#, options: .regularExpression) != nil)
+    #expect(!output.contains(#""region":"NY""#) && output.range(of: #""region":"[A-Z]{2}""#, options: .regularExpression) != nil)
 }
 
 @Test(arguments: [
@@ -259,12 +259,12 @@ func bareNameKeyNeedsAPersonRecord(_ input: String, _ replaced: Bool) throws {
     """#
     let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
     for kept in ["11111111-2222-3333-4444-555555555555", "Case_FPF-1761754896062", #""NORTHWIND""#, "https://northwind.io/", #""Government""#, #""USPS""#, #""Utility Records""#,
-                 #""dob": 0.99"#, #""america/new_york""#, #""America/Los_Angeles""#, "Chrome/131.0.0.0"] { #expect(output.contains(kept)) }
+                 #""dob":0.99"#, #""america/new_york""#, #""America/Los_Angeles""#, "Chrome/131.0.0.0"] { #expect(output.contains(kept)) }
     for replaced in ["92301962141", "122199983", "912355201", "111223333", "Jane Doe", "Mertz", "San Francisco", "94105"] { #expect(!output.contains(replaced)) }
     for key in ["accountNumber", "routingNumber", "ein", "entity"] {
-        #expect(output.range(of: #""\#(key)": "\d{9,11}""#, options: .regularExpression) != nil)
+        #expect(output.range(of: #""\#(key)":"\d{9,11}""#, options: .regularExpression) != nil)
     }
-    #expect(output.range(of: #""locality": "[^"]+""#, options: .regularExpression).map { !output[$0].contains("San Francisco") && !output[$0].contains(" Hill") } == true)
+    #expect(output.range(of: #""locality":"[^"]+""#, options: .regularExpression).map { !output[$0].contains("San Francisco") && !output[$0].contains(" Hill") } == true)
 }
 
 @Test func jsonIsWrittenInTimeLinearInItsLengthWhateverItHolds() throws {

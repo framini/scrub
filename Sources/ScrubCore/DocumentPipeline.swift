@@ -29,12 +29,18 @@ struct DocumentLeaf: Sendable {
     let addressKey: String?
     /// The part of a birth date the value is, when its key names one ("birth_month", "dob": {"day": …}).
     let datePart: KeyHints.DatePart?
+    /// Whether the value's key says it holds no one's data: a status, an amount, a time, a code,
+    /// or a secret's key over a value that is none (an object's reference, a placeholder).
+    /// A secret's bytes found in one are the field's own, never the secret written again.
+    let nonPersonal: Bool
+    private static let nonPersonalWords: Set<String> = ["status", "state", "type", "kind", "result", "outcome", "decision", "amount", "currency", "total", "balance", "fee",
+                                                        "price", "count", "quantity", "at", "time", "timestamp", "date", "created", "updated", "version", "method", "code", "level", "score", "reason", "category", "channel", "mode"]
 
     init(_ text: String, key: String? = nil, records: [Int] = [], contextWords: Set<String> = [], numericEntity: String? = nil, fieldName: Bool = false, objectPath: String = "") {
         self.objectPath = objectPath
         self.text = text
         self.key = numericEntity != nil || KeyHints.fits(key, text) ? key : nil
-        addressKey = self.key == nil && numericEntity == nil && KeyHints.numberlessLine(key, text) ? key : nil
+        addressKey = self.key == nil && numericEntity == nil && (KeyHints.numberlessLine(key, text) || KeyHints.regionCode(key, text)) ? key : nil
         self.rawKey = KeyHints.hint(key) == nil ? key : nil
         datePart = rawKey == nil ? KeyHints.datePart(self.key) : nil
         self.records = RecordPath(records)
@@ -42,6 +48,8 @@ struct DocumentLeaf: Sendable {
         self.numericEntity = numericEntity
         self.fieldName = fieldName
         view = numericEntity == nil ? Visible(text) : nil
+        nonPersonal = KeyHints.hint(key) == nil && KeyHints.words(key).last.map(Self.nonPersonalWords.contains) == true
+            || KeyHints.hint(key) == "SECRET" && numericEntity == nil && !KeyHints.fits(key, text)
     }
 }
 
@@ -159,7 +167,8 @@ enum DocumentPipeline {
                 let reusable = !forceFullDetection && emptyBases[index] && previous.text == leaves[index].text
                 job.enter(value: index, records: leaves[index].enclosing, part: leaves[index].datePart, object: leaves[index].objectPath)
                 var held = previous.held
-                let (text, marks, unresolved) = try Correction.run(previous.text, marks: previous.marks, job: job, matcher: originals, gazetteer: gazetteer, gate: gate, passes: 1, base: reusable ? [] : nil, held: &held)
+                let (text, marks, unresolved) = try Correction.run(previous.text, marks: previous.marks, job: job, matcher: originals, gazetteer: gazetteer, gate: gate, passes: 1, base: reusable ? [] : nil, held: &held,
+                                                                   sparing: leaves[index].nonPersonal ? ["SECRET"] : [])
                 if text != previous.text { changed = true; changedIndices.append(index) }
                 values[index] = DocumentValue(text: text, marks: marks, unresolved: unresolved, held: held)
             }
@@ -277,17 +286,19 @@ enum DocumentPipeline {
         var personal: Set<String> = []
         for (index, leaf) in leaves.enumerated() {
             if index.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
-            if people.contains(hint(leaf.key) ?? "") || typeKey(leaf.rawKey) && RecordIDs.namesPersonType(key: leaf.rawKey, value: leaf.text), let object = object(leaf) { personal.insert(object) }
+            // A record's own person, not one it names in a role ("receiver_name", "emboss_name", "aka"): a transfer is no one's record.
+            if people.contains(hint(leaf.key) ?? "") && !KeyHints.namesARole(leaf.key) || typeKey(leaf.rawKey) && RecordIDs.namesPersonType(key: leaf.rawKey, value: leaf.text), let object = object(leaf) { personal.insert(object) }
         }
         // An age, last four digits or a birth date's month or day is read off the stand-ins it belongs with, so those come first.
         let later = { (index: Int) in StandIns.derived.contains(leaves[index].numericEntity ?? KeyHints.hint(leaves[index].key) ?? "") || KeyHints.hint(leaves[index].key) != nil && StandIns.isMasked(leaves[index].text)
             || leaves[index].datePart.map { $0 != .year } == true }
-        var order: [Int] = [], derived: [Int] = []
+        // A machine-readable zone writes a name, a number and a birth date drawn elsewhere: it comes last.
+        var order: [Int] = [], derived: [Int] = [], zones: [Int] = []
         for index in leaves.indices {
             if index.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
-            if later(index) { derived.append(index) } else { order.append(index) }
+            if hint(leaves[index].key) == "MRZ" { zones.append(index) } else if later(index) { derived.append(index) } else { order.append(index) }
         }
-        order += derived
+        order += derived + zones.filter { MachineZone.opensCard(leaves[$0].text) } + zones.filter { !MachineZone.opensCard(leaves[$0].text) }
         for index in order {
             try Scrubber.checkCancellation()
             let (leaf, stored) = (leaves[index], bases[index])
@@ -303,12 +314,12 @@ enum DocumentPipeline {
             // the rest of that address: it never stays as written while they change.
             if leaf.addressKey != nil, let address = addresses[index], address.city != nil || address.postal != nil || address.region != nil,
                !found.contains(where: { $0.entity == "ADDRESS" && $0.range.count * 2 >= (leaf.seen as NSString).length }) {
-                found = [Span(range: 0..<(leaf.seen as NSString).length, entity: "ADDRESS", score: 1)]
+                found = [Span(range: 0..<(leaf.seen as NSString).length, entity: KeyHints.hint(leaf.addressKey) == "REGION" ? "REGION" : "ADDRESS", score: 1)]
             }
             job.recordOriginals([(leaf.seen, found)])
             // Read in the text as seen, replaced in the text as written.
             if let view = leaf.view { found = found.map(view.raw) }
-            let owner = identityHints.contains(KeyHints.hint(leaf.key) ?? "") ? owners.of(leaf) : nil
+            let owner = identityHints.contains(KeyHints.hint(leaf.key) ?? "") || KeyHints.hint(leaf.key) == "MRZ" ? owners.of(leaf) : nil
             var (text, marks): (String, [Mark])
             var held: [Mark] = []
             if let entity = leaf.numericEntity {
@@ -500,6 +511,11 @@ enum DocumentPipeline {
         return result
     }
 
+    /// A country key that says where a record's places are; never a birth's, a
+    /// document's issuer's or a citizenship ("country_of_birth", "issuing_country").
+    static func placesCountry(_ words: [String]) -> Bool {
+        words.contains("country") && !words.contains { ["birth", "born", "issuing", "issuer", "issue", "issued", "citizenship", "nationality", "origin", "tax", "passport", "document"].contains($0) }
+    }
     /// The address each leaf belongs to: the city, region, postcode and country
     /// read under their keys in one record ("billing_city" and "billing_zip"
     /// apart from "shipping_city"), so their stand-ins come from one place.
@@ -526,7 +542,8 @@ enum DocumentPipeline {
             guard let record = leaf.lastRecord, let key = leaf.key ?? leaf.rawKey ?? leaf.addressKey, !leaf.text.isEmpty else { continue }
             let words = KeyHints.words(key)
             let hint = KeyHints.hint(leaf.key ?? leaf.addressKey) ?? leaf.numericEntity
-            let country = leaf.key == nil && (words.last == "country" || words.suffix(2) == ["country", "code"])
+            // "country", "country_code", "address_country": what country the record's places are in.
+            let country = KeyHints.hint(leaf.key) == nil && Self.placesCountry(words) && Places.code(leaf.text) != nil
             guard StandIns.placed.contains(hint ?? "") || StandIns.local.contains(hint ?? "") || country || isTimeZone(leaf) else { continue }
             let group = "\(record)\u{0}\(split.contains(record) ? qualifier(key) : "")"
             member[index] = group
@@ -565,6 +582,21 @@ enum DocumentPipeline {
             groups[target] = merged
             member[index] = target
         }
+        // A record's places with no country of their own are in the country a
+        // record around them names: "country_code": "IT" at a request's top
+        // and "city" two objects down.
+        var countries: [Int: String] = [:]
+        for leaf in leaves {
+            guard let record = leaf.lastRecord, countries[record] == nil, KeyHints.hint(leaf.key) == nil, Self.placesCountry(KeyHints.words(leaf.rawKey)),
+                  Places.code(leaf.text) != nil else { continue }
+            countries[record] = leaf.seen
+        }
+        if !countries.isEmpty {
+            for (index, leaf) in leaves.enumerated() {
+                guard let group = member[index], groups[group]?.country == nil else { continue }
+                if let country = leaf.enclosing.lazy.compactMap({ countries[$0] }).first { groups[group]?.country = country }
+            }
+        }
         // Members moved after a group was merged read the merged parts.
         // A record's address also covers what sits beside it: "timezone" and
         // "phone" next to "address": {…}, or "geo": {"coordinates": …} as its sibling.
@@ -578,6 +610,12 @@ enum DocumentPipeline {
         return leaves.indices.map { index in
             let ownParts = member[index].flatMap { groups[$0] }
             if let ownParts, ownParts.city != nil || ownParts.region != nil || ownParts.postal != nil { return ownParts }
+            // A street line in an object of its own ("additional_fields": {"address1": …})
+            // is the address around it, and at least in its country.
+            if KeyHints.hint(leaves[index].key ?? leaves[index].addressKey) == "ADDRESS" {
+                if let around = leaves[index].enclosing.dropFirst().lazy.compactMap({ own[$0] }).first { return around }
+                if let ownParts, ownParts.country != nil { return ownParts }
+            }
             // A point or a phone may sit one level down: in a list ("phones": […], <telephones>)
             // or, in XML, as an element inside the address's.
             let point = ["LATITUDE", "LONGITUDE", "COORDINATES", "PHONE_NUMBER"].contains(KeyHints.hint(leaves[index].key) ?? leaves[index].numericEntity ?? "")
