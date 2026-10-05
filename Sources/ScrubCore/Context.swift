@@ -337,8 +337,29 @@ public enum KeyHints {
         let known = particled || parts.contains { Names.firstFolded.contains($0.lowercased()) || Names.lastFolded.contains($0.lowercased()) }
         // One unknown word ("NORTHWIND") names a business or product more often than a person.
         if parts.count < 2 && !known { return false }
-        if let parent, notPeople.contains(words(parent).last.map { singular($0) ?? $0 } ?? "") { return false }
+        if isNotPeople(parent) { return ownRecord(siblings, value: value) }
         return isPersonsRecord(siblings: siblings, parent: parent, inObject: inObject) || known
+    }
+    /// Whether a key names a business, a product or an app ("application", "accounts").
+    static func isNotPeople(_ key: String?) -> Bool {
+        guard let key else { return false }
+        return notPeople.contains(words(key).last.map { singular($0) ?? $0 } ?? "")
+    }
+    /// Fields only a person has, written as the record's own ("dob", not "contact_dob").
+    private static let ownFields: Set<String> = ["FIRST_NAME", "LAST_NAME", "DATE_OF_BIRTH", "US_SSN"]
+    private static let contactFields: Set<String> = ["EMAIL_ADDRESS", "PHONE_NUMBER"]
+    /// Whether a record under a parent that names no one ("application",
+    /// "account") is still a person's own: a field only a person has sits
+    /// beside its "name" (a birth date, an SSN, a first name), or an email or
+    /// a phone does and `value` is written as a person's name with a known
+    /// first name. "Ledgerly" beside a "version", or "Ledgerly Cloud" beside a
+    /// support email, is no one.
+    static func ownRecord(_ siblings: [String], value: String?) -> Bool {
+        let fields = Set(siblings.filter { !isBareName($0) && personPrefix($0) == nil }.compactMap(hint))
+        if !fields.isDisjoint(with: ownFields) { return true }
+        guard let value, !fields.isDisjoint(with: contactFields) else { return false }
+        let parts = value.split(whereSeparator: { !$0.isLetter }).map(String.init)
+        return parts.count >= 2 && NameLists.isFirst(parts[0]) && !NameLists.isOrdinary(parts[0]) && Detector.writtenName(value) != nil
     }
     /// Particles that write a surname and seldom a business's or a product's name.
     private static let surnameParticles: Set<String> = ["van", "von", "der", "den", "ter", "ten", "bin", "ibn"]
@@ -346,7 +367,7 @@ public enum KeyHints {
     /// name: it holds personal details or a person's own ID, or its parent is
     /// about people ("customers", "manager") and not about a business.
     static func isPersonsRecord(siblings: [String], parent: String?, inObject: Bool = true) -> Bool {
-        if let parent, notPeople.contains(words(parent).last.map { singular($0) ?? $0 } ?? "") { return false }
+        if isNotPeople(parent) { return ownRecord(siblings, value: nil) }
         if siblings.contains(where: { !isBareName($0) && hint($0).map(personalSiblings.contains) == true }) { return true }
         // A person's own ID beside it ("customer_id", "patient_id") says the record is theirs.
         if inObject, siblings.contains(where: { hint($0) == nil && RecordIDs.isPersonKey($0) }) { return true }

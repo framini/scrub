@@ -26,6 +26,44 @@ enum ListedNames {
     private static let askingFor: Set<String> = ["call", "email", "ask", "ping", "tell", "text", "message", "contact", "phone", "ring", "telephone", "remind",
                                                  "thank", "invite", "notify", "inform", "cc", "bcc", "dm", "meet", "brief", "nudge", "warn"]
 
+    /// A capitalised given name, then a surname of two joined by a hyphen or a
+    /// dash: "Brisa Smith-Jones", "Brisa Smith–Jones".
+    private static let hyphenated = TextPattern(#"(?<![\p{L}\p{N}'’.@/_-])(\p{Lu}\p{Ll}+)[ \t]+(\p{Lu}\p{Ll}+[-‐‑–]\p{Lu}\p{Ll}+)(?![\p{L}\p{N}'’@/_]|[-‐‑–]\p{L})"#)
+
+    /// People written with a hyphenated surname in prose, which the tagger
+    /// reads in pieces ("Smith" a person, "Jones" a place) and so leaves the
+    /// given name behind. The given name must be a known first name that is
+    /// no ordinary word, or, beside a person `people` holds inside it or a
+    /// title before it, a word no dictionary holds but as a name; each part
+    /// of the surname a surname or no word, and the whole no place or
+    /// organisation, nor a surname the tagger read whole as one in `organisations`
+    /// ("Hewlett-Packard"). "Rolls-Royce", "Winston-Salem" or "Coca-Cola" has no
+    /// given name before it, and "the Mercedes-Benz" none written as one.
+    static func hyphenated(in text: String, people: [Range<Int>], organisations: [Range<Int>] = [], isCancelled: () -> Bool = { false }) -> [Span] {
+        guard text.contains(where: { "-‐‑–".contains($0) }) else { return [] }
+        let ns = text as NSString
+        var spans: [Span] = []
+        for match in TextRanges.matches(hyphenated, in: text, isCancelled: isCancelled) {
+            let given = ns.substring(with: match.range(at: 1)), surname = ns.substring(with: match.range(at: 2))
+            let range = match.range.location..<NSMaxRange(match.range)
+            let pieces = surname.split(whereSeparator: { "-‐‑–".contains($0) }).map(String.init)
+            guard !People.isTitle(given), !NameShape.isRole(given), !NameShape.joining.contains(given.lowercased()),
+                  pieces.allSatisfy({ NameLists.isSurname($0) && !NameLists.isOrdinary($0) || !NameLists.isWord($0) }) else { continue }
+            let known = NameLists.isFirst(given) && !NameLists.isWordlike(given) && !NameLists.isOrdinary(given)
+            let before = Context.words(before: range.lowerBound, in: text, limit: 1).first
+            let cued = people.contains { $0.overlaps(range) } || before.map(People.isTitle) == true
+            let named = !NameLists.isWord(given) || NameLists.isName(given) && !NameLists.isOrdinary(given)
+            guard known || cued && named else { continue }
+            let plain = surname.replacingOccurrences(of: #"[‐‑–]"#, with: "-", options: .regularExpression).lowercased()
+            guard !places.contains(plain), !places.contains(ns.substring(with: match.range).lowercased()), Places.region(surname) == nil,
+                  !NameTagger.partOfOrganisation(range, in: text) else { continue }
+            let last = match.range(at: 2).location..<NSMaxRange(match.range(at: 2))
+            guard !organisations.contains(where: { $0.lowerBound <= last.lowerBound && last.upperBound <= $0.upperBound }) else { continue }
+            spans.append(Span(range: range, entity: "PERSON", score: cuedScore))
+        }
+        return spans
+    }
+
     static func scan(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
         var spans: [Span] = []
         let ns = text as NSString

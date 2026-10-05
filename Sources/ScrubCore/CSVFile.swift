@@ -29,6 +29,16 @@ public enum CSVFile: FileFormat {
             return siblings.isEmpty ? nil : (column, siblings)
         })
         let naming = Set(named.values.flatMap { $0 })
+        // A flattened name under a business, a product or an app ("application.name") is no
+        // one's, unless the columns beside it under the same object make it a person's own
+        // ("application.dob"): then it is read as a bare "name" is in JSON.
+        let owned: [Int: [String]] = Dictionary(uniqueKeysWithValues: columns.indices.compactMap { column in
+            let parts = KeyHints.words(columns[column])
+            guard parts.count >= 2, KeyHints.isBareName(parts.last), KeyHints.hint(keys[column]) == nil,
+                  KeyHints.isNotPeople(parts.dropLast().joined(separator: "_")) else { return nil }
+            let siblings = columns.indices.filter { other in other != column && KeyHints.words(columns[other]).dropLast().elementsEqual(parts.dropLast()) }
+            return siblings.isEmpty ? nil : (column, siblings.map { keys[$0] })
+        })
         for row in rows.indices {
             if row.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
             for column in rows[row].indices {
@@ -36,6 +46,7 @@ public enum CSVFile: FileFormat {
                 // A column naming fields holds field names ("zip", "email"), and a bare
                 // "name" is a person's only as it is in JSON.
                 if naming.contains(column) || KeyHints.isBareName(key) && !KeyHints.bareNameIsPerson(rows[row][column], siblings: keys, parent: nil) { key = nil }
+                if let siblings = owned[column], KeyHints.ownRecord(siblings, value: rows[row][column]) { key = "name" }
                 if let siblings = named[column] {
                     let texts = siblings.compactMap { $0 < rows[row].count ? (KeyHints.words(columns[$0]).last!, rows[row][$0]) : nil }
                     key = KeyHints.namedField("value", siblings: texts) ?? key
