@@ -110,7 +110,7 @@ struct ValuesPanel: View {
             }
         }
         .frame(height: 260)
-        .background(Color.snow)
+        .background(Color.snow, in: .rect)
         .font(.system(size: 12))
         // Opened, the rows take the arrow keys at once.
         .onAppear { listFocused = true }
@@ -160,7 +160,7 @@ struct ValuesPanel: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 8)
-        .background(Color.mist)
+        .background(Color.mist, in: .rect)
     }
 
     private var columns: some View {
@@ -212,7 +212,7 @@ struct ValuesPanel: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 6)
-        .background(Color.mist)
+        .background(Color.mist, in: .rect)
         .disabled(model.applyingReview)
     }
 }

@@ -113,7 +113,7 @@ struct ResultView: View {
         .font(.system(size: 12))
         .padding(.horizontal, 20)
         .padding(.vertical, 8)
-        .background(Color.mist)
+        .background(Color.mist, in: .rect)
         .disabled(model.applyingReview)
     }
 
@@ -175,7 +175,7 @@ struct ResultView: View {
         .font(.system(size: 12))
         .padding(.horizontal, 20)
         .padding(.vertical, 8)
-        .background(Color.emberWash)
+        .background(Color.emberWash, in: .rect)
     }
 
     /// Some of Scrub's own detectors didn't load, so this scrub found less than it could.
@@ -191,7 +191,7 @@ struct ResultView: View {
         .font(.system(size: 12))
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
-        .background(Color.emberWash)
+        .background(Color.emberWash, in: .rect)
     }
 
     @ViewBuilder private var preview: some View {
@@ -263,7 +263,7 @@ struct ResultView: View {
         .font(.system(size: 12))
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
-        .background(Color.mist)
+        .background(Color.mist, in: .rect(bottomLeadingRadius: 10, bottomTrailingRadius: 10))
     }
 
     /// Marks are UTF-16 offsets, the same units NSString ranges use.
@@ -332,7 +332,7 @@ private struct TablePreview: View {
                     }
                     .padding(.horizontal, 20)
                     .frame(height: 36)
-                    .background(Color.snow)
+                    .background(Color.snow, in: .rect)
                     .overlay(alignment: .bottom) { Divider().overlay(Color.line) }
                     ScrollViewReader { reader in
                         ScrollView(.vertical) {
