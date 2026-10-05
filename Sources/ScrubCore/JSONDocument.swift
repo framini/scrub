@@ -35,10 +35,18 @@ final class JSONDocument {
             return document
         }
 
-        private func collect(_ document: JSONDocument, _ value: JSONValue, key: String?, path: String, records: [Int], keys: [String], depth: Int, listed: Bool = false) {
+        /// Keys whose value says what kind of thing a record's other values are ("type": "CPR").
+        private static let kindKeys: Set<String> = ["type", "kind", "idtype", "idkind", "documenttype", "doctype", "documentkind", "identifiertype", "identificationtype", "identitytype", "scheme", "idscheme", "typecode", "category", "system"]
+        /// `typed`: the words a record's own kind field writes, which name its other values as a key would.
+        private func collect(_ document: JSONDocument, _ value: JSONValue, key: String?, path: String, records: [Int], keys: [String], depth: Int, listed: Bool = false, typed: Set<String> = []) {
             switch value {
             case .object(let pairs):
                 names += pairs.map(\.0)
+                // A record that says what its number is ({"type": "CPR", "number": "…"}) names it there.
+                let kind = Set(pairs.flatMap { pair -> [String] in
+                    guard Self.kindKeys.contains(KeyHints.words(pair.0).joined()), let text = pair.1.stringValue, text.utf16.count <= 40 else { return [] }
+                    return KeyHints.words(text)
+                })
                 nextRecord += 1
                 let ancestry = KeyHints.isWrapper(pairs.map(\.0)) && !records.isEmpty ? records : records + [nextRecord]
                 let named = pairs.compactMap { pair in pair.1.stringValue.map { (pair.0, $0) } }
@@ -57,7 +65,7 @@ final class JSONDocument {
                     }
                     if KeyHints.isBareName(pair.0), case .string(let name) = pair.1,
                        !KeyHints.bareNameIsPerson(name, siblings: pairs.map(\.0), parent: key) { inherited = nil }
-                    collect(document, pair.1, key: inherited, path: childPath, records: ancestry, keys: keys + [pair.0], depth: depth)
+                    collect(document, pair.1, key: inherited, path: childPath, records: ancestry, keys: keys + [pair.0], depth: depth, typed: Self.kindKeys.contains(KeyHints.words(pair.0).joined()) ? [] : kind)
                 }
             case .array(let values):
                 let pair = JSONFile.coordinateKeys(key, values)
@@ -77,10 +85,11 @@ final class JSONDocument {
                 }
                 document.valueIDs[path] = leaves.count
                 var leaf = DocumentLeaf(string, key: key, records: records, contextWords: Set(keys.flatMap { KeyHints.words($0) }))
+                leaf.kindWords = typed
                 leaf.field = keys.joined(separator: ".")
                 leaves.append(leaf)
             case .number(let number):
-                guard let entity = JSONFile.numericEntity(key: key, number: number) else { break }
+                guard let entity = JSONFile.numericEntity(key: key, number: number, context: Set(keys.flatMap { KeyHints.words($0) }).union(typed)) else { break }
                 document.valueIDs[path] = leaves.count
                 var leaf = DocumentLeaf(number, key: key, records: records, numericEntity: entity)
                 leaf.field = keys.joined(separator: ".")

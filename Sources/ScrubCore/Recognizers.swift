@@ -55,6 +55,11 @@ struct Recognizer: Sendable {
     func kept(_ value: String) -> [Character] {
         (folds ? value.uppercased() : value).filter { !separators.contains($0) }
     }
+    /// Whether one of its forms writes `value` whole.
+    func writes(_ value: String) -> Bool {
+        let length = (value as NSString).length
+        return forms.contains { form in TextRanges.matches(form.pattern, in: value).contains { $0.range.location == 0 && $0.range.length == length } }
+    }
     func passes(_ value: String) -> Bool {
         let characters = kept(value)
         return !characters.isEmpty && check(characters)
@@ -91,7 +96,8 @@ enum Recognizers {
         Recognizer("RUT", keys: ["rut", "rutnumber", "numerorut"], forms: [
             .init(#"\b\d{1,2}\.\d{3}\.\d{3}-[\dkK](?![\w-])"#, 0.5, alone: true),
             .init(#"\b\d{7,8}-[\dkK](?![\w-])"#, 0.1),
-        ], context: ["rut", "run"], check: { characters in
+            .init(#"\b\d{7,8}[\dkK]\b"#, 0.05),
+        ], context: ["rut"], check: { characters in
             guard (8...9).contains(characters.count), let body = numbers(Array(characters.dropLast())) else { return false }
             return characters.last == rutDigit(body)
         }, draw: { like, rng in
@@ -113,7 +119,7 @@ enum Recognizers {
             return c + [Character(String(curpDigit(c[...])))]
         }),
         Recognizer("RFC", keys: ["rfc"], forms: [
-            .init(#"\b[A-ZÑ&]{4}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[A-Z\d]{2}[\dA]\b"#, 0.4, alone: true),
+            .init(#"\b[A-ZÑ&]{4}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[A-Z\d]{2}[\dA]\b"#, 0.3),
         ], context: ["rfc"], separators: " -", check: { characters in
             characters.count == 13 && rfcDigit(characters[0..<12]) == characters[12]
         }, draw: { _, rng in
@@ -136,8 +142,8 @@ enum Recognizers {
             return c + [fiscalLetter(c[...])]
         }),
         Recognizer("DNI", keys: ["dni", "nif", "dninumber", "numerodni", "nifnumber"], forms: [
-            .init(#"\b\d{8}-?[A-HJ-NP-TV-Z]\b"#, 0.5, alone: true),
-        ], context: ["dni", "nif", "documento", "identidad"], check: { characters in
+            .init(#"\b\d{8}-?[A-HJ-NP-TV-Z]\b"#, 0.3),
+        ], context: ["dni", "nif", "documento", "identidad", "tax", "fiscal"], check: { characters in
             guard characters.count == 9, let d = numbers(Array(characters.prefix(8))) else { return false }
             return dniLetter(number(d)) == characters[8]
         }, draw: { _, rng in
@@ -145,8 +151,8 @@ enum Recognizers {
             return characters(d) + [dniLetter(number(d))]
         }),
         Recognizer("NIE", keys: ["nie", "nienumber"], forms: [
-            .init(#"\b[XYZ]-?\d{7}-?[A-HJ-NP-TV-Z]\b"#, 0.5, alone: true),
-        ], context: ["nie", "extranjero"], check: { characters in
+            .init(#"\b[XYZ]-?\d{7}-?[A-HJ-NP-TV-Z]\b"#, 0.3),
+        ], context: ["nie", "nif", "extranjero", "tax", "fiscal"], check: { characters in
             guard characters.count == 9, let lead = "XYZ".firstIndex(of: characters[0]), let d = numbers(Array(characters[1..<8])) else { return false }
             return dniLetter("XYZ".distance(from: "XYZ".startIndex, to: lead) * 10_000_000 + number(d)) == characters[8]
         }, draw: { _, rng in
@@ -256,7 +262,8 @@ enum Recognizers {
             return characters(twoDigits(date.day) + twoDigits(date.month) + twoDigits(date.year % 100) + randomDigits(4, &rng))
         }),
         Recognizer("HETU", keys: ["hetu", "henkilotunnus", "henkiltunnus"], forms: [
-            .init(#"\b\d{6}[-+ABCDEFUVWXY]\d{3}[0-9A-FHJ-NPR-Y]\b"#, 0.5, alone: true),
+            .init(#"\b\d{6}[ABCDEFUVWXY]\d{3}[0-9A-FHJ-NPR-Y]\b"#, 0.5, alone: true),
+            .init(#"\b\d{6}[-+]\d{3}[0-9A-FHJ-NPR-Y]\b"#, 0.3),
         ], context: ["hetu", "henkilötunnus", "henkilotunnus"], separators: " ", check: { characters in
             guard characters.count == 11, let d = numbers(Array(characters[0..<6]) + Array(characters[7..<10])) else { return false }
             let century: Int
@@ -357,7 +364,7 @@ enum Recognizers {
             return characters(d + [d.reduce(0, +) % 10])
         }),
         Recognizer("NRIC", keys: ["nric", "nricno", "nricnumber", "nricfin"], forms: [
-            .init(#"\b[STFG]\d{7}[A-Z]\b"#, 0.5, alone: true),
+            .init(#"\b[STFG]\d{7}[A-Z]\b"#, 0.3),
         ], context: ["nric", "fin"], check: { characters in
             guard characters.count == 9, let d = numbers(Array(characters[1..<8])) else { return false }
             return nricLetter(characters[0], d) == characters[8]
@@ -443,7 +450,7 @@ enum Recognizers {
             return [lead] + characters(d + [kvnrDigit(Int(lead.asciiValue ?? 65) - 64, d)])
         }),
         Recognizer("RVNR", keys: ["rvnr", "rentenversicherungsnummer", "sozialversicherungsnummer", "svnr", "svnummer"], forms: [
-            .init(#"\b\d{2} ?(?:0[1-9]|[12]\d|3[01]|5[1-9]|[67]\d|8[01])(?:0[1-9]|1[0-2])\d{2} ?[A-Z] ?\d{2} ?\d\b"#, 0.5, alone: true),
+            .init(#"\b\d{2} ?(?:0[1-9]|[12]\d|3[01]|5[1-9]|[67]\d|8[01])(?:0[1-9]|1[0-2])\d{2} ?[A-Z] ?\d{2} ?\d\b"#, 0.3),
         ], context: ["rentenversicherungsnummer", "sozialversicherungsnummer", "versicherungsnummer", "rvnr", "svnr"], check: { characters in
             guard characters.count == 12, characters[8].isLetter, let letter = characters[8].asciiValue,
                   let head = numbers(Array(characters[0..<8])), let tail = numbers(Array(characters[9..<12])) else { return false }
@@ -562,7 +569,8 @@ enum Recognizers {
         Recognizer("PASSPORT", forms: [
             .init(#"\b[A-Z]{1,2}\d{6,8}\b"#, 0.1),
         ], context: ["passport", "护照", "여권", "pasaporte", "passeport", "reisepass", "passaporto", "paspoort", "paszport", "passaporte"], verifies: false, check: { characters in
-            (7...10).contains(characters.count)
+            let letters = characters.prefix { $0.isLetter }.count
+            return (1...2).contains(letters) && (6...8).contains(characters.count - letters) && characters.dropFirst(letters).allSatisfy(\.isNumber)
         }, draw: { like, rng in
             like.map { $0.isLetter ? pick(letters, &rng) : pick(digits, &rng) }
         }),
@@ -576,13 +584,14 @@ enum Recognizers {
         }),
         Recognizer("ETHEREUM", entity: "CRYPTO", keys: ["ethaddress", "ethereumaddress"], forms: [
             .init(#"\b0x[0-9a-fA-F]{40}\b"#, 0.3),
-        ], context: ["wallet", "eth", "ethereum", "crypto", "erc20"], folds: false, verifies: true, separators: "", check: { $0.count == 42 }, draw: { _, rng in
+        ], context: ["wallet", "eth", "ethereum", "crypto"], folds: false, verifies: true, separators: "", check: { $0.count == 42 }, draw: { _, rng in
             Array("0x") + (0..<40).map { _ in pick("0123456789abcdef", &rng) }
         }),
         Recognizer("MAC_ADDRESS", keys: ["macaddress", "macaddr", "hardwareaddress", "bssid", "wifimac", "devicemac"], forms: [
             .init(#"(?<![0-9A-Fa-f:-])[0-9A-Fa-f]{2}([:-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:-])"#, 0.6, alone: true),
             .init(#"\b[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\b"#, 0.6, alone: true),
-        ], context: ["mac", "hardware", "ethernet", "bssid", "wifi"], verifies: true, separators: ":-.", check: { characters in
+            .init(#"\b[0-9A-Fa-f]{12}\b"#, 0.05),
+        ], context: ["mac", "hardware", "ethernet", "bssid", "wifi"], verifies: false, separators: ":-.", check: { characters in
             characters.count == 12 && characters.allSatisfy(\.isHexDigit) && Set(characters).count > 1
         }, draw: { _, rng in
             // Locally administered and unicast: the first octet's low bits are 10, so it is nobody's device.
@@ -600,34 +609,69 @@ enum Recognizers {
     /// The recognizer a whole value is written as and passes the check of,
     /// one whose check is more than its shape first ("ZX4829137" is any
     /// document number's shape before it is a German ID card's).
-    static func recognizing(_ value: String) -> Recognizer? {
+    static func recognizing(_ value: String) -> Recognizer? { candidates(value).first }
+    /// Every kind that writes `value` whole and passes it, those whose check verifies first.
+    static func candidates(_ value: String) -> [Recognizer] {
         let trimmed = value.trimmingCharacters(in: .whitespaces)
         let length = (trimmed as NSString).length
-        guard length >= 7, length <= 96 else { return nil }
-        let matching = all.filter { recognizer in
-            recognizer.forms.contains { form in
-                TextRanges.matches(form.pattern, in: trimmed).contains { $0.range.location == 0 && $0.range.length == length }
-            } && recognizer.passes(trimmed)
-        }
-        return matching.first(where: \.verifies) ?? matching.first
+        guard length >= 7, length <= 96 else { return [] }
+        let matching = all.filter { $0.writes(trimmed) && $0.passes(trimmed) }
+        return matching.filter(\.verifies) + matching.filter { !$0.verifies }
     }
 
-    /// A fresh value of the kind `original` is, written as it is (its separators where they were, its letters in its case), which passes the same check.
+    /// A fresh value of the kind `original` is, written as it is (its separators where they were, its letters in its case), which passes the same check in one of its forms.
+    /// A kind known by its shape alone keeps its letters and digits where they were: its check can't tell another layout from a mistake.
     static func standIn(for original: String, using rng: inout any RandomNumberGenerator) -> String? {
-        // A kind known by its shape alone is drawn in its shape as any ID is (see `StandIns`).
-        guard let recognizer = recognizing(original), recognizer.verifies else { return nil }
-        let kept = recognizer.kept(original.trimmingCharacters(in: .whitespaces))
-        for _ in 0..<16 {
-            let drawn = recognizer.draw(kept, &rng)
-            guard drawn.count == kept.count, drawn != kept else { continue }
-            var next = drawn.makeIterator()
-            let written = String(original.map { character -> Character in
-                guard !recognizer.separators.contains(character), let made = next.next() else { return character }
-                return recognizer.folds && character.isLowercase ? Character(made.lowercased()) : made
-            })
-            if recognizer.passes(written) { return written }
+        // A value two kinds write ("ZN26148285": a passport, or by chance a German card's number) takes the first that can draw one.
+        for recognizer in candidates(original) {
+            if let made = standIn(for: original, as: recognizer, using: &rng) { return made }
         }
         return nil
+    }
+    private static func standIn(for original: String, as recognizer: Recognizer, using rng: inout any RandomNumberGenerator) -> String? {
+        let kept = recognizer.kept(original.trimmingCharacters(in: .whitespaces))
+        let fits = { (characters: [Character]) -> Bool in
+            let written = write(characters, like: original, recognizer)
+            return recognizer.passes(written) && recognizer.writes(written.trimmingCharacters(in: .whitespaces))
+        }
+        for _ in 0..<(recognizer.verifies ? 32 : 16) {
+            let drawn = recognizer.draw(kept, &rng)
+            guard drawn.count == kept.count, drawn != kept else { continue }
+            if !recognizer.verifies, zip(drawn, kept).contains(where: { $0.isNumber != $1.isNumber }) { continue }
+            if fits(drawn) { return write(drawn, like: original, recognizer) }
+        }
+        guard !recognizer.verifies, let last = kept.indices.last else { return nil }
+        // Its own draw writes another layout: each character changed in turn, to one of its kind that
+        // keeps the value in a form, its last one written again where that is a check digit.
+        func pool(_ character: Character) -> [Character] { Array(character.isNumber ? digits : character.isLowercase ? letters.lowercased() : letters) }
+        var characters = kept
+        for index in characters.indices.dropLast() {
+            let was = characters[index], end = characters[last]
+            for _ in 0..<12 {
+                guard let made = pool(was).randomElement(using: &rng), made != was else { continue }
+                characters[index] = made
+                if fits(characters) { break }
+                if let ending = pool(end).shuffled(using: &rng).first(where: { characters[last] = $0; return fits(characters) }) { characters[last] = ending; break }
+                characters[index] = was
+                characters[last] = end
+            }
+        }
+        return characters != kept && fits(characters) ? write(characters, like: original, recognizer) : nil
+    }
+    /// `characters` written in `original`'s layout: its separators where they were, its small letters small where the kind folds case.
+    static func write(_ characters: [Character], like original: String, _ recognizer: Recognizer) -> String {
+        var next = characters.makeIterator()
+        return String(original.map { character -> Character in
+            guard !recognizer.separators.contains(character), !character.isWhitespace, let made = next.next() else { return character }
+            return recognizer.folds && character.isLowercase ? Character(made.lowercased()) : made
+        })
+    }
+
+    /// The kind of identifier `value`, whole, is where `words` name it: it passes a kind's check in one of its forms and one of the words names that kind,
+    /// as a key's words name a string under it ("kimlik": 89508837288).
+    static func named(_ value: String, by words: Set<String>) -> String? {
+        let ns = value as NSString
+        return find(value, ns: ns, units: Array(value.utf16), contextWords: words, isCancelled: { false }).first { $0.range == 0..<ns.length && $0.score >= 1 }?.entity
     }
 
     /// Words that sit between a value and the word naming it without changing what it names ("the", "my", "de").

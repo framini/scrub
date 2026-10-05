@@ -6,7 +6,7 @@ import Testing
 // under: a value passing it is found, the same value with one character
 // changed is not, and its stand-in passes the same check.
 
-private let samples: [String: String] = [
+let recognizerSamples: [String: String] = [
     "CPF": "111.444.777-35",
     "CUIL": "20-12345678-6",
     "RUT": "12.345.678-5",
@@ -71,11 +71,11 @@ private let shapeOnly: Set<String> = ["CPR", "NINO", "PAN", "RRN", "EPIC", "MBI"
 private func recognizer(_ name: String) -> Recognizer? { Recognizers.all.first { $0.name == name } }
 
 @Test func everyRecognizerHasASample() {
-    #expect(Set(samples.keys) == Set(Recognizers.all.map(\.name)))
+    #expect(Set(recognizerSamples.keys) == Set(Recognizers.all.map(\.name)))
 }
 
 @Test func checksKnowTheirIdentifiers() throws {
-    for (name, sample) in samples {
+    for (name, sample) in recognizerSamples {
         let recognizer = try #require(recognizer(name))
         #expect(recognizer.passes(sample), "\(name): \(sample)")
         // One character moved by one fails every check that has one.
@@ -92,13 +92,13 @@ private func recognizer(_ name: String) -> Recognizer? { Recognizers.all.first {
 @Test func drawnIdentifiersPassTheirChecksAndForms() {
     var rng: any RandomNumberGenerator = SeededGenerator(seed: 11)
     for recognizer in Recognizers.all {
-        let like = recognizer.kept(samples[recognizer.name] ?? "")
+        let like = recognizer.kept(recognizerSamples[recognizer.name] ?? "")
         for _ in 0..<40 {
             let canonical = recognizer.draw(like, &rng)
             #expect(recognizer.check(canonical), "\(recognizer.name): \(String(canonical))")
             // Written in its sample's layout, separators and all.
             var next = canonical.makeIterator()
-            let drawn = String((samples[recognizer.name] ?? "").map { recognizer.separators.contains($0) ? $0 : next.next() ?? $0 })
+            let drawn = String((recognizerSamples[recognizer.name] ?? "").map { recognizer.separators.contains($0) ? $0 : next.next() ?? $0 })
             let written = recognizer.forms.contains { form in
                 TextRanges.matches(form.pattern, in: drawn).contains { $0.range.location == 0 && $0.range.length == (drawn as NSString).length }
             }
@@ -109,7 +109,7 @@ private func recognizer(_ name: String) -> Recognizer? { Recognizers.all.first {
 
 @Test func standInsKeepTheLayoutAndPassTheCheck() throws {
     var rng: any RandomNumberGenerator = SeededGenerator(seed: 3)
-    for (name, sample) in samples where recognizer(name)?.verifies == true {
+    for (name, sample) in recognizerSamples where recognizer(name)?.verifies == true {
         guard let made = Recognizers.standIn(for: sample, using: &rng) else { Issue.record("\(name): no stand-in"); continue }
         #expect(made != sample && Recognizers.recognizing(made) != nil, "\(name): \(sample) → \(made)")
         #expect(made.map { $0.isLetter || $0.isNumber } == sample.map { $0.isLetter || $0.isNumber }, "\(name): \(sample) → \(made)")

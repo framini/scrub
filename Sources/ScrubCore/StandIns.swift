@@ -129,6 +129,13 @@ final class StandIns {
         let stablePerson = ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(actual)
         let stableEmail = actual == "EMAIL_ADDRESS" && (persona != nil || people.find(email: original) != nil)
         if !stablePerson && !stableEmail, let found = assigned[key] { return found }
+        // One identifier written two ways ("11774270-H", "11774270h") keeps one stand-in, each in its own layout.
+        let identity = Recognizers.entities.contains(actual) ? identifier(original) : nil
+        if let identity, let written = reused(identity, original) {
+            assigned[key] = written
+            return written
+        }
+        defer { if let identity, let made = assigned[key], identity.recognizer.passes(made) { assigned[identity.key] = String(identity.recognizer.kept(made)) } }
         var fake = "[\(actual)]"
         // A bare number that the document also writes as a phone number
         // ("4158672290" beside "(415) 867-2290") is that phone, and takes its stand-in.
@@ -1042,11 +1049,33 @@ final class StandIns {
     func number(_ original: String) -> String {
         let key = "ID_NUMBER\u{0}" + original
         if let found = assigned[key] { return found }
-        var fake = Recognizers.standIn(for: original, using: &rng) ?? original
+        let identity = identifier(original)
+        // A number can't start with a zero its original didn't.
+        let lead: (String) -> Bool = { original.first == "0" || $0.first != "0" }
+        var fake = original
+        if let identity, let written = reused(identity, original) { fake = written }
+        if fake == original {
+            for _ in 0..<16 {
+                guard let made = Recognizers.standIn(for: original, using: &rng) else { break }
+                if lead(made) { fake = made; break }
+            }
+        }
         var attempts = 0
-        while fake == original || attempts < 16 && originals.contains(fake) { fake = digits(original.count); attempts += 1 }
+        while fake == original || !lead(fake) || attempts < 16 && originals.contains(fake) { fake = digits(original.count); attempts += 1 }
         assigned[key] = fake
+        if let identity, identity.recognizer.passes(fake), assigned[identity.key] == nil { assigned[identity.key] = String(identity.recognizer.kept(fake)) }
         return fake
+    }
+    /// The stand-in the same identifier took written another way, in this one's layout.
+    private func reused(_ identity: (recognizer: Recognizer, key: String), _ original: String) -> String? {
+        guard let found = assigned[identity.key], found.count == identity.recognizer.kept(original.trimmingCharacters(in: .whitespaces)).count else { return nil }
+        return Recognizers.write(Array(found), like: original, identity.recognizer)
+    }
+    /// The kind an identifier is and its characters without separators, the same however it is written.
+    private func identifier(_ original: String) -> (recognizer: Recognizer, key: String)? {
+        guard let recognizer = Recognizers.recognizing(original) else { return nil }
+        // By its characters alone: "23332969-K" may pass two kinds' checks where "23332969K" passes one.
+        return (recognizer, "IDENTIFIER\u{0}" + String(recognizer.kept(original.trimmingCharacters(in: .whitespaces))))
     }
     func numericLexeme(_ original: String, entity: String, address: AddressParts? = nil) -> String {
         let key = entity + "\u{0}" + original

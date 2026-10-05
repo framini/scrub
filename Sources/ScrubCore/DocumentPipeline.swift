@@ -9,6 +9,9 @@ struct DocumentLeaf: Sendable {
     /// The records this value sits in, innermost first.
     var enclosing: [Int] { records.all.reversed() }
     let contextWords: Set<String>
+    /// The words its record's kind field writes ("type": "CPR"): they name an identifier
+    /// among its values for the detectors, and say nothing about whose record it is.
+    var kindWords: Set<String> = []
     let numericEntity: String?
     /// A column header or similar label: read for patterns only, since the name
     /// model takes words like "Dob" for places.
@@ -661,8 +664,8 @@ enum DocumentPipeline {
     /// Spans in the text as seen (`DocumentLeaf.seen`).
     private static func base(_ leaf: DocumentLeaf, stored: [Span]?) -> [Span] {
         if let stored { return stored }
-        guard let entity = KeyHints.hint(leaf.key), !leaf.text.isEmpty else { return [] }
-        return [Span(range: 0..<(leaf.seen as NSString).length, entity: entity, score: 1)]
+        guard !leaf.text.isEmpty else { return [] }
+        return Detector.keyed(leaf.seen, key: leaf.key) ?? []
     }
 
     private static func detectBases(_ leaves: [DocumentLeaf], progress: (Stage, Int, Int) -> Void) throws -> ([[Span]?], [[Span]]) {
@@ -697,7 +700,7 @@ enum DocumentPipeline {
                     if leaf.numericEntity != nil || KeyHints.hint(leaf.key) != nil && !leaf.text.isEmpty { local.append(nil) }
                     else if leaf.fieldName { local.append(Patterns.find(leaf.seen, isCancelled: { cancelled.isSet })) }
                     else {
-                        let read = detector.read(leaf.seen, key: leaf.key, contextWords: leaf.contextWords, context: context[index])
+                        let read = detector.read(leaf.seen, key: leaf.key, contextWords: leaf.contextWords.union(leaf.kindWords), context: context[index])
                         local.append(read.spans)
                         if !read.doubts.isEmpty { doubts.append((index, read.doubts)) }
                     }

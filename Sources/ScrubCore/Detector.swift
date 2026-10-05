@@ -145,9 +145,22 @@ public final class Detector {
         }
         return (kept, left)
     }
+    /// What a value is when its key says so: the kind the key names, the whole value. An identifier its
+    /// key names is that identifier, though the key names another kind elsewhere ("pan": a card's
+    /// number, or India's tax number). Nil when the key names nothing.
+    static func keyed(_ text: String, key: String?) -> [Span]? {
+        guard let entity = KeyHints.hint(key), !text.isEmpty else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        if trimmed.utf16.count <= 96, trimmed.contains(where: \.isNumber), let named = Recognizers.named(trimmed, by: Set(KeyHints.words(key))), named != entity,
+           let found = text.range(of: trimmed) {
+            let start = NSRange(found, in: text).location
+            return [Span(range: start..<(start + (trimmed as NSString).length), entity: named, score: 1)]
+        }
+        return [Span(range: 0..<(text as NSString).length, entity: entity, score: 1)]
+    }
     private func found(_ text: String, key: String?, contextWords: Set<String>, modelled: Bool, context: ContextStage.Reading?) -> [Span] {
         do {
-            if let entity = KeyHints.hint(key), !text.isEmpty { return [Span(range: 0..<(text as NSString).length, entity: entity, score: 1)] }
+            if let keyed = Self.keyed(text, key: key) { return keyed }
             if KeyHints.isRole(key), let name = Self.writtenName(text) { return [Span(range: name, entity: "PERSON", score: 1)] }
             // A time zone ("America/New_York") names a region, not where someone lives.
             if text.contains("/"), text.count < 64, !TextRanges.matches(Self.timeZone, in: text).isEmpty { return [] }

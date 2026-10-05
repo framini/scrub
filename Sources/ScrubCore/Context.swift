@@ -3,7 +3,8 @@ import Foundation
 enum Context {
     static let birth: Set<String> = ["born", "bear", "dob", "birth", "birthday", "birthdate"]
     static let name: Set<String> = ["called", "named", "mr", "mrs", "ms", "dr", "contact", "owner", "customer", "patient", "employee", "its", "it's", "im", "i'm", "with", "w", "spoke", "ask", "tell", "cc"]
-    private static let word = TextPattern("\\p{L}+(?:['’]\\p{L}+)?")
+    // A mark is part of its word: Thai and Devanagari write vowels as marks on a letter ("บัตร").
+    private static let word = TextPattern("\\p{L}[\\p{L}\\p{M}]*(?:['’]\\p{L}[\\p{L}\\p{M}]*)?")
     static func before(_ range: Range<Int>, in text: String, limit: Int) -> Set<String> {
         Set(words(before: range.lowerBound, in: text, limit: limit).map { $0.lowercased() })
     }

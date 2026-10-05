@@ -109,7 +109,10 @@ public enum JSONFile: FileFormat {
         let latitudeFirst = abs(numbers[0]) > 90 ? false : abs(numbers[1]) > 90 ? true : words.hasPrefix("lat")
         return latitudeFirst ? ["latitude", "longitude"] : ["longitude", "latitude"]
     }
-    static func numericEntity(key: String?, number: String) -> String? {
+    /// `context`: the words its keys and its record's kind field write.
+    static func numericEntity(key: String?, number: String, context: Set<String> = []) -> String? {
+        // An identifier the words around it name, written as a number ("kimlik": 89508837288), is one as it would be as a string.
+        if KeyHints.hint(key) == nil, number.allSatisfy({ $0.isASCII && $0.isNumber }), let entity = Recognizers.named(number, by: context.union(KeyHints.words(key))) { return entity }
         // A customer or patient number names them as an ID string would.
         if KeyHints.hint(key) == nil, RecordIDs.identifying(key: key, value: number), number.allSatisfy({ $0.isASCII && $0.isNumber }) { return "RECORD_ID" }
         if let hint = KeyHints.hint(key), ["AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE"].contains(hint) { return KeyHints.fits(key, number) ? hint : nil }
