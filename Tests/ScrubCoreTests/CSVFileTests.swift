@@ -115,3 +115,25 @@ func csvFormulaVariantsRemainInertAfterWriting(_ cell: String) throws {
     #expect(rows[1][1] == "'" + cell)
     #expect(result.neutralized == 1)
 }
+
+/// A header of many columns is read in one pass: one object's fields, a form
+/// field's name beside its value, and a bare "name" beside the rest are each
+/// read once, never once per column.
+enum WideHeaders {
+    static func repeated(_ column: String, _ count: Int) -> String { Array(repeating: column, count: count).joined(separator: ",") }
+    static let distinct: String = "email," + (0..<20_000).map { (index: Int) -> String in "r\(index).application.name" }.joined(separator: ",")
+    static let all: [String] = [distinct, "application.dob," + repeated("application.name", 20_000), repeated("fields.0.value,fields.0.name", 10_000), "customer_id," + repeated("name", 20_000)]
+}
+
+@Test(arguments: WideHeaders.all)
+func csvReadsAWideHeaderInOnePass(_ header: String) throws {
+    // A short row, so the time is the header's alone.
+    let text = header + "\nJane Roe,1984-03-02\nAn Wu,1990-01-01\n"
+    let clock = ContinuousClock()
+    let started = clock.now
+    let result = try Scrubber.scrub(Data(text.utf8), name: "wide.csv", forceFullDetection: false, seed: 9)
+    let took = clock.now - started
+    #expect(result.format == "csv")
+    // Read once per column this takes seconds; once per pair of columns, minutes.
+    #expect(took < .seconds(60), "\(header.prefix(40)): \(took)")
+}

@@ -240,6 +240,17 @@ final class People {
         }
     }
     private static let eitherChoices = firstChoices.filter { !Names.female.contains($0.1) && !Names.male.contains($0.1) }
+    /// Each list's names folded, to ask whether a stand-in is among them in one lookup.
+    private static let femaleFolded = Set(femaleChoices.map(\.1)), maleFolded = Set(maleChoices.map(\.1))
+    private static let eitherFolded = Set(eitherChoices.map(\.1)), firstFolded = Set(firstChoices.map(\.1))
+    private static func folded(for gender: String?) -> Set<String> {
+        switch gender {
+        case "female": femaleFolded
+        case "male": maleFolded
+        case "either": eitherFolded
+        default: firstFolded
+        }
+    }
     private static func choices(for gender: String?) -> [(String, String)] {
         switch gender {
         case "female": femaleChoices
@@ -258,7 +269,7 @@ final class People {
     private func fit(_ person: Persona, _ gender: String) {
         let wanted = person.gender.map { $0 == gender ? $0 : "either" } ?? gender
         person.gender = wanted
-        guard !person.shown, !Self.choices(for: wanted).contains(where: { $0.1 == fold(person.drawn) }) else { return }
+        guard !person.shown, !Self.folded(for: wanted).contains(fold(person.drawn)) else { return }
         let originals = [person.realFirst, person.realLast].compactMap { $0 }.filter { $0.count >= 3 }
         for _ in 0..<64 {
             let first = pick(Self.choices(for: wanted), originals: originals, emailSafe: false)

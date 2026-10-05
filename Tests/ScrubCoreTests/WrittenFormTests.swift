@@ -18,9 +18,9 @@ import Testing
         try Scrubber.scrub(Data(text.utf8), name: "record." + ext, forceFullDetection: false, seed: seed)
     }
 
-    static func edit(_ result: ScrubResult, _ finding: Finding, replacement: String) throws -> ScrubResult {
+    static func edit(_ result: ScrubResult, _ finding: Finding, kind: String? = nil, replacement: String? = nil) throws -> ScrubResult {
         let target = result.current.first { $0.id == finding.id } ?? finding
-        let (choices, marks, edits) = try result.editing([target], kind: nil, replacement: replacement, choices: result.choices, marks: result.marks, edits: result.edits)
+        let (choices, marks, edits) = try result.editing([target], kind: kind, replacement: replacement, choices: result.choices, marks: result.marks, edits: result.edits)
         return try result.applying(choices, marks: marks, edits: edits)
     }
 
@@ -132,5 +132,79 @@ import Testing
         // Under an app, beside its own fields, a name is the app's.
         let app = try Self.scrub("application.name,application.release_date\nLedgerly,2024-01-02\n", "csv")
         #expect(Self.output(app).contains("Ledgerly"), "\(Self.output(app))")
+    }
+
+    // MARK: A name made valid or told apart
+
+    @Test func aNameMadeValidNeverSpellsTheOriginal() throws {
+        let shapes = [
+            "<root><n123>ok</n123><username>n123</username></root>",
+            #"<root><item n123="1"/><username>n123</username></root>"#,
+            "<root><n123>ok</n123><n12>x</n12><username>n123</username></root>",
+            "<root><n1>ok</n1><username>n1</username></root>",
+        ]
+        for text in shapes {
+            var result = try Self.scrub(text, "xml")
+            if !result.findings.contains(where: { $0.original.lowercased() == "n123" || $0.original.lowercased() == "n1" }) {
+                var marks = Marks()
+                marks.add(text.contains("n123") ? "n123" : "n1", as: "USERNAME")
+                result = try result.applying(result.choices, marks: marks)
+            }
+            let original = text.contains("n123") ? "n123" : "n1"
+            let handle = try #require(result.current.first { $0.original.lowercased() == original }, "\(text): \(result.current.map(\.original))")
+            for typed in ["123", "12", "n12", "1x", "1", "-123", "_123"] {
+                if result.refusal(typed, for: [handle]) != nil { continue }
+                let edited = try Self.edit(result, handle, replacement: typed)
+                let written = Self.output(edited)
+                #expect(XMLParser(data: edited.output).parse(), "\(text) / \(typed): \(written)")
+                let names = written.split(whereSeparator: { "<>/= \"".contains($0) }).map { $0.lowercased() }
+                #expect(!names.contains(original), "\(text) / \(typed): \(written)")
+                #expect(!names.contains { $0.contains(original) && !Review.squeezed(typed).lowercased().contains(original) }, "\(text) / \(typed): \(written)")
+            }
+        }
+    }
+
+    // MARK: Another kind for a typed replacement
+
+    @Test func anotherKindForATypedReplacementIsCheckedInEveryFormItWrites() throws {
+        // A person marks a lowercase name as an employer, types a replacement, then makes it a person.
+        let text = #"{"first_name":"Odalys","notes":"harrowgate lisk owns the rollout. ping harrowgatelisk."}"#
+        let result = try Self.scrub(text, "json")
+        var marks = result.marks
+        marks.add("harrowgate lisk", as: "EMPLOYER")
+        let marked = try result.applying(result.choices, marks: marks)
+        let mark = try #require(marked.byHand.first, "\(marked.byHand)")
+        for typed in ["Oda lys", "oda-lys", "ODA LYS"] {
+            guard marked.refusal(typed, for: [mark]) == nil else { continue }
+            let typedIn = try Self.edit(marked, mark, replacement: typed)
+            let now = try #require(typedIn.byHand.first)
+            do {
+                let (choices, marks, edits) = try typedIn.editing([now], kind: "PERSON", replacement: nil, choices: typedIn.choices, marks: typedIn.marks, edits: typedIn.edits)
+                let person = try typedIn.applying(choices, marks: marks, edits: edits)
+                #expect(!Self.output(person).lowercased().contains("odalys"), "\(typed): \(Self.output(person))")
+            } catch is Refusal {}
+        }
+        // A replacement no form of which spells anyone is kept through the change.
+        let fine = try Self.edit(marked, mark, replacement: "Jane Roe")
+        let now = try #require(fine.byHand.first)
+        let (choices, rekinded, edits) = try fine.editing([now], kind: "PERSON", replacement: nil, choices: fine.choices, marks: fine.marks, edits: fine.edits)
+        let person = try fine.applying(choices, marks: rekinded, edits: edits)
+        #expect(Self.output(person).contains("Jane Roe owns") && Self.output(person).contains("janeroe"), "\(Self.output(person))")
+    }
+
+    @Test func anotherKindForAFindingsTypedReplacementIsCheckedToo() throws {
+        let text = #"{"first_name":"Odalys","employer":"Harrowgate Lisk","notes":"ping harrowgatelisk about it"}"#
+        let result = try Self.scrub(text, "json")
+        guard let employer = result.findings.first(where: { $0.original == "Harrowgate Lisk" }) else { return }
+        for typed in ["Oda lys", "oda-lys"] {
+            guard result.refusal(typed, for: [employer]) == nil else { continue }
+            let typedIn = try Self.edit(result, employer, replacement: typed)
+            for kind in Marks.kinds where kind != employer.entity {
+                do {
+                    let changed = try Self.edit(typedIn, employer, kind: kind)
+                    #expect(!Self.output(changed).lowercased().contains("odalys"), "\(typed) as \(kind): \(Self.output(changed))")
+                } catch is Refusal {}
+            }
+        }
     }
 }

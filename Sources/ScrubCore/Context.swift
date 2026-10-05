@@ -330,15 +330,27 @@ public enum KeyHints {
     /// first or last name. Otherwise, as for "Everyday Checking", detection decides.
     /// `inObject`: the siblings are one object's, not every key in loose text.
     static func bareNameIsPerson(_ value: String, siblings: [String], parent: String?, inObject: Bool = true) -> Bool {
+        guard let known = nameEvidence(value) else { return false }
+        if isNotPeople(parent) { return ownRecord(siblings, value: value) }
+        return isPersonsRecord(siblings: siblings, parent: parent, inObject: inObject) || known
+    }
+    /// `bareNameIsPerson` under no parent, with `isPersonsRecord` of its
+    /// siblings read once for every value beside them.
+    static func bareNameIsPerson(_ value: String, personsRecord: Bool) -> Bool {
+        guard let known = nameEvidence(value) else { return false }
+        return personsRecord || known
+    }
+    /// Whether a bare "name"'s value uses a known first or last name, or nil
+    /// where it cannot be a person's whatever its record holds.
+    private static func nameEvidence(_ value: String) -> Bool? {
         let parts = value.split(whereSeparator: { !$0.isLetter })
         // A surname's particle between capitalised words ("Odalys van der Berg") writes a person's name.
         let particled = parts.count >= 3 && parts.first?.first?.isUppercase == true && parts.last?.first?.isUppercase == true
             && parts.dropFirst().dropLast().contains { surnameParticles.contains(String($0)) } && Detector.writtenName(value) != nil
         let known = particled || parts.contains { Names.firstFolded.contains($0.lowercased()) || Names.lastFolded.contains($0.lowercased()) }
         // One unknown word ("NORTHWIND") names a business or product more often than a person.
-        if parts.count < 2 && !known { return false }
-        if isNotPeople(parent) { return ownRecord(siblings, value: value) }
-        return isPersonsRecord(siblings: siblings, parent: parent, inObject: inObject) || known
+        if parts.count < 2 && !known { return nil }
+        return known
     }
     /// Whether a key names a business, a product or an app ("application", "accounts").
     static func isNotPeople(_ key: String?) -> Bool {
@@ -355,9 +367,20 @@ public enum KeyHints {
     /// first name. "Ledgerly" beside a "version", or "Ledgerly Cloud" beside a
     /// support email, is no one.
     static func ownRecord(_ siblings: [String], value: String?) -> Bool {
-        let fields = Set(siblings.filter { !isBareName($0) && personPrefix($0) == nil }.compactMap(hint))
-        if !fields.isDisjoint(with: ownFields) { return true }
-        guard let value, !fields.isDisjoint(with: contactFields) else { return false }
+        ownRecord(RecordFields(siblings), value: value)
+    }
+    /// What `ownRecord` reads of a record's fields, read once for any number of values.
+    struct RecordFields {
+        let own: Bool, contact: Bool
+        init(_ siblings: [String]) {
+            let fields = Set(siblings.filter { !isBareName($0) && personPrefix($0) == nil }.compactMap(hint))
+            own = !fields.isDisjoint(with: ownFields)
+            contact = !fields.isDisjoint(with: contactFields)
+        }
+    }
+    static func ownRecord(_ fields: RecordFields, value: String?) -> Bool {
+        if fields.own { return true }
+        guard let value, fields.contact else { return false }
         let parts = value.split(whereSeparator: { !$0.isLetter }).map(String.init)
         return parts.count >= 2 && NameLists.isFirst(parts[0]) && !NameLists.isOrdinary(parts[0]) && Detector.writtenName(value) != nil
     }
