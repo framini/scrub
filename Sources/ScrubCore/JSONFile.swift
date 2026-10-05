@@ -65,7 +65,7 @@ public enum JSONFile: FileFormat {
                 for (index, pair) in pairs.enumerated() {
                     let childPath = path + "/" + String(index)
                     numberKeys(pair.1, path: childPath)
-                    if let id = keyIDs[childPath] { values[id] = rewritingOwnText(values[id], with: ownDigits) }
+                    if let id = keyIDs[childPath] { values[id] = rewritingOwnText(values[id]) { (ownDigits($0), []) } }
                 }
             case .array(let children):
                 for (index, child) in children.enumerated() { numberKeys(child, path: path + "/" + String(index)) }
@@ -140,7 +140,9 @@ public enum JSONFile: FileFormat {
     /// carries them into every later writing, and an edit, which writes only
     /// its findings' ranges, never draws them again or reaches into a typed
     /// replacement, a kept original or another finding's stand-in.
-    static func rewritingOwnText(_ value: DocumentValue, with rewrite: (String) -> String) -> DocumentValue {
+    /// `value` with each run of its text no mark holds written as `rewrite`
+    /// writes it, and the marks `rewrite` gives each, set where it is written.
+    static func rewritingOwnText(_ value: DocumentValue, with rewrite: (String) -> (String, [Mark])) -> DocumentValue {
         let length = (value.text as NSString).length
         var own: [Range<Int>] = []
         var cursor = 0
@@ -149,13 +151,23 @@ public enum JSONFile: FileFormat {
             cursor = max(cursor, range.upperBound)
         }
         if cursor < length { own.append(cursor..<length) }
-        var edits: [(range: Range<Int>, value: String)] = []
+        var edits: [(range: Range<Int>, value: String)] = [], added: [[Mark]] = []
         for range in own.reversed() {
-            let text = TextRanges.substring(value.text, range), written = rewrite(text)
-            if written != text { edits.insert((range, written), at: 0) }
+            let text = TextRanges.substring(value.text, range), (written, marks) = rewrite(text)
+            if written != text {
+                edits.insert((range, written), at: 0)
+                added.insert(marks, at: 0)
+            }
         }
         guard !edits.isEmpty else { return value }
-        return DocumentValue(text: TextRanges.apply(edits, to: value.text).0, marks: TextRanges.shift(value.marks, by: edits),
+        var made: [Mark] = [], shift = 0
+        for (edit, marks) in zip(edits, added) {
+            let start = edit.range.lowerBound + shift
+            made += marks.map { $0.moved(to: ($0.range.lowerBound + start)..<($0.range.upperBound + start)) }
+            shift += (edit.value as NSString).length - edit.range.count
+        }
+        let marks = (TextRanges.shift(value.marks, by: edits) + made).sorted { $0.range.lowerBound < $1.range.lowerBound }
+        return DocumentValue(text: TextRanges.apply(edits, to: value.text).0, marks: marks,
                              unresolved: TextRanges.shift(value.unresolved, by: edits), proposals: value.proposals, held: TextRanges.shift(value.held, by: edits))
     }
     static func replaceDigits(_ text: String, job: Job) -> (String, [Mark]) {

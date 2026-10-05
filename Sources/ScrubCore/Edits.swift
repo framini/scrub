@@ -433,15 +433,27 @@ extension Review {
         }
         guard let own else { return nil }
         for (id, revision) in will.sorted(by: { $0.key < $1.key }) where was[id]?.standIn != revision.standIn {
-            if let refusal = held(revision.standIn, own: own + [findings[id].original], marks: marks) { return refusal }
+            let asName = findings[id].places.contains { spots.indices.contains($0.id) && squeezed.contains(spots[$0.id].value) }
+            if let refusal = held(revision.standIn, own: own + [findings[id].original], marks: marks, asName: asName) { return refusal }
         }
         for entry in changed {
             guard let typed = after.replacements[Self.findingID(entry)] else { continue }
             for place in try locate(entry, as: typed).places {
-                if let refusal = held(place.written, own: own + [entry.text], marks: marks) { return refusal }
+                if let refusal = held(place.written, own: own + [entry.text], marks: marks, asName: squeezed.contains(place.value)) { return refusal }
             }
         }
         return nil
+    }
+
+    /// `text` as an XML name writes it: its ASCII letters and digits, hyphens, underscores and dots alone.
+    static func squeezed(_ text: String) -> String { text.filter { $0.isASCII && ($0.isLetter || $0.isNumber || "-_.".contains($0)) } }
+
+    /// `held`, and where `asName`, `held` of `text` as an XML name writes it too:
+    /// "Oda lys" written there is "Odalys".
+    func held(_ text: String, own: [String], marks: Marks, asName: Bool) -> Refusal? {
+        if let refusal = held(text, own: own, marks: marks) { return refusal }
+        let name = Self.squeezed(text)
+        return asName && name != text ? held(name, own: own, marks: marks) : nil
     }
 
     /// What every original reads as, for `held`: built once for Scrub's
@@ -512,13 +524,24 @@ extension Review {
         let mine = Set(own.flatMap(Self.readings)).subtracting([""])
         // Inside a word too, but a value of one or two letters only as a word of its own.
         if reads.contains(where: { read in mine.contains { $0.count >= 3 ? read.contains($0) : Self.holds(read, $0) } }) { return .original }
+        // A name's words side by side in the runs of letters the text is made of, however short and
+        // whatever lies between them: "bo.li99@…", "@bo_li99" and "li.bo" are Bo Li's.
+        let runs = reads.map { $0.split { !$0.isLetter }.map(String.init) }
+        func spelled(_ name: String) -> Bool {
+            let words = name.split { !$0.isLetter }.map(String.init).filter { !People.isTitle($0) && !People.isSuffix($0) }
+            guard words.count >= 2 else { return false }
+            let orders = words.count == 2 ? [words, words.reversed()] : [words]
+            return runs.contains { run in
+                run.count >= words.count && (0...(run.count - words.count)).contains { start in orders.contains { Array(run[start..<start + words.count]) == $0 } }
+            }
+        }
         // Each run of letters apart from the digits beside it too, so "ferriter99@example.org" and "@odalys99" hold her names.
         let tokens = Set(reads.flatMap(Self.tokens).flatMap { [$0] + Self.pieces($0) })
         func holds(_ word: String) -> Bool { word.allSatisfy { $0.isLetter || $0.isNumber } ? tokens.contains(word) : reads.contains { Self.holds($0, word) } }
         let sets = [readable(), Readable(marks.entries.map { (original: $0.text, entity: $0.entity) })]
         func whole(names: Bool) -> Refusal? {
             for set in sets {
-                for other in set.originals where other.name == names && other.read.count >= 3 && !mine.contains(other.read) && holds(other.read) { return .other(other.written) }
+                for other in set.originals where other.name == names && other.read.count >= 3 && !mine.contains(other.read) && (holds(other.read) || names && spelled(other.read)) { return .other(other.written) }
             }
             return nil
         }
@@ -527,6 +550,7 @@ extension Review {
             for word in set.words where holds(word.read) { return .part(word.written) }
         }
         // A name whole, however short its words ("Bo Li").
+        if mine.contains(where: spelled) { return .original }
         if let refusal = whole(names: true) { return refusal }
         func source(_ name: String) -> Refusal { mine.contains(Self.readings(name).first ?? name) ? .original : .other(name) }
         for set in sets {
