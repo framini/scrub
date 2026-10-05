@@ -198,6 +198,10 @@ public final class Detector {
             spans.append(contentsOf: ListedNames.scan(text, isCancelled: isCancelled).filter { span in
                 !unsaid.contains { $0.overlaps(span.range) } && (span.score != ListedNames.pairScore || !organisations.contains { $0.overlaps(span.range) })
             })
+            // A given name before a hyphenated surname the tagger read in pieces ("Brisa Smith-Jones").
+            spans.append(contentsOf: ListedNames.hyphenated(in: text, people: spans.filter { $0.entity == "PERSON" }.map(\.range), organisations: organisations, isCancelled: isCancelled).filter { span in
+                !unsaid.contains { $0.overlaps(span.range) }
+            })
             // Names in capitals beside a first name or a title ("Julie BEET", "Ms BEET").
             spans.append(contentsOf: CapitalNames.scan(text, isCancelled: isCancelled).filter { span in !unsaid.contains { $0.overlaps(span.range) } })
             // The name model only fills gaps: where anything else found something, that finding stands.

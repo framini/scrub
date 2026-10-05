@@ -124,6 +124,16 @@ public final class Job {
             if wordlike(part) { cuedParts.insert(part); nameParts.insert(part) }
             else if part.count < 4 && !(part == first && Names.unambiguousFirst.contains(part.lowercased())) { nameParts.insert(part) }
         }
+        // Each part of a hyphenated surname alone ("Jones" after "Brisa Smith-Jones") is
+        // theirs too, where written as a name.
+        if parts.contains(last) {
+            let pieces = last.split(whereSeparator: { "-‐‑–".contains($0) }).map(String.init)
+            for piece in pieces where pieces.count == 2 && piece.count >= 3 && usable(piece) {
+                learn(piece)
+                cuedParts.insert(piece)
+                nameParts.insert(piece)
+            }
+        }
         guard parts.count == 2 else { return }
         for separator in [".", "_"] { learn(first + separator + last) }
         // Written with an initial, last name first, or with a short form of the first name.

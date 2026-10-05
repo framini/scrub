@@ -161,36 +161,18 @@ public enum XMLFile: FileFormat {
         }
         for child in document.children ?? [] { try walk(child, records: [], keys: [], parentKey: nil) }
         progress(.finding, 0, leaves.count)
-        let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
+        var values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
         let records = leaves.map(\.lastRecord)
         progress(.finding, leaves.count, leaves.count)
-        // Element and attribute names first; then the values, written again whenever a review takes findings back.
-        var markedValues: [(String, String)] = []
         progress(.checking, 0, 1)
-        let originalNames = Set(namedNodes.compactMap(\.name))
-        var usedNames = originalNames
-        var renamedNames: [String: String] = [:]
-        var prefixes: [String: String] = [:]
-        func safeName(_ local: String, original: String, prefix: String? = nil) -> String {
-            let candidate = prefix.map { $0 + ":" + local } ?? local
-            guard candidate != original else { return original }
-            var value = String(local.filter { $0.isASCII && ($0.isLetter || $0.isNumber || "-_.".contains($0)) })
-            if value.first.map({ !$0.isLetter && $0 != "_" }) ?? true { value = "n" + value }
-            let base = value
-            var qualified = prefix.map { $0 + ":" + value } ?? value
-            var counter = 2
-            while usedNames.contains(qualified) && qualified != original {
-                value = base + String(counter)
-                qualified = prefix.map { $0 + ":" + value } ?? value
-                counter += 1
-            }
-            usedNames.insert(qualified)
-            return qualified
-        }
-        func renamed(_ name: String, value: DocumentValue) -> String {
-            var candidate = value.marks.isEmpty ? name : value.text
-            let (numbered, _) = JSONFile.replaceDigits(candidate, job: job)
-            candidate = numbered
+        // An element's or an attribute's name, read as a value: its own long digits
+        // and a person's name written into it ("OdalysFerriter", "odalys_ferriter")
+        // are replaced here, once, namespaces first; each writing of the file then
+        // names the node from the value as edits and choices leave it.
+        var rewritten: [String: String] = [:]
+        func rewrite(_ own: String) -> String {
+            if let known = rewritten[own] { return known }
+            var candidate = JSONFile.replaceDigits(own, job: job).0
             // In a fixed order: a stand-in drawn here, or one name's replacement
             // reaching into another's, must not follow a set's hash order.
             for person in (job.gazetteer["PERSON"] ?? []).sorted() {
@@ -204,32 +186,63 @@ public enum XMLFile: FileFormat {
                 candidate = candidate.replacingOccurrences(of: camel, with: fake.joined(), options: .caseInsensitive)
                     .replacingOccurrences(of: snake, with: fake.joined(separator: "_").lowercased(), options: .caseInsensitive)
             }
+            rewritten[own] = candidate
             return candidate
         }
-        for (index, node) in namedNodes.enumerated() where node.kind == .namespace {
-            guard let name = node.name else { continue }
-            let replacement = renamedNames[name] ?? safeName(renamed(name, value: values[nameIDs[index]]), original: name)
-            renamedNames[name] = replacement
-            if replacement != name { prefixes[name] = replacement; node.name = replacement; markedValues.append((replacement, "PERSON")) }
-        }
-        for (index, node) in namedNodes.enumerated() where node.kind != .namespace {
-            guard let name = node.name else { continue }
-            let pieces = name.split(separator: ":", maxSplits: 1).map(String.init)
-            let candidate: String
-            if let existing = renamedNames[name] {
-                candidate = existing
-            } else if pieces.count == 2 {
-                let prefix = prefixes[pieces[0]] ?? pieces[0]
-                let raw = renamed(name, value: values[nameIDs[index]])
-                let local = raw.split(separator: ":").last.map(String.init) ?? raw
-                candidate = safeName(local, original: name, prefix: prefix)
-            } else {
-                candidate = safeName(renamed(name, value: values[nameIDs[index]]), original: name)
+        let order = namedNodes.indices.filter { namedNodes[$0].kind == .namespace } + namedNodes.indices.filter { namedNodes[$0].kind != .namespace }
+        for index in order { values[nameIDs[index]] = JSONFile.rewritingOwnText(values[nameIDs[index]], with: rewrite) }
+        let originalNames = namedNodes.map(\.name)
+        let takenNames = Set(originalNames.compactMap { $0 })
+        /// Each node named from its value as `values` write it: a valid XML name
+        /// no other node holds, or its own name where the value is as written.
+        func name(_ values: [DocumentValue]) -> [(String, String, Bool)] {
+            var marked: [(String, String, Bool)] = []
+            var usedNames = takenNames
+            var renamedNames: [String: String] = [:]
+            var prefixes: [String: String] = [:]
+            func safeName(_ local: String, original: String, prefix: String? = nil) -> String {
+                let candidate = prefix.map { $0 + ":" + local } ?? local
+                guard candidate != original else { return original }
+                var value = String(local.filter { $0.isASCII && ($0.isLetter || $0.isNumber || "-_.".contains($0)) })
+                if value.first.map({ !$0.isLetter && $0 != "_" }) ?? true { value = "n" + value }
+                let base = value
+                var qualified = prefix.map { $0 + ":" + value } ?? value
+                var counter = 2
+                while usedNames.contains(qualified) && qualified != original {
+                    value = base + String(counter)
+                    qualified = prefix.map { $0 + ":" + value } ?? value
+                    counter += 1
+                }
+                usedNames.insert(qualified)
+                return qualified
             }
-            renamedNames[name] = candidate
-            if candidate != name { node.name = candidate; markedValues.append((candidate, "PERSON")) }
+            for index in order {
+                let node = namedNodes[index], value = values[nameIDs[index]]
+                guard let name = originalNames[index] else { continue }
+                // One name written the same way is one name, wherever it stands.
+                let seen = name + "\u{0}" + value.text
+                let replacement: String
+                if let known = renamedNames[seen] {
+                    replacement = known
+                } else if node.kind == .namespace {
+                    replacement = safeName(value.text, original: name)
+                } else if let colon = name.firstIndex(of: ":") {
+                    let prefix = String(name[..<colon])
+                    let local = value.text.split(separator: ":").last.map(String.init) ?? value.text
+                    replacement = safeName(local, original: name, prefix: prefixes[prefix] ?? prefix)
+                } else {
+                    replacement = safeName(value.text, original: name)
+                }
+                renamedNames[seen] = replacement
+                if replacement != name {
+                    if node.kind == .namespace { prefixes[name] = replacement }
+                    let mark = value.marks.first
+                    marked.append((replacement, mark?.entity ?? "PERSON", mark?.byHand ?? false))
+                }
+                if node.name != replacement { node.name = replacement }
+            }
+            return marked
         }
-        let nameMarks = markedValues
         func render(_ values: [DocumentValue], counts: [String: Int]) throws -> ScrubResult {
             var markedValues: [(String, String, Bool)] = []
             for (index, group) in nodes.enumerated() {
@@ -244,7 +257,7 @@ public enum XMLFile: FileFormat {
                 }
                 for mark in value.marks { markedValues.append((TextRanges.substring(value.text, mark.range).replacingOccurrences(of: Visible.joint, with: ""), mark.entity, mark.byHand)) }
             }
-            markedValues += nameMarks.map { ($0.0, $0.1, false) }
+            markedValues += name(values)
             let unresolved = values.flatMap(\.unresolved)
             var output = counts.isEmpty ? text : XMLSerialization.render(document)
             output = output.replacingOccurrences(of: #"^<\?xml(?=\s)[\s\S]*?\?>\s*"#, with: "", options: .regularExpression)
