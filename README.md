@@ -154,6 +154,8 @@ Results say *Review before sharing*, never *clean*: detection is statistical, an
 - **Clipboard cleanup.** Start over or quit, and Scrub takes back what it copied if it's still on the clipboard.
 - **Formulas defused.** CSV cells that a spreadsheet would run as a formula (starting with `=`, `@`, `+` or `-`, other than plain numbers) get a leading `'`, so they open as text.
 
+For a security review, [`SECURITY.md`](SECURITY.md) lists what ships, what it can reach, and where each model file comes from.
+
 ## Limits
 
 - Files up to 50 MB of UTF-8 text (XML may also be UTF-16).
@@ -256,6 +258,6 @@ Real text is measured separately, and gates releases. `scripts/eval-gate.sh` run
 | `Sources/ScrubCore/Resources` | The model weights and name lists, each checked by SHA-256 before use |
 | `Sources/Scrub` | The SwiftUI app |
 | `Sources/NetworkProbe` | The probe the offline proof runs |
-| `Tools` | Training and export scripts for the models, the script that fits the person scorer, and the script that builds the name lists |
+| `Tools` | Training and export scripts for the models, the script that fits the person scorer, and the script that builds the name lists. Used only to retrain, never at build or run time ([`Tools/README.md`](Tools/README.md)) |
 | `Support` | Info.plist, entitlements and icon |
 | `docs` | README screenshots and sample files |
