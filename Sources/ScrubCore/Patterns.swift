@@ -83,7 +83,7 @@ enum Patterns {
             }
             for match in matches(regex, in: ns, units: units, isCancelled: isCancelled) { take(match) }
         }
-        return spans
+        return spans + Recognizers.find(text, ns: ns, units: units, contextWords: contextWords, isCancelled: isCancelled)
     }
     /// Every match a full scan finds, in order; a pattern with known start
     /// positions is tried only there.

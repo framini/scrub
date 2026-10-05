@@ -1042,7 +1042,7 @@ final class StandIns {
     func number(_ original: String) -> String {
         let key = "ID_NUMBER\u{0}" + original
         if let found = assigned[key] { return found }
-        var fake = original
+        var fake = Recognizers.standIn(for: original, using: &rng) ?? original
         var attempts = 0
         while fake == original || attempts < 16 && originals.contains(fake) { fake = digits(original.count); attempts += 1 }
         assigned[key] = fake
@@ -1259,6 +1259,8 @@ final class StandIns {
             return kept + (0..<24).map { _ in String(pick(alphabet) ?? "a") }.joined()
         case "RECORD_ID": return recordID(like: original)
         case "ID_NUMBER", "POSTAL_CODE":
+            // A national identifier takes a fresh one that passes its check, as a form validating it would ask.
+            if entity == "ID_NUMBER", let made = Recognizers.standIn(for: original, using: &rng) { return made }
             let lead = original.firstIndex(where: \.isNumber)
             return String(original.indices.map { index in
                 let char = original[index]

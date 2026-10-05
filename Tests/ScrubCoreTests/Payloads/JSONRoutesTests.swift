@@ -62,7 +62,7 @@ private func value(_ root: JSONValue, _ path: String...) -> String? {
 }
 
 /// `body` through every route: each output parses, and holds none of `gone`, raw or decoded.
-private func check(_ body: String, gone: [String], seed: UInt64 = 7, _ more: (Route, JSONValue, String) -> Void = { _, _, _ in }) throws {
+func check(_ body: String, gone: [String], seed: UInt64 = 7, _ more: (Route, JSONValue, String) -> Void = { _, _, _ in }) throws {
     for route in Route.allCases {
         let output = try route.scrub(body, seed: seed)
         guard let root = parsed(output) else { Issue.record("\(route): no longer parses: \(output)"); continue }
