@@ -15,16 +15,21 @@ public enum TextFile: FileFormat {
         let text = try decode(data)
         try Scrubber.checkCancellation()
         progress(.finding, 0, 1)
-        let result = try DocumentPipeline.run([DocumentLeaf(text)], job: job, forceFullDetection: forceFullDetection)[0]
-        let (output, finalMarks, unresolved) = (result.text, result.marks, result.unresolved)
+        let values = try DocumentPipeline.run([DocumentLeaf(text)], job: job, forceFullDetection: forceFullDetection, progress: progress)
         try Scrubber.checkCancellation()
         progress(.finding, 1, 1)
         progress(.checking, 0, 1)
         try Scrubber.checkCancellation()
         progress(.checking, 1, 1)
-        let length = (output as NSString).length
-        let previewLength = min(200_000, length)
-        let previewText = TextRanges.substring(output, 0..<previewLength)
-        return ScrubResult(format: "text", output: Data(output.utf8), preview: .text(previewText, marks: finalMarks.filter { $0.range.upperBound <= previewLength }, truncated: length > previewLength), counts: job.counts, unresolved: unresolved)
+        func render(_ values: [DocumentValue], counts: [String: Int]) -> ScrubResult {
+            let (output, finalMarks, unresolved) = (values[0].text, values[0].marks, values[0].unresolved)
+            let length = (output as NSString).length
+            let previewLength = min(200_000, length)
+            let previewText = TextRanges.substring(output, 0..<previewLength)
+            return ScrubResult(format: "text", output: Data(output.utf8), preview: .text(previewText, marks: finalMarks.filter { $0.range.upperBound <= previewLength }, truncated: length > previewLength), counts: counts, unresolved: unresolved)
+        }
+        var result = render(values, counts: job.counts)
+        result.review = Review(values: values, counts: job.counts, people: job.personLinks(), render: render)
+        return result
     }
 }

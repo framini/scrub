@@ -1,0 +1,82 @@
+# Handwritten development cases for addresses with no number in them, and look-alikes that name streets or buildings.
+# Invented people, streets and numbers only. Cases are separated by "===="; addresses are marked ⟦…⟧.
+Please send the keys to ⟦Flat B, The Old Rectory, Little Hadham⟧ by Friday.
+====
+Unsere neue Adresse: ⟦Hauptstraße, Berlin-Mitte⟧
+====
+Mrs Petra Ashdown
+⟦Honeysuckle Cottage
+Mill Lane
+Charlbury
+Oxfordshire⟧
+====
+Kind regards,
+Rufus Penhale
+⟦The Granary, Manor Farm, Long Compton, Warwickshire⟧
+====
+Best,
+Ines Kowalczyk
+⟦Kestrel House, Wharf Road, Kendal, Cumbria⟧
+====
+Deliver to:
+Aoife Ní Bhriain
+⟦Ballyconneely Road
+Clifden
+Co. Galway⟧
+====
+The tenant now lives at ⟦Bramble End, Westfield Road, Little Wittenham⟧.
+====
+Mon adresse : ⟦rue des Lilas, Nantes⟧ (la maison au portail vert).
+====
+Ci vediamo in ⟦Via Garibaldi, Torino⟧, davanti al bar.
+====
+Vivo en ⟦Calle Mayor, Alcalá de Henares⟧ desde enero.
+====
+A loja fica na ⟦Rua Augusta, Lisboa⟧.
+====
+Vi bor på ⟦Drottninggatan, Stockholm⟧ nu.
+====
+Ship to
+Mattias Lindqvist
+⟦Ahornweg
+Göttingen
+Germany⟧
+====
+Return address: ⟦Rose Cottage, Church Lane, Lower Slaughter, Gloucestershire⟧
+====
+{"customer": "Orla Fenwick", "address": "⟦Flat C, Weavers Court, Halifax⟧"}
+====
+name,address
+Dagny Holm,"⟦Strandvejen, Hellerup⟧"
+====
+<address>⟦Lerchenweg, Kiel⟧</address>
+====
+We met on Wall Street for lunch and talked about bonds.
+====
+Abbey Road Studios released the remaster on vinyl.
+====
+The Supreme Court in Washington heard the appeal.
+====
+The Coronation Street fan club meets on Thursdays.
+====
+Main Street Capital LLC raised its dividend.
+====
+Strasse & Partner GmbH announced a new office.
+====
+Take the main road past the old mill and keep going.
+====
+rue de la paix is a monopoly square and the priciest one.
+====
+Downing Street said the report would be published soon.
+====
+Hauptstraße is closed because of the street festival.
+====
+The Old Vicarage Hotel has a lovely garden.
+====
+Cheers from the Kings Road team!
+====
+Read the git-config manual page: core.hooksPath sets the path.
+====
+Grove Street Partners won the tender.
+====
+She works for Elm Court Dental as a hygienist.

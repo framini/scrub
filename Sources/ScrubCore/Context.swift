@@ -50,7 +50,7 @@ public enum KeyHints {
         ("phone phonenumber mobile cell telephone tel fax mobilenumber mobilephone cellphone cellnumber phoneno telno telephonenumber contactnumber msisdn", "PHONE_NUMBER"),
         ("ssn socialsecuritynumber socialsecurity ssnnumber", "US_SSN"),
         ("address streetaddress street addressline1 addressline2 addressline line1 line2 addr address1 street1 addr1 streetline1 street2 address2 addr2 streetline2 addressline3 line3 aptsuite apartmentnumber aptnumber suitenumber unitnumber unit apt apartment formattedaddress fulladdress physicaladdress mailingaddress homeaddress residentialaddress billingaddress shippingaddress", "ADDRESS"),
-        ("dob dateofbirth birthdate birthday birthyear yearofbirth yob", "DATE_OF_BIRTH"),
+        ("dob dateofbirth birthdate birthday birthyear yearofbirth yob birthmonth monthofbirth dobmonth dobday dayofbirth dobyear", "DATE_OF_BIRTH"),
         ("age ageyears currentage", "AGE"),
         ("initials nameinitials monogram", "INITIALS"),
         ("latitude lat geolat", "LATITUDE"),
@@ -84,6 +84,8 @@ public enum KeyHints {
         let parts = words(key)
         guard let last = parts.last else { return nil }
         if secretLast.contains(last) || parts.count >= 2 && secretPairs.contains(parts[parts.count - 2] + last) { return "SECRET" }
+        // A field written for display holds the field: "dob_display", "phone_formatted".
+        if parts.count >= 2, displayWords.contains(last), let field = hint(parts.dropLast().joined(separator: "_")) { return field }
         return qualified(parts)
     }
     /// A field named with a qualifier in front ("billing_email", "home_phone",
@@ -101,7 +103,8 @@ public enum KeyHints {
             guard let field, let entity = hints[field] else { continue }
             let qualifier = parts[start - 1]
             switch field {
-            case "name": if people.contains(qualifier) || roles.contains(qualifier) { return entity }
+            // "primary_name" and "secondary_name": the first and the second person a record names.
+            case "name": if people.contains(qualifier) || roles.contains(qualifier) || ["primary", "secondary"].contains(qualifier) { return entity }
             case "address", "addr": if addressQualifiers.contains(qualifier) { return entity }
             // "primary_mobile", "customer_cell": a phone, as "is_mobile" and "mobile_app" are not.
             case "mobile", "cell", "tel": if people.contains(qualifier) || roles.contains(qualifier) || addressQualifiers.contains(qualifier) || phoneQualifiers.contains(qualifier) { return entity }
@@ -111,6 +114,7 @@ public enum KeyHints {
         }
         return nil
     }
+    private static let displayWords: Set<String> = ["display", "displayed", "formatted", "pretty", "readable", "text", "string", "str", "iso"]
     private static let phoneQualifiers: Set<String> = ["secondary", "alternate", "alt", "other", "personal", "private", "business", "emergency", "direct", "day", "evening", "night"]
     private static let countWords: Set<String> = ["num", "number", "count", "counts", "total", "has", "is", "max", "min", "avg", "sum", "qty", "len", "length", "size", "match", "matches", "score", "verified", "valid", "exists", "present", "changed", "updated", "type", "status", "source", "flag", "enabled", "required", "last4", "hash", "hashed", "format", "domain", "risk"]
     static let addressQualifiers: Set<String> = ["home", "mailing", "billing", "shipping", "residential", "street", "physical", "postal", "current", "previous", "permanent", "primary", "customer", "user", "applicant", "contact", "work", "residence", "legal", "delivery", "registered"]
@@ -142,12 +146,26 @@ public enum KeyHints {
         case "PHONE_NUMBER" where ["number", "digits", "e164", "national", "nationalnumber", "international", "internationalnumber", "formatted", "raw", "full"].contains(compact): return parent
         case "EMAIL_ADDRESS" where ["address", "addr"].contains(compact): return parent
         case "ADDRESS" where ["line", "lines", "text", "formatted", "full"].contains(compact): return parent
-        case "DATE_OF_BIRTH" where ["year", "month", "day", "yyyy", "mm", "dd"].contains(compact): return parent
+        // Read as the part it is, so its stand-in is that part of the stand-in date: "dob": {"month": 3} is a "birth_month".
+        case "DATE_OF_BIRTH" where ["year", "month", "day", "yyyy", "mm", "dd"].contains(compact):
+            return ["year": "birth_year", "yyyy": "birth_year", "month": "birth_month", "mm": "birth_month", "day": "day_of_birth", "dd": "day_of_birth"][compact]
         default: break
         }
         return own == nil && valueKeys.contains(compact) ? parent : key
     }
     private static let valueKeys: Set<String> = ["value", "data"]
+    /// One part of a date written in a field of its own.
+    public enum DatePart: Sendable { case year, month, day }
+    /// The part of a birth date a key names on its own: "birth_month",
+    /// "monthOfBirth", "dob_day", "birth_year". A "birthday" is a whole date.
+    static func datePart(_ key: String?) -> DatePart? {
+        guard hint(key) == "DATE_OF_BIRTH" else { return nil }
+        let parts = words(key), compact = parts.joined()
+        if compact.contains("month") || parts.last == "mm" { return .month }
+        if compact.contains("year") || compact == "yob" || parts.last == "yyyy" { return .year }
+        if parts.count >= 2 && parts.contains(where: { $0 == "day" || $0 == "dd" }) || ["dobday", "dayofbirth"].contains(compact) { return .day }
+        return nil
+    }
     /// An object that only wraps a field's value with notes about it
     /// (`{"value": …, "verified": true}`), and so is part of the record around it.
     static func isWrapper(_ keys: [String]) -> Bool {
@@ -163,10 +181,17 @@ public enum KeyHints {
     /// The field a record's value-holding key stands for, from its naming sibling.
     static func namedField(_ key: String, siblings: [(String, String)]) -> String? {
         guard fieldValueKeys.contains(words(key).joined()), hint(key) == nil else { return nil }
-        for (name, value) in siblings where name != key && fieldNameKeys.contains(words(name).joined()) && value.utf16.count <= 80 {
+        for (name, value) in siblings where name != key && fieldNameKeys.contains(words(name).joined()) && value.utf16.count <= 80 && !isToken(value) {
             if let field = header(value) { return field }
         }
         return nil
+    }
+    private static let tokenPart = TextPattern(#"\d[A-Za-z]"#)
+    /// A record's own ID ("evt_xNptjX29KGaePinQ"), not a field's name: a digit
+    /// runs into letters, as no field name writes it ("address1" and "us-ssn"
+    /// do not). Read as words, an ID can spell anything ("Pin").
+    static func isToken(_ value: String) -> Bool {
+        value.split(whereSeparator: { "_-.:/ ".contains($0) }).contains { !TextRanges.matches(tokenPart, in: String($0)).isEmpty }
     }
     /// The key a flattened or spoken field name stands for, as CSV headers and
     /// form fields write them: "billing_details.address.city", "Applicant Name
@@ -231,6 +256,8 @@ public enum KeyHints {
             let first = trimmed.split(whereSeparator: { $0 == " " || $0 == "." }).first.map { $0.lowercased() } ?? ""
             return trimmed.contains(where: \.isNumber) && (["apt", "apartment", "suite", "ste", "unit", "floor", "fl", "room", "rm", "bldg", "building", "po", "p", "box"].contains(first) || trimmed.hasPrefix("#") || !trimmed.contains(" ") && trimmed.count <= 6)
         }
+        // A birth month may be written as its name: "birth_month": "March".
+        if entity == "DATE_OF_BIRTH", StandIns.month(trimmed) != nil, datePart(key) == .month { return true }
         if needsDigit.contains(entity) {
             // A score ("0.74") rates the field; a phone number has at least seven digits.
             let unsigned = trimmed.first == "-" || trimmed.first == "+" ? trimmed.dropFirst() : Substring(trimmed)
@@ -267,6 +294,21 @@ public enum KeyHints {
             && folded.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || $0 == "_" }
         return !status || !folded.contains("_") && !statusWords.contains(folded)
     }
+    /// A value an address field holds that `fits` turns down for having no
+    /// number, but that reads as a place: words of letters, more than one,
+    /// and no status, placeholder or note ("same as billing", "n/a"). Such a
+    /// value is replaced as an address when its record's other address parts
+    /// are (see `DocumentPipeline`): "the old rectory, church lane" beside a
+    /// city and a postcode is the rest of that address.
+    static func numberlessLine(_ key: String?, _ value: String) -> Bool {
+        guard hint(key) == "ADDRESS" else { return false }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines), lower = trimmed.lowercased()
+        let words = lower.split { !$0.isLetter && $0 != "'" && $0 != "’" }
+        guard !trimmed.contains(where: \.isNumber), words.count >= 2, trimmed.filter(\.isLetter).count >= 5, !typeWords.contains(lower), !statusWords.contains(lower),
+              !placeholderOpenings.contains(where: { lower.hasPrefix($0) }) else { return false }
+        return !lower.contains("_")
+    }
+    private static let placeholderOpenings = ["same as", "see ", "as above", "as per", "not ", "no ", "none", "unknown", "n/a", "tbd", "tbc", "redacted", "withheld", "remote", "various", "pending", "to be ", "on file", "same"]
     private static let unitKeys: Set<String> = ["unit", "apt", "apartment", "street2", "address2", "addr2", "line2", "addressline2", "streetline2", "aptsuite", "apartmentnumber", "aptnumber", "suitenumber", "unitnumber", "addressline3", "line3"]
     private static func compactKey(_ key: String?) -> String { (key ?? "").lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) } }
     /// A coordinate written to at least two decimals ("47.2529"); a bare 47 is a count.
@@ -286,28 +328,105 @@ public enum KeyHints {
     /// Whether a bare "name" holds a person: its record also holds personal details,
     /// its parent is about people ("customers", "manager"), or the value uses a known
     /// first or last name. Otherwise, as for "Everyday Checking", detection decides.
-    static func bareNameIsPerson(_ value: String, siblings: [String], parent: String?) -> Bool {
+    /// `inObject`: the siblings are one object's, not every key in loose text.
+    static func bareNameIsPerson(_ value: String, siblings: [String], parent: String?, inObject: Bool = true) -> Bool {
+        guard let known = nameEvidence(value) else { return false }
+        if isNotPeople(parent) { return ownRecord(siblings, value: value) }
+        return isPersonsRecord(siblings: siblings, parent: parent, inObject: inObject) || known
+    }
+    /// `bareNameIsPerson` under no parent, with `isPersonsRecord` of its
+    /// siblings read once for every value beside them.
+    static func bareNameIsPerson(_ value: String, personsRecord: Bool) -> Bool {
+        guard let known = nameEvidence(value) else { return false }
+        return personsRecord || known
+    }
+    /// Whether a bare "name"'s value uses a known first or last name, or nil
+    /// where it cannot be a person's whatever its record holds.
+    private static func nameEvidence(_ value: String) -> Bool? {
         let parts = value.split(whereSeparator: { !$0.isLetter })
-        let known = parts.contains { Names.firstFolded.contains($0.lowercased()) || Names.lastFolded.contains($0.lowercased()) }
+        // A surname's particle between capitalised words ("Odalys van der Berg") writes a person's name.
+        let particled = parts.count >= 3 && parts.first?.first?.isUppercase == true && parts.last?.first?.isUppercase == true
+            && parts.dropFirst().dropLast().contains { surnameParticles.contains(String($0)) } && Detector.writtenName(value) != nil
+        let known = particled || parts.contains { Names.firstFolded.contains($0.lowercased()) || Names.lastFolded.contains($0.lowercased()) }
         // One unknown word ("NORTHWIND") names a business or product more often than a person.
-        if parts.count < 2 && !known { return false }
-        if let parent, notPeople.contains(words(parent).last.map { singular($0) ?? $0 } ?? "") { return false }
-        if siblings.contains(where: { !isBareName($0) && hint($0).map(personalSiblings.contains) == true }) { return true }
-        if let parent {
-            let compact = parent.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
-            let last = words(parent).last ?? ""
-            if isRole(parent) || [compact, last, singular(compact) ?? "", singular(last) ?? ""].contains(where: people.contains) { return true }
-        }
+        if parts.count < 2 && !known { return nil }
         return known
+    }
+    /// Whether a key names a business, a product or an app ("application", "accounts").
+    static func isNotPeople(_ key: String?) -> Bool {
+        guard let key else { return false }
+        return notPeople.contains(words(key).last.map { singular($0) ?? $0 } ?? "")
+    }
+    /// Fields only a person has, written as the record's own ("dob", not "contact_dob").
+    private static let ownFields: Set<String> = ["FIRST_NAME", "LAST_NAME", "DATE_OF_BIRTH", "US_SSN"]
+    private static let contactFields: Set<String> = ["EMAIL_ADDRESS", "PHONE_NUMBER"]
+    /// Whether a record under a parent that names no one ("application",
+    /// "account") is still a person's own: a field only a person has sits
+    /// beside its "name" (a birth date, an SSN, a first name), or an email or
+    /// a phone does and `value` is written as a person's name with a known
+    /// first name. "Ledgerly" beside a "version", or "Ledgerly Cloud" beside a
+    /// support email, is no one.
+    static func ownRecord(_ siblings: [String], value: String?) -> Bool {
+        ownRecord(RecordFields(siblings), value: value)
+    }
+    /// What `ownRecord` reads of a record's fields, read once for any number of values.
+    struct RecordFields {
+        let own: Bool, contact: Bool
+        init(_ siblings: [String]) {
+            let fields = Set(siblings.filter { !isBareName($0) && personPrefix($0) == nil }.compactMap(hint))
+            own = !fields.isDisjoint(with: ownFields)
+            contact = !fields.isDisjoint(with: contactFields)
+        }
+    }
+    static func ownRecord(_ fields: RecordFields, value: String?) -> Bool {
+        if fields.own { return true }
+        guard let value, fields.contact else { return false }
+        let parts = value.split(whereSeparator: { !$0.isLetter }).map(String.init)
+        return parts.count >= 2 && NameLists.isFirst(parts[0]) && !NameLists.isOrdinary(parts[0]) && Detector.writtenName(value) != nil
+    }
+    /// Particles that write a surname and seldom a business's or a product's name.
+    private static let surnameParticles: Set<String> = ["van", "von", "der", "den", "ter", "ten", "bin", "ibn"]
+    /// Whether a record says a bare "name" in it is a person's, whatever the
+    /// name: it holds personal details or a person's own ID, or its parent is
+    /// about people ("customers", "manager") and not about a business.
+    static func isPersonsRecord(siblings: [String], parent: String?, inObject: Bool = true) -> Bool {
+        if isNotPeople(parent) { return ownRecord(siblings, value: nil) }
+        if siblings.contains(where: { !isBareName($0) && hint($0).map(personalSiblings.contains) == true }) { return true }
+        // A person's own ID beside it ("customer_id", "patient_id") says the record is theirs.
+        if inObject, siblings.contains(where: { hint($0) == nil && RecordIDs.isPersonKey($0) }) { return true }
+        guard let parent else { return false }
+        let compact = parent.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+        let last = words(parent).last ?? ""
+        return isRole(parent) || [compact, last, singular(compact) ?? "", singular(last) ?? ""].contains(where: people.contains)
     }
     // Keys naming a person's role ("assigned_to", "manager") often hold an ID
     // or an email, so they only mark a value that is written like a name.
-    private static let roles: Set<String> = ["manager", "approver", "reporter", "author", "assignee", "assignedto", "owner", "requester", "requestedby", "reviewer", "reviewedby", "sender", "recipient", "createdby", "updatedby", "modifiedby", "submittedby", "approvedby", "contact", "contactperson", "agent", "rep", "salesrep", "accountmanager", "supervisor", "signedby", "attendee", "guest", "beneficiary", "emergencycontact", "nextofkin", "spouse", "parent", "guardian", "customer", "client", "patient", "applicant", "employee", "member", "guest", "tenant", "borrower", "insured", "policyholder", "passenger", "traveler", "traveller", "attn", "attention", "shipto", "billto", "soldto", "deliverto", "addressee", "cardholder", "accountholder", "signer", "witness", "caller", "visitor", "student", "candidate"]
+    private static let roles: Set<String> = ["manager", "approver", "reporter", "author", "assignee", "assignedto", "owner", "requester", "requestedby", "reviewer", "reviewedby", "sender", "recipient", "createdby", "updatedby", "modifiedby", "submittedby", "approvedby", "contact", "contactperson", "agent", "rep", "salesrep", "accountmanager", "supervisor", "signedby", "attendee", "guest", "beneficiary", "emergencycontact", "nextofkin", "spouse", "parent", "guardian", "customer", "client", "patient", "applicant", "employee", "member", "guest", "tenant", "borrower", "insured", "policyholder", "passenger", "traveler", "traveller", "attn", "attention", "shipto", "billto", "soldto", "deliverto", "addressee", "cardholder", "accountholder", "signer", "witness", "caller", "visitor", "student", "candidate", "cosigner", "cosignatory", "guarantor", "coapplicant", "coborrower", "cotenant"]
     static func isRole(_ key: String?) -> Bool {
         guard let key else { return false }
         let parts = words(key)
         guard let last = parts.last else { return false }
         return roles.contains(parts.joined()) || roles.contains(last) || parts.count >= 2 && roles.contains(parts[parts.count - 2] + last)
+    }
+    /// Qualifiers that say which of several people a field is about, beside
+    /// the roles and people above: "primary_", "secondary_", and "billing_"
+    /// or "shipping_" when they hold a name.
+    private static let personQualifiers: Set<String> = ["primary", "secondary", "billing", "shipping"]
+    /// The person a flat key's qualifier names ("applicant" of "applicant_email",
+    /// "applicantDob" or "co_signer_first_name"), when the rest of it is a field
+    /// of its own; nil for a key with none ("first_name", "home_phone", "created_at").
+    static func personPrefix(_ key: String?) -> String? {
+        let parts = words(key)
+        guard parts.count >= 2, parts.count <= 6 else { return nil }
+        for length in [2, 1] where parts.count > length {
+            let prefix = parts[..<length].joined()
+            guard people.contains(prefix) || roles.contains(prefix) || personQualifiers.contains(prefix) else { continue }
+            let rest = parts[length...]
+            // "user_name" is a username, and "contact_person" or "account_holder" one role.
+            guard hint(rest.joined(separator: "_")) != nil, !roles.contains(rest.joined()), hint(key) != nil else { continue }
+            return prefix
+        }
+        return nil
     }
     /// The words of a key: "billing_details.postalCode" → billing, details, postal, code.
     public static func words(_ key: String?) -> [String] {

@@ -12,9 +12,11 @@ public enum JSONFile: FileFormat {
         var valueIDs: [String: Int] = [:]
         var keyIDs: [String: Int] = [:]
         var nextRecord = 0
+        var names: [String] = []
         func collect(_ value: JSONValue, key: String?, path: String, records: [Int], keys: [String]) {
             switch value {
             case .object(let pairs):
+                names += pairs.map(\.0)
                 nextRecord += 1
                 let ancestry = KeyHints.isWrapper(pairs.map(\.0)) && !records.isEmpty ? records : records + [nextRecord]
                 let named = pairs.compactMap { pair in pair.1.stringValue.map { (pair.0, $0) } }
@@ -45,58 +47,135 @@ public enum JSONFile: FileFormat {
             }
         }
         collect(root, key: nil, path: "", records: [], keys: [])
+        // A key's own long digits ("order_48213907") are drawn first, as any
+        // value's: the same number written in a value ("Archived under 48213907")
+        // is then found as theirs and replaced alike.
+        let drawn = drawDigits(names, job: job)
         progress(.finding, 0, leaves.count)
-        let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection)
+        var values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
+        let records = leaves.map(\.lastRecord)
         progress(.finding, leaves.count, leaves.count)
-        var valueMarks: [String: [Mark]] = [:]
-        var keyMarks: [String: [Mark]] = [:]
-        let unresolved = values.flatMap(\.unresolved)
-        func process(_ value: JSONValue, key: String?, path: String) throws -> JSONValue {
+        // Each key then writes them, with marks holding what they replaced, so
+        // the review reports them and every edit writes them as reported.
+        func numberKeys(_ value: JSONValue, path: String) {
             switch value {
             case .object(let pairs):
-                var output: [(String, JSONValue)] = []
                 for (index, pair) in pairs.enumerated() {
                     let childPath = path + "/" + String(index)
-                    let child = try process(pair.1, key: pair.0, path: childPath)
-                    let scrubbed = keyIDs[childPath].map { values[$0] }
-                    let (numbered, digitMarks) = replaceDigits(scrubbed?.text ?? pair.0, job: job)
-                    keyMarks[childPath] = (scrubbed?.marks ?? []) + digitMarks
-                    var unique = numbered
-                    while output.contains(where: { $0.0 == unique }) { unique += "_" }
-                    output.append((unique, child))
+                    numberKeys(pair.1, path: childPath)
+                    if let id = keyIDs[childPath] { values[id] = rewritingOwnText(values[id]) { replaceDigits($0, drawn: drawn) } }
                 }
-                return .object(output)
             case .array(let children):
-                return .array(try children.enumerated().map { try process($0.element, key: key, path: path + "/" + String($0.offset)) })
-            case .string:
-                guard let id = valueIDs[path] else { return value }
-                valueMarks[path] = values[id].marks
-                return .string(values[id].text)
-            case .number:
-                guard let id = valueIDs[path] else { return value }
-                valueMarks[path] = values[id].marks
-                return .number(values[id].text)
-            default: return value
+                for (index, child) in children.enumerated() { numberKeys(child, path: path + "/" + String(index)) }
+            default: break
             }
         }
-        let scrubbed = try process(root, key: nil, path: "")
+        if !drawn.isEmpty { numberKeys(root, path: "") }
+        func render(_ values: [DocumentValue], counts: [String: Int]) throws -> ScrubResult {
+            var valueMarks: [String: [Mark]] = [:]
+            var keyMarks: [String: [Mark]] = [:]
+            let unresolved = values.flatMap(\.unresolved)
+            func process(_ value: JSONValue, key: String?, path: String) throws -> JSONValue {
+                switch value {
+                case .object(let pairs):
+                    var output: [(String, JSONValue)] = []
+                    for (index, pair) in pairs.enumerated() {
+                        let childPath = path + "/" + String(index)
+                        let child = try process(pair.1, key: pair.0, path: childPath)
+                        let scrubbed = keyIDs[childPath].map { values[$0] }
+                        let written = scrubbed?.text ?? pair.0
+                        keyMarks[childPath] = scrubbed?.marks ?? []
+                        var unique = written
+                        while output.contains(where: { $0.0 == unique }) { unique += "_" }
+                        output.append((unique, child))
+                    }
+                    return .object(output)
+                case .array(let children):
+                    return .array(try children.enumerated().map { try process($0.element, key: key, path: path + "/" + String($0.offset)) })
+                case .string:
+                    guard let id = valueIDs[path] else { return value }
+                    valueMarks[path] = values[id].marks
+                    return .string(values[id].text)
+                case .number:
+                    guard let id = valueIDs[path] else { return value }
+                    valueMarks[path] = values[id].marks
+                    return .number(values[id].text)
+                default: return value
+                }
+            }
+            let scrubbed = try process(root, key: nil, path: "")
+            let (rendered, marks) = OrderedJSON.render(scrubbed, valueMarks: valueMarks, keyMarks: keyMarks)
+            let output = marks.isEmpty ? text : rendered
+            let length = (output as NSString).length
+            let limit = min(length, 200_000)
+            // With nothing replaced, the input goes back byte for byte (BOM included) instead of re-indented.
+            return ScrubResult(format: "json", output: marks.isEmpty ? data : Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: counts, unresolved: unresolved)
+        }
         progress(.checking, 0, 1)
-        let (rendered, marks) = OrderedJSON.render(scrubbed, valueMarks: valueMarks, keyMarks: keyMarks)
-        let output = marks.isEmpty ? text : rendered
+        var result = try render(values, counts: job.counts)
+        result.review = Review(values: values, counts: job.counts, records: records, people: job.personLinks(), numeric: Set(leaves.indices.filter { leaves[$0].numericEntity != nil }), render: render)
         progress(.checking, 1, 1)
-        let length = (output as NSString).length
-        let limit = min(length, 200_000)
-        // With nothing replaced, the input goes back byte for byte (BOM included) instead of re-indented.
-        return ScrubResult(format: "json", output: marks.isEmpty ? data : Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: job.counts, unresolved: unresolved)
+        return result
     }
-    static func replaceDigits(_ text: String, job: Job) -> (String, [Mark]) {
+    /// `value` with each run of its own text, outside every stand-in and
+    /// suspect, written as `rewrite` writes it, right to left, the marks and
+    /// suspects moved to where they now stand, and the marks `rewrite` gives
+    /// each set where it is written. A key's or a tag's own digits and names
+    /// are replaced so, once, when the file is scrubbed: their marks make them
+    /// findings, which every later writing writes as edits and choices leave them.
+    static func rewritingOwnText(_ value: DocumentValue, with rewrite: (String) -> (String, [Mark])) -> DocumentValue {
+        let length = (value.text as NSString).length
+        var own: [Range<Int>] = []
+        var cursor = 0
+        for range in (value.marks + value.unresolved).map(\.range).sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            if range.lowerBound > cursor { own.append(cursor..<range.lowerBound) }
+            cursor = max(cursor, range.upperBound)
+        }
+        if cursor < length { own.append(cursor..<length) }
+        var edits: [(range: Range<Int>, value: String)] = [], added: [[Mark]] = []
+        for range in own.reversed() {
+            let text = TextRanges.substring(value.text, range), (written, marks) = rewrite(text)
+            if written != text {
+                edits.insert((range, written), at: 0)
+                added.insert(marks, at: 0)
+            }
+        }
+        guard !edits.isEmpty else { return value }
+        var made: [Mark] = [], shift = 0
+        for (edit, marks) in zip(edits, added) {
+            let start = edit.range.lowerBound + shift
+            made += marks.map { $0.moved(to: ($0.range.lowerBound + start)..<($0.range.upperBound + start)) }
+            shift += (edit.value as NSString).length - edit.range.count
+        }
+        let marks = (TextRanges.shift(value.marks, by: edits) + made).sorted { $0.range.lowerBound < $1.range.lowerBound }
+        return DocumentValue(text: TextRanges.apply(edits, to: value.text).0, marks: marks,
+                             unresolved: TextRanges.shift(value.unresolved, by: edits), proposals: value.proposals, held: TextRanges.shift(value.held, by: edits))
+    }
+    /// The long digits in `names` (keys, or element and attribute names), each
+    /// drawn its stand-in once, in the order they are written, before any value
+    /// is read: the pipeline then finds each where a value writes it too.
+    static func drawDigits(_ names: [String], job: Job) -> [String: String] {
+        var drawn: [String: String] = [:]
+        for name in names {
+            for match in TextRanges.matches(longDigits, in: name) {
+                let digits = TextRanges.substring(name, match.range.location..<NSMaxRange(match.range))
+                if drawn[digits] == nil { drawn[digits] = job.digits(digits) }
+            }
+        }
+        return drawn
+    }
+    /// `text` with each of its long digits written as drawn, each marked with what it replaced.
+    static func replaceDigits(_ text: String, drawn: [String: String]) -> (String, [Mark]) {
         var output = text
         var marks: [Mark] = []
         for match in TextRanges.matches(longDigits, in: text).reversed() {
             let range = match.range.location..<NSMaxRange(match.range)
-            let fake = job.digits(TextRanges.substring(text, range))
+            let digits = TextRanges.substring(text, range)
+            guard let fake = drawn[digits] else { continue }
             output = TextRanges.replace(output, range, with: fake)
-            marks.append(Mark(range: range.lowerBound..<(range.lowerBound + (fake as NSString).length), entity: "ID_NUMBER"))
+            let length = (fake as NSString).length - range.count
+            marks = marks.map { $0.moved(to: ($0.range.lowerBound + length)..<($0.range.upperBound + length)) }
+            marks.insert(Mark(range: range.lowerBound..<(range.lowerBound + (fake as NSString).length), entity: "ID_NUMBER", original: digits), at: 0)
         }
         return (output, marks)
     }
@@ -113,6 +192,8 @@ public enum JSONFile: FileFormat {
         return latitudeFirst ? ["latitude", "longitude"] : ["longitude", "latitude"]
     }
     static func numericEntity(key: String?, number: String) -> String? {
+        // A customer or patient number names them as an ID string would.
+        if KeyHints.hint(key) == nil, RecordIDs.identifying(key: key, value: number), number.allSatisfy({ $0.isASCII && $0.isNumber }) { return "RECORD_ID" }
         if let hint = KeyHints.hint(key), ["AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE"].contains(hint) { return KeyHints.fits(key, number) ? hint : nil }
         if let hint = KeyHints.hint(key), !numericEntities.contains(hint) { return nil }
         guard let value = Double(number), value.isFinite else { return KeyHints.hint(key) }

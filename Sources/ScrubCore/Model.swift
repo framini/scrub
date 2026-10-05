@@ -1,10 +1,23 @@
 import Foundation
 
-public enum Stage: String, Sendable { case starting, finding, checking }
+/// Where a scrub is: `reading` is the context model's pass over free text,
+/// reported window by window between the start and end of `finding`.
+public enum Stage: String, Sendable { case starting, finding, reading, checking }
 public struct Mark: Sendable, Equatable {
     public let range: Range<Int>
     public let entity: String
-    public init(range: Range<Int>, entity: String) { self.range = range; self.entity = entity }
+    /// What the stand-in replaced, and how sure Scrub was of it (see
+    /// `Finding.confidence`); nil on marks that only show where a stand-in is.
+    public let original: String?
+    public let confidence: Double?
+    /// Why this place is worth a person's look beyond how sure the detector was.
+    public let doubt: Doubt?
+    /// A value the person marked by hand (see `Marks`), so the preview can show it as theirs.
+    public let byHand: Bool
+    public init(range: Range<Int>, entity: String, original: String? = nil, confidence: Double? = nil, doubt: Doubt? = nil, byHand: Bool = false) {
+        self.range = range; self.entity = entity; self.original = original; self.confidence = confidence; self.doubt = doubt; self.byHand = byHand
+    }
+    func moved(to range: Range<Int>) -> Mark { Mark(range: range, entity: entity, original: original, confidence: confidence, doubt: doubt, byHand: byHand) }
 }
 public struct TableMark: Sendable, Equatable {
     public static let header = -1
@@ -12,8 +25,9 @@ public struct TableMark: Sendable, Equatable {
     public let column: Int
     public let range: Range<Int>
     public let entity: String
-    public init(row: Int, column: Int, range: Range<Int>, entity: String) {
-        self.row = row; self.column = column; self.range = range; self.entity = entity
+    public let byHand: Bool
+    public init(row: Int, column: Int, range: Range<Int>, entity: String, byHand: Bool = false) {
+        self.row = row; self.column = column; self.range = range; self.entity = entity; self.byHand = byHand
     }
 }
 public enum Preview: Sendable {
@@ -27,6 +41,17 @@ public struct ScrubResult: Sendable {
     public let counts: [String: Int]
     public let unresolved: [Mark]
     public let neutralized: Int
+    /// Which of Scrub's own detectors this scrub ran without, because their
+    /// files were missing or altered (see `Coverage`).
+    public internal(set) var coverage = Coverage.full
+    /// What a person may take back before saving (see `findings` and `skipping`).
+    var review: Review?
+    /// The choices this result was written with, when a review made them; nil for the scrub as made.
+    var made: Choices?
+    /// The values a person marked to replace, when there are any (see `Marks`).
+    var marked: Marks?
+    /// The kinds and replacements a person changed, when there are any (see `Edits`).
+    var edited: Edits?
     public init(format: String, output: Data, preview: Preview, counts: [String: Int], unresolved: [Mark], neutralized: Int = 0) {
         self.format = format; self.output = output; self.preview = preview; self.counts = counts; self.unresolved = unresolved; self.neutralized = neutralized
     }
@@ -37,7 +62,10 @@ public struct Span: Sendable, Equatable {
     public let range: Range<Int>
     public let entity: String
     public let score: Double
-    public init(range: Range<Int>, entity: String, score: Double) { self.range = range; self.entity = entity; self.score = score }
+    /// Where in a link the value sits, when it does: it is read decoded and
+    /// its stand-in written encoded the same way (see `URLs`).
+    public let url: URLPart?
+    public init(range: Range<Int>, entity: String, score: Double, url: URLPart? = nil) { self.range = range; self.entity = entity; self.score = score; self.url = url }
 }
 
 // Compiling a pattern costs far more than matching it, so patterns are
@@ -54,6 +82,9 @@ enum TextRanges {
         if range.lowerBound == 0 && range.upperBound == ns.length { return text }
         return ns.substring(with: NSRange(location: range.lowerBound, length: range.count))
     }
+    // Fetched once: each read of a system set builds it again, and this runs
+    // for every name found in a long text.
+    private static let digits = CharacterSet.decimalDigits, capitals = CharacterSet.uppercaseLetters, alphanumerics = CharacterSet.alphanumerics
     /// Whether the characters meeting at `index` belong to one word. A letter
     /// next to a digit, or a lowercase letter before a capital ("mariaGonzalez"),
     /// starts a new word.
@@ -73,9 +104,9 @@ enum TextRanges {
         func kind(_ scalar: Unicode.Scalar?) -> Character? {
             guard let scalar else { return nil }
             if underscore && scalar == "_" { return "_" }
-            if CharacterSet.decimalDigits.contains(scalar) { return "9" }
-            if CharacterSet.uppercaseLetters.contains(scalar) { return "A" }
-            return CharacterSet.alphanumerics.contains(scalar) ? "a" : nil
+            if digits.contains(scalar) { return "9" }
+            if capitals.contains(scalar) { return "A" }
+            return alphanumerics.contains(scalar) ? "a" : nil
         }
         switch (kind(scalar(endingAt: index)), kind(scalar(startingAt: index))) {
         case (nil, _), (_, nil), ("9", "a"), ("9", "A"), ("a", "9"), ("A", "9"), ("a", "A"): return false
@@ -85,9 +116,47 @@ enum TextRanges {
     static func replace(_ text: String, _ range: Range<Int>, with value: String) -> String {
         (text as NSString).replacingCharacters(in: NSRange(location: range.lowerBound, length: range.count), with: value)
     }
-    static func matches(_ pattern: TextPattern, in text: String) -> [NSTextCheckingResult] {
+    /// The matches a scan of the whole text finds, read only in windows around
+    /// `anchors`: every match must contain one, starting at most `before` units
+    /// ahead of it and ending at most `after` units past its start. Overlapping
+    /// windows are read as one, left to right, and look-arounds see the text around each.
+    static func matches(_ pattern: TextPattern, in text: String, around anchors: [Int], before: Int, after: Int, isCancelled: () -> Bool = { false }) -> [NSTextCheckingResult] {
+        guard let regex = pattern.regex, !anchors.isEmpty else { return [] }
+        let length = (text as NSString).length
+        var windows: [NSRange] = []
+        for anchor in anchors.sorted() {
+            let window = NSRange(location: max(0, anchor - before), length: min(length, anchor + after) - max(0, anchor - before))
+            if let last = windows.last, NSMaxRange(last) >= window.location { windows[windows.count - 1] = NSUnionRange(last, window) } else { windows.append(window) }
+        }
+        var found: [NSTextCheckingResult] = []
+        for window in windows {
+            if isCancelled() { return found }
+            for match in regex.matches(in: text, options: [.withTransparentBounds], range: window) where found.last.map({ NSMaxRange($0.range) <= match.range.location }) ?? true {
+                found.append(match)
+            }
+        }
+        return found
+    }
+    /// Where `literal` starts in `text`, in any case.
+    static func occurrences(of literal: String, in ns: NSString) -> [Int] {
+        var found: [Int] = []
+        var start = 0
+        while start < ns.length {
+            let match = ns.range(of: literal, options: .caseInsensitive, range: NSRange(location: start, length: ns.length - start))
+            if match.location == NSNotFound { break }
+            found.append(match.location)
+            start = NSMaxRange(match)
+        }
+        return found
+    }
+    static func matches(_ pattern: TextPattern, in text: String, isCancelled: () -> Bool = { false }) -> [NSTextCheckingResult] {
         guard let regex = pattern.regex else { return [] }
-        return regex.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length))
+        var found: [NSTextCheckingResult] = []
+        regex.enumerateMatches(in: text, options: .reportProgress, range: NSRange(location: 0, length: (text as NSString).length)) { match, _, stop in
+            if isCancelled() { stop.pointee = true; return }
+            if let match { found.append(match) }
+        }
+        return found
     }
     // One pass over the text: replacing edits one at a time copies the whole
     // text per edit. Edits are sorted by start and disjoint (resolved spans).
@@ -118,7 +187,7 @@ enum TextRanges {
                 if edits[middle].range.upperBound <= mark.range.lowerBound { low = middle + 1 } else { high = middle }
             }
             if low < edits.count && edits[low].range.overlaps(mark.range) { return nil }
-            return Mark(range: (mark.range.lowerBound + offsets[low])..<(mark.range.upperBound + offsets[low]), entity: mark.entity)
+            return mark.moved(to: (mark.range.lowerBound + offsets[low])..<(mark.range.upperBound + offsets[low]))
         }
     }
     static func ranges(of literal: String, in text: String, options: NSString.CompareOptions = [.caseInsensitive]) -> [Range<Int>] {

@@ -30,32 +30,119 @@ enum Patterns {
         ("US_ITIN", #"\b9\d{2}(?:5\d|6[0-5]|7\d|8[0-8]|9(?:[0-2]|[4-9]))\d{4}\b"#, 0.3, ["individual", "taxpayer", "itin", "tax", "payer", "taxid", "tin"], []),
         ("US_ITIN", #"\b9\d{2}[- ](?:5\d|6[0-5]|7\d|8[0-8]|9(?:[0-2]|[4-9]))[- ]\d{4}\b"#, 0.5, ["individual", "taxpayer", "itin", "tax", "payer", "taxid", "tin"], [])
     ]
-    private static let compiled = definitions.compactMap { entity, pattern, base, context, options -> (String, NSRegularExpression, Double, Set<String>)? in
+    static let compiled = definitions.compactMap { entity, pattern, base, context, options -> (String, NSRegularExpression, Double, Set<String>)? in
         guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return nil }
         return (entity, regex, base, context)
     }
+    /// Where a match of the two secret patterns can start. ICU tries a pattern
+    /// at every position, and their look-behinds and long alternation cost
+    /// seconds per 300 KB there, every time a text is checked. A match of the
+    /// first starts at one of its literal prefixes or after "Bearer "; one of
+    /// the second starts at most five units after a ":" or "=" that a key name
+    /// may precede. Tried anchored at those positions only, with the text
+    /// around them in view, they find exactly the matches a full scan does.
+    static let starts: [String: @Sendable (UnsafeBufferPointer<UInt16>) -> [Int]] = [
+        #"\b(?:sk|pk|rk)_"#: { units in prefixed(units, by: ["sk_", "pk_", "rk_", "gh", "github_pat_", "AKIA", "ASIA", "xox", "eyJ", "-----BEGIN "], after: ["Bearer ", "bearer "]) },
+        #"(?<=(?:password|"#: { units in afterKeyedSeparator(units) },
+    ]
     static func find(_ text: String, contextWords: Set<String> = [], isCancelled: () -> Bool = { Task.isCancelled }) -> [Span] {
         var spans: [Span] = []
+        // One UTF-16 copy for every pattern: matching a native string copies it
+        // into UTF-16 on every call, and the anchored tries below make many.
+        let units = Array(text.utf16)
+        let ns: NSString = units.withUnsafeBufferPointer { buffer in buffer.baseAddress.map { NSString(characters: $0, length: buffer.count) } ?? "" }
+        let length = units.count
         for (entity, regex, base, context) in compiled {
-            for (index, match) in regex.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length)).enumerated() {
-                if index.isMultiple(of: 64) && isCancelled() { return spans }
+            if isCancelled() { return spans }
+            func take(_ match: NSTextCheckingResult) {
                 var range = match.range.location..<NSMaxRange(match.range)
                 if entity == "IBAN_CODE" {
-                    guard let trimmed = longestIBAN(in: text, range: range) else { continue }
+                    guard let trimmed = longestIBAN(in: text, range: range) else { return }
                     range = trimmed
                 }
-                if entity == "IP_ADDRESS", range.upperBound < (text as NSString).length {
-                    let tail = TextRanges.substring(text, range.upperBound..<min((text as NSString).length, range.upperBound + 2))
-                    if tail.range(of: #"^\.[0-9]|^:[0-9A-Fa-f]"#, options: .regularExpression) != nil { continue }
+                if entity == "IP_ADDRESS", range.upperBound < length {
+                    let tail = TextRanges.substring(text, range.upperBound..<min(length, range.upperBound + 2))
+                    if tail.range(of: #"^\.[0-9]|^:[0-9A-Fa-f]"#, options: .regularExpression) != nil { return }
                 }
+                if entity == "SECRET", let cut = URLs.queryValueEnd(ns, range) { range = range.lowerBound..<cut }
                 let value = TextRanges.substring(text, range)
-                if entity == "PERSON" && NameTagger.namesOrganisation(value) { continue }
-                guard valid(value, entity: entity), !(entity == "US_SSN" && base <= 0.5 && invalidSSN(value)) else { continue }
+                if entity == "PERSON" && NameTagger.namesOrganisation(value) { return }
+                // "https://deploy:hunter2@git.example.test" holds a password and a host, no address.
+                if entity == "EMAIL_ADDRESS", inURLCredentials(text, at: range.lowerBound) { return }
+                // "social.example/@odalys.ferriter" is a link to a handle (see `URLs`), no address.
+                if entity == "EMAIL_ADDRESS", value.contains("/@") { return }
+                guard valid(value, entity: entity), !(entity == "US_SSN" && base <= 0.5 && invalidSSN(value)) else { return }
                 let score = context.isDisjoint(with: contextWords) ? Context.enhanced(base, words: context, range: range, text: text) : min(1, max(0.4, base + 0.35))
                 if score >= 0.4 { spans.append(Span(range: range, entity: entity, score: score)) }
             }
+            for match in matches(regex, in: ns, units: units, isCancelled: isCancelled) { take(match) }
         }
         return spans
+    }
+    /// Every match a full scan finds, in order; a pattern with known start
+    /// positions is tried only there.
+    static func matches(_ regex: NSRegularExpression, in ns: NSString, units: [UInt16], isCancelled: () -> Bool) -> [NSTextCheckingResult] {
+        var found: [NSTextCheckingResult] = []
+        if let candidates = starts.first(where: { regex.pattern.hasPrefix($0.key) })?.value {
+            var cursor = 0
+            for start in units.withUnsafeBufferPointer(candidates) where start >= cursor {
+                if isCancelled() { break }
+                guard let match = regex.firstMatch(in: ns as String, options: [.anchored, .withTransparentBounds], range: NSRange(location: start, length: units.count - start)) else { continue }
+                found.append(match)
+                cursor = NSMaxRange(match.range)
+            }
+            return found
+        }
+        // Reports progress between matches as well, so a long text stops
+        // partway through one pattern once cancelled.
+        regex.enumerateMatches(in: ns as String, options: .reportProgress, range: NSRange(location: 0, length: units.count)) { match, _, stop in
+            if isCancelled() { stop.pointee = true; return }
+            if let match { found.append(match) }
+        }
+        return found
+    }
+    /// Positions, in order, where one of `literals` begins or one of `after` ends.
+    private static func prefixed(_ units: UnsafeBufferPointer<UInt16>, by literals: [String], after: [String]) -> [Int] {
+        let starting = literals.map { Array($0.utf16) }, ending = after.map { Array($0.utf16) }
+        let firsts = Set(starting.map { $0[0] } + ending.map { $0[0] })
+        func at(_ index: Int, _ literal: [UInt16]) -> Bool {
+            index + literal.count <= units.count && literal.indices.allSatisfy { units[index + $0] == literal[$0] }
+        }
+        var found: [Int] = []
+        for index in units.indices where firsts.contains(units[index]) {
+            if starting.contains(where: { at(index, $0) }) { found.append(index) }
+            for literal in ending where at(index, literal) { found.append(index + literal.count) }
+        }
+        return Array(Set(found)).sorted()
+    }
+    /// The five positions after each ":" or "=" whose fifteen units before may
+    /// end in a key name (an ASCII key root, or any non-ASCII unit, which may
+    /// fold to one under case-insensitive matching).
+    private static func afterKeyedSeparator(_ units: UnsafeBufferPointer<UInt16>) -> [Int] {
+        let roots = ["pass", "pwd", "secret", "key", "token", "session"].map { Array($0.utf16) }
+        var found: [Int] = []
+        for index in units.indices where units[index] == 58 || units[index] == 61 {
+            let window = units[max(0, index - 15)..<index]
+            guard window.contains(where: { $0 > 127 }) || roots.contains(where: { root in
+                window.count >= root.count && (window.startIndex...(window.endIndex - root.count)).contains { start in
+                    root.indices.allSatisfy { offset in
+                        let unit = window[start + offset]
+                        return (65...90).contains(unit) ? unit + 32 == root[offset] : unit == root[offset]
+                    }
+                }
+            }) else { continue }
+            found.append(contentsOf: (index + 1)...min(units.count, index + 5))
+        }
+        return Array(Set(found)).sorted()
+    }
+    private static let credentials = TextPattern(#"[A-Za-z][A-Za-z0-9+.\-]*://[^\s/@]*:$"#)
+    /// Whether `start` follows a URL's scheme and user name ("https://deploy:").
+    private static func inURLCredentials(_ text: String, at start: Int) -> Bool {
+        let ns = text as NSString
+        var from = start
+        while from > 0, start - from < 96, let scalar = Unicode.Scalar(ns.character(at: from - 1)), !CharacterSet.whitespacesAndNewlines.contains(scalar) { from -= 1 }
+        guard from < start else { return false }
+        return !TextRanges.matches(credentials, in: ns.substring(with: NSRange(location: from, length: start - from))).isEmpty
     }
     private static func longestIBAN(in text: String, range: Range<Int>) -> Range<Int>? {
         let candidate = TextRanges.substring(text, range)

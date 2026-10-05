@@ -18,29 +18,61 @@ public enum CSVFile: FileFormat {
         var leaves: [DocumentLeaf] = []
         // Exports flatten nested records into headers ("billing.address.city").
         let keys = columns.map { KeyHints.header($0) ?? $0 }
+        // Each header's words read once, and the columns under each path, so a header of many
+        // columns is read in one pass, never once per column.
+        let words = try columns.indices.map { column in
+            if column.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
+            return KeyHints.words(columns[column])
+        }
+        var namesUnder: [[String]: [Int]] = [:]
+        for column in columns.indices where words[column].last.map(KeyHints.fieldNameKeys.contains) == true {
+            namesUnder[Array(words[column].dropLast()), default: []].append(column)
+        }
         // A flattened form field ("fields.0.value") is named by its sibling column ("fields.0.name").
         let named: [Int: [Int]] = Dictionary(uniqueKeysWithValues: columns.indices.compactMap { column in
-            let parts = KeyHints.words(columns[column])
+            let parts = words[column]
             guard let last = parts.last, KeyHints.fieldValueKeys.contains(last), KeyHints.hint(keys[column]) == nil else { return nil }
-            let siblings = columns.indices.filter { other in
-                let words = KeyHints.words(columns[other])
-                return other != column && words.dropLast() == parts.dropLast() && words.last.map(KeyHints.fieldNameKeys.contains) == true
-            }
+            // The first few: an export names a field once, and a header that repeats it must not cost a pass per column.
+            let siblings = Array((namesUnder[Array(parts.dropLast())] ?? []).lazy.filter { $0 != column }.prefix(4))
             return siblings.isEmpty ? nil : (column, siblings)
         })
         let naming = Set(named.values.flatMap { $0 })
+        // A flattened name under a business, a product or an app ("application.name") is no
+        // one's, unless the columns beside it under the same object make it a person's own
+        // ("application.dob"): then it is read as a bare "name" is in JSON.
+        // The object a column sits under: its path before the last dot, so a field of several
+        // words ("application.date_of_birth") is one field; without a dot, all but its last word.
+        let parents: [[String]] = columns.indices.map { column in
+            let header = columns[column]
+            if let dot = header.lastIndex(of: ".") { return KeyHints.words(String(header[..<dot])) }
+            return Array(words[column].dropLast())
+        }
+        var under: [[String]: [Int]] = [:]
+        for column in columns.indices { under[parents[column], default: []].append(column) }
+        // Each object's fields read once: a name column is never among them, being a bare name.
+        let fieldsUnder = under.mapValues { KeyHints.RecordFields($0.map { keys[$0] }) }
+        let owned: [Int: KeyHints.RecordFields] = Dictionary(uniqueKeysWithValues: columns.indices.compactMap { column in
+            let parts = words[column], parent = parents[column]
+            guard parts.count >= 2, !parent.isEmpty, KeyHints.isBareName(parts.last), KeyHints.hint(keys[column]) == nil,
+                  KeyHints.isNotPeople(parent.joined(separator: "_")), (under[parent]?.count ?? 0) > 1, let fields = fieldsUnder[parent] else { return nil }
+            return (column, fields)
+        })
+        // Whether the columns make a bare "name" a person's, read once for every cell.
+        let personsRecord = KeyHints.isPersonsRecord(siblings: keys, parent: nil)
         for row in rows.indices {
             if row.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
             for column in rows[row].indices {
                 var key = column < keys.count ? keys[column] : nil
                 // A column naming fields holds field names ("zip", "email"), and a bare
                 // "name" is a person's only as it is in JSON.
-                if naming.contains(column) || KeyHints.isBareName(key) && !KeyHints.bareNameIsPerson(rows[row][column], siblings: keys, parent: nil) { key = nil }
+                if naming.contains(column) || KeyHints.isBareName(key) && !KeyHints.bareNameIsPerson(rows[row][column], personsRecord: personsRecord) { key = nil }
+                if let fields = owned[column], KeyHints.ownRecord(fields, value: rows[row][column]) { key = "name" }
                 if let siblings = named[column] {
                     let texts = siblings.compactMap { $0 < rows[row].count ? (KeyHints.words(columns[$0]).last!, rows[row][$0]) : nil }
                     key = KeyHints.namedField("value", siblings: texts) ?? key
                 }
-                leaves.append(DocumentLeaf(rows[row][column], key: key, records: [row]))
+                let header = column < columns.count ? columns[column] : ""
+                leaves.append(DocumentLeaf(rows[row][column], key: key, records: [row], objectPath: header.contains(".") ? String(header[..<header.lastIndex(of: ".")!]).lowercased() : ""))
             }
         }
         var headerIDs: [Int] = []
@@ -50,68 +82,90 @@ public enum CSVFile: FileFormat {
                 leaves.append(DocumentLeaf(columns[column], fieldName: true))
             }
         }
+        // A heading's own long digits ("order_48213907") are drawn first, as in
+        // a JSON key, so a cell writing the same number is replaced alike.
+        let drawn = hasHeader ? JSONFile.drawDigits(columns, job: job) : [:]
         progress(.finding, 0, leaves.count)
-        let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection)
+        var values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
+        if !drawn.isEmpty {
+            for index in headerIDs { values[index] = JSONFile.rewritingOwnText(values[index]) { JSONFile.replaceDigits($0, drawn: drawn) } }
+        }
+        let records = leaves.map(\.lastRecord)
+        let found = leaves.count
         leaves.removeAll(keepingCapacity: false)
-        progress(.finding, leaves.count, leaves.count)
-        var marks: [TableMark] = []
-        let unresolved = values.flatMap(\.unresolved)
-        var valueIndex = 0
-        for row in rows.indices {
-            for column in rows[row].indices {
-                rows[row][column] = values[valueIndex].text
-                if row < previewRows {
-                    marks += values[valueIndex].marks.map { TableMark(row: row, column: column, range: $0.range, entity: $0.entity) }
+        progress(.finding, found, found)
+        try Scrubber.checkCancellation()
+        // Rows are written again from the values, so a review can write them with some findings taken back.
+        let widths = rows.map(\.count), headings = columns
+        rows = []
+        func render(_ values: [DocumentValue], counts: [String: Int]) throws -> ScrubResult {
+            var rows = widths.map { [String](repeating: "", count: $0) }, columns = headings
+            var marks: [TableMark] = []
+            let unresolved = values.flatMap(\.unresolved)
+            var valueIndex = 0
+            for row in rows.indices {
+                if row.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
+                for column in rows[row].indices {
+                    rows[row][column] = values[valueIndex].text
+                    if row < previewRows {
+                        marks += values[valueIndex].marks.map { TableMark(row: row, column: column, range: $0.range, entity: $0.entity, byHand: $0.byHand) }
+                    }
+                    valueIndex += 1
                 }
-                valueIndex += 1
             }
+            for (column, index) in headerIDs.enumerated() {
+                columns[column] = values[index].text
+                marks += values[index].marks.map { TableMark(row: TableMark.header, column: column, range: $0.range, entity: $0.entity, byHand: $0.byHand) }
+            }
+            let previewWidth = max(columns.count, rows.prefix(previewRows).map(\.count).max() ?? 0)
+            let previewColumns = columns + Array(repeating: "", count: previewWidth - columns.count)
+            var neutralized = 0
+            func shift(row: Int, column: Int) {
+                for mark in marks.indices where marks[mark].row == row && marks[mark].column == column {
+                    let old = marks[mark]
+                    marks[mark] = TableMark(row: row, column: column, range: (old.range.lowerBound + 1)..<(old.range.upperBound + 1), entity: old.entity, byHand: old.byHand)
+                }
+            }
+            if hasHeader {
+                for column in columns.indices {
+                    if let safe = neutralize(columns[column]) {
+                        columns[column] = safe
+                        neutralized += 1
+                        shift(row: TableMark.header, column: column)
+                    }
+                }
+            }
+            for row in rows.indices {
+                if row.isMultiple(of: 64) { try Scrubber.checkCancellation() }
+                for column in rows[row].indices {
+                    if let safe = neutralize(rows[row][column]) {
+                        rows[row][column] = safe
+                        neutralized += 1
+                        if row < previewRows { shift(row: row, column: column) }
+                    }
+                }
+            }
+            var output = Data()
+            output.reserveCapacity(data.count + data.count / 4)
+            func append(_ row: [String]) {
+                for column in row.indices {
+                    if column > 0 { output.append(contentsOf: String(delimiter).utf8) }
+                    output.append(contentsOf: quote(row[column], delimiter: delimiter, quoteCharacter: quoteCharacter).utf8)
+                }
+                output.append(contentsOf: newline.utf8)
+            }
+            if hasHeader { append(columns) }
+            for (index, row) in rows.enumerated() {
+                if index.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
+                append(row)
+            }
+            return ScrubResult(format: "csv", output: output, preview: .table(columns: previewColumns, rows: Array(rows.prefix(previewRows)), rowCount: rows.count, marks: marks), counts: counts, unresolved: unresolved, neutralized: neutralized)
         }
-        for (column, index) in headerIDs.enumerated() {
-            columns[column] = values[index].text
-            marks += values[index].marks.map { TableMark(row: TableMark.header, column: column, range: $0.range, entity: $0.entity) }
-        }
-        let previewWidth = max(columns.count, rows.prefix(previewRows).map(\.count).max() ?? 0)
-        let previewColumns = columns + Array(repeating: "", count: previewWidth - columns.count)
         progress(.checking, 0, 1)
-        var neutralized = 0
-        func shift(row: Int, column: Int) {
-            for mark in marks.indices where marks[mark].row == row && marks[mark].column == column {
-                let old = marks[mark]
-                marks[mark] = TableMark(row: row, column: column, range: (old.range.lowerBound + 1)..<(old.range.upperBound + 1), entity: old.entity)
-            }
-        }
-        if hasHeader {
-            for column in columns.indices {
-                if let safe = neutralize(columns[column]) {
-                    columns[column] = safe
-                    neutralized += 1
-                    shift(row: TableMark.header, column: column)
-                }
-            }
-        }
-        for row in rows.indices {
-            if row.isMultiple(of: 64) { try Scrubber.checkCancellation() }
-            for column in rows[row].indices {
-                if let safe = neutralize(rows[row][column]) {
-                    rows[row][column] = safe
-                    neutralized += 1
-                    if row < previewRows { shift(row: row, column: column) }
-                }
-            }
-        }
-        var output = Data()
-        output.reserveCapacity(data.count + data.count / 4)
-        func append(_ row: [String]) {
-            for column in row.indices {
-                if column > 0 { output.append(contentsOf: String(delimiter).utf8) }
-                output.append(contentsOf: quote(row[column], delimiter: delimiter, quoteCharacter: quoteCharacter).utf8)
-            }
-            output.append(contentsOf: newline.utf8)
-        }
-        if hasHeader { append(columns) }
-        for row in rows { append(row) }
+        var result = try render(values, counts: job.counts)
+        result.review = Review(values: values, counts: job.counts, records: records, people: job.personLinks(), render: render)
         progress(.checking, 1, 1)
-        return ScrubResult(format: "csv", output: output, preview: .table(columns: previewColumns, rows: Array(rows.prefix(previewRows)), rowCount: rows.count, marks: marks), counts: job.counts, unresolved: unresolved, neutralized: neutralized)
+        return result
     }
     static func sniffDelimiter(_ text: String) -> Character { sniffFormat(text).0 }
     static func sniffQuote(_ text: String, delimiter: Character) -> Character { sniffFormat(text, delimiters: [delimiter]).1 }
@@ -149,6 +203,7 @@ public enum CSVFile: FileFormat {
         let quote = quoteCharacter.unicodeScalars.first
         var index = 0
         while index < chars.count {
+            if index.isMultiple(of: 65_536) { try Scrubber.checkCancellation() }
             let char = chars[index]
             if quoted {
                 if char == quote {
@@ -174,7 +229,8 @@ public enum CSVFile: FileFormat {
     }
     private static func header(_ rows: [[String]], job: Job) -> Bool {
         guard let first = rows.first else { return false }
-        if first.contains(where: { KeyHints.hint($0) != nil || KeyHints.isRole($0) }) { return true }
+        // "customer_id" names a person's ID column, as "email" names an email's.
+        if first.contains(where: { KeyHints.hint($0) != nil || KeyHints.isRole($0) || RecordIDs.isPersonKey($0) }) { return true }
         // A key/value export: a column naming the field beside the column holding it ("Field,Value").
         let plain = first.map { KeyHints.words($0).joined() }
         if plain.contains(where: KeyHints.fieldValueKeys.contains), plain.contains(where: KeyHints.fieldNameKeys.contains) { return true }

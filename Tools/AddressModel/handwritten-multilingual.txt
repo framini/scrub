@@ -1,0 +1,92 @@
+# Handwritten development cases for addresses in German, French, Spanish, Italian, Dutch, Portuguese and Nordic text, and look-alikes in those languages.
+# Invented people, streets and numbers only. Cases are separated by "===="; addresses are marked ⟦…⟧.
+Herrn Jonas Albrecht
+⟦Kastanienallee 18
+10435 Berlin⟧
+====
+Bitte schicken Sie die Unterlagen an ⟦Mühlenweg 4b, 26135 Oldenburg⟧.
+====
+Mit freundlichen Grüßen
+Corinna Vogt
+⟦Seefeldstrasse 112, 8008 Zürich⟧
+====
+Die Wohnung liegt in der ⟦Lerchengasse 9/12, 1080 Wien⟧, 3. Stock.
+====
+Merci d'envoyer le colis au ⟦27 rue du Moulin, 35000 Rennes⟧ avant vendredi.
+====
+Cordialement,
+Maëlle Riou
+⟦Avenue Louise 231, 1050 Bruxelles⟧
+====
+Mi dirección nueva es ⟦Calle del Pez 31, 2º B, 28004 Madrid⟧.
+====
+Saludos,
+Rocío Benavente
+⟦Avda. de la Constitución 12, 41001 Sevilla⟧
+====
+Il pacco va consegnato in ⟦Via Roma 18, 10123 Torino (TO)⟧.
+====
+Cordiali saluti,
+Gennaro Esposito
+⟦Corso Vittorio Emanuele II 104, 80121 Napoli⟧
+====
+Ons nieuwe adres: ⟦Prinsengracht 412-hs, 1016 JA Amsterdam⟧
+====
+Met vriendelijke groet,
+Sanne de Wit
+⟦Stationsweg 7, 2312 AV Leiden⟧
+====
+Atenciosamente,
+Tiago Moura
+⟦Rua de Santa Catarina 210, 4000-447 Porto⟧
+====
+Entrega em ⟦Rua Oscar Freire, 1120 - Jardins, São Paulo - SP, 01426-001⟧
+====
+Vi har flyttat till ⟦Hornsgatan 52, 118 21 Stockholm⟧.
+====
+Hilsen,
+Eirik Solberg
+⟦Thorvald Meyers gate 41, 0555 Oslo⟧
+====
+Venlig hilsen
+Mette Bach
+⟦Vesterbrogade 88, 1620 København V⟧
+====
+Ystävällisin terveisin,
+Aino Lehtonen
+⟦Hämeentie 15 B 24, 00500 Helsinki⟧
+====
+Proszę wysłać na adres ⟦ul. Długa 17/3, 80-831 Gdańsk⟧.
+====
+{"kunde": "Lena Hartmann", "anschrift": "⟦Ringstraße 5, 69115 Heidelberg⟧"}
+====
+nom;adresse;ville
+Riou;"⟦8 place Bellecour, 69002 Lyon⟧";Lyon
+====
+<indirizzo>⟦Piazza San Carlo 156, 10121 Torino⟧</indirizzo>
+====
+Gemäß § 15 Abs. 2 BGB ist die Frist gewahrt.
+====
+Según el artículo 14 de la Constitución Española, todos son iguales.
+====
+Ai sensi dell'art. 2043 del Codice Civile il danno va risarcito.
+====
+Version 3.2 der Software erscheint am 4. Mai.
+====
+ICE 578 nach Hamburg fährt heute von Gleis 7.
+====
+Die Lindenstraße-Folge 1234 lief gestern im Ersten.
+====
+Le TGV 6203 part du quai 4 à 14h10.
+====
+Vuelo IB 3170 a Barcelona, puerta B22.
+====
+Straßenbahn Linie 6 Richtung Hauptbahnhof fällt aus.
+====
+Bestellnummer 448812: Lieferung an die Filiale in 3 Tagen.
+====
+Het pakket met 12 flessen wijn komt op 5 mei.
+====
+Tåget avgår 08:42 från spår 3 mot Uppsala.
+====
+Rua 25 de Março é o nome de uma novela de 2009.

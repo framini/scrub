@@ -1,4 +1,5 @@
 import Foundation
+import ScrubTestSupport
 @testable import ScrubCore
 import Testing
 
@@ -22,6 +23,9 @@ struct ScrubberProperties {
             let output = try doc.scrub(seed: seed).output
             let leaked = try doc.leaks(in: output)
             #expect(leaked.isEmpty, "Leaked \(leaked). \(diagnostic)")
+            // No part of a planted value either, judged without ScrubCore (see ComponentLeaks).
+            let parts = ComponentLeaks.leaks(doc.planted.map { ComponentLeaks.Planted($0.original) }, input: doc.text, output: String(decoding: output, as: UTF8.self))
+            #expect(parts.isEmpty, "Leaked parts \(parts). \(diagnostic)")
         }
     }
 
@@ -35,7 +39,11 @@ struct ScrubberProperties {
             #expect(before.leaves.map(\.path) == after.leaves.map(\.path), diagnostic)
             for (a, b) in zip(before.leaves, after.leaves) {
                 let containsPlanted = doc.planted.contains { a.value.localizedCaseInsensitiveContains($0.original) }
-                if KeyHints.hint(a.key) == nil && !containsPlanted {
+                // Seven or more digits in a name read as an ID ("user_12345678"),
+                // so a name may change in those digits alone.
+                let idDigits = /[0-9]{7,}/
+                let renamedID = a.path.hasSuffix("/name") && a.value.replacing(idDigits, with: "#") == b.value.replacing(idDigits, with: "#")
+                if KeyHints.hint(a.key) == nil && !containsPlanted && !renamedID {
                     #expect(a.value == b.value, "Changed plain leaf \(a.path): \(a.value) -> \(b.value). \(diagnostic)")
                 }
             }

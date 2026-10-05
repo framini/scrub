@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 @testable import ScrubCore
 import Testing
 
@@ -19,10 +20,24 @@ private final class LinearPeople {
     var entries: [Entry] = []
     private let locale = Locale(identifier: "en_US_POSIX")
     private func fold(_ value: String) -> String { value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: locale).trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// A name taken for someone once is that person for good.
+    private var resolved: [String: Entry] = [:]
     func register(_ first: String?, _ last: String?) -> Entry {
         let f = first.map(fold), l = last.map(fold)
+        let key = (f ?? "\u{0}") + "\u{1}" + (l ?? "\u{0}")
+        if let found = resolved[key] { return found }
+        let entry = resolve(f, l)
+        resolved[key] = entry
+        return entry
+    }
+    private func resolve(_ f: String?, _ l: String?) -> Entry {
         if let exact = entries.first(where: { $0.first == f && $0.last == l }) { return exact }
-        let candidates = entries.filter { (f == nil || $0.first == nil || $0.first == f) && (l == nil || $0.last == nil || $0.last == l) }
+        var candidates = entries.filter { (f == nil || $0.first == nil || $0.first == f) && (l == nil || $0.last == nil || $0.last == l) }
+        // One part alone is someone who has it, before anyone who lacks it.
+        if f == nil || l == nil, (f != nil || l != nil) {
+            let having = candidates.filter { f != nil ? $0.first == f : $0.last == l }
+            if !having.isEmpty { candidates = having }
+        }
         if candidates.count == 1, let found = candidates.first {
             found.first = found.first ?? f; found.last = found.last ?? l
             return found
@@ -142,20 +157,120 @@ private func personCSV(_ count: Int) -> Data {
         #expect(result.counts["EMAIL_ADDRESS"] == count)
         return start.duration(to: .now)
     }
-    let half = try measure(10_000)
-    let full = try measure(20_000)
+    // Other suites run in parallel and their load changes between two runs, so
+    // the sizes alternate and the fastest run of each is compared.
+    var half = Duration.seconds(3600), full = Duration.seconds(3600)
+    for _ in 0..<2 {
+        half = min(half, try measure(10_000))
+        full = min(full, try measure(20_000))
+    }
     print("person CSV debug: 10000=\(half), 20000=\(full)")
     #expect(full < half * 3)
 }
 
+/// Scrubs `data`, letting `cancelWhen` decide from the progress reports when
+/// to cancel, and returns how long the scrub ran on after being cancelled with
+/// how long a small uncancelled scrub took just after it. Both are timed inside
+/// the scrub's own task: with other tests running, this task can resume long
+/// after the scrub has stopped.
+private func timeToStop(_ data: Data, name: String = "people.csv", cancelWhen: @escaping @Sendable (Stage, Int, Int, @escaping @Sendable () -> Void) -> Void) async throws -> (stopped: Duration, reference: Duration) {
+    let work = Mutex<Task<(stopped: Duration, reference: Duration), any Error>?>(nil)
+    let cancelledAt = Mutex<ContinuousClock.Instant?>(nil)
+    let cancel: @Sendable () -> Void = {
+        cancelledAt.withLock { $0 = .now }
+        work.withLock { $0?.cancel() }
+    }
+    let reference = personCSV(500)
+    let task = Task.detached { () throws -> (stopped: Duration, reference: Duration) in
+        do {
+            _ = try Scrubber.scrub(data, name: name) { stage, done, total in cancelWhen(stage, done, total, cancel) }
+            Issue.record("Cancelled scrub completed")
+            return (.zero, .zero)
+        } catch ScrubError.cancelled {
+            let stoppedAt = ContinuousClock.now
+            let stopped = try #require(cancelledAt.withLock { $0 }).duration(to: stoppedAt)
+            // The task is cancelled, so the reference runs on a fresh one.
+            let measured = try await Task.detached {
+                let start = ContinuousClock.now
+                _ = try Scrubber.scrub(reference, name: "people.csv")
+                return start.duration(to: .now)
+            }.value
+            return (stopped, measured)
+        }
+    }
+    work.withLock { $0 = task }
+    return try await task.value
+}
+
+/// Within a second unloaded; under load, no slower than a small scrub run under
+/// the same load. Other suites run in parallel, so an absolute budget alone
+/// measures machine load, and the load can still change between the two
+/// timings: a miss is tried once more. A scrub that ignores cancelling misses
+/// every time.
+private func expectPrompt(_ measure: () async throws -> (stopped: Duration, reference: Duration)) async throws {
+    var timing = (stopped: Duration.zero, reference: Duration.zero)
+    for _ in 0..<2 {
+        timing = try await measure()
+        print("cancel debug: stopped=\(timing.stopped), reference=\(timing.reference)")
+        if timing.stopped < max(.seconds(1), timing.reference) { return }
+    }
+    #expect(timing.stopped < max(.seconds(1), timing.reference))
+}
+
 @Test func cancellingDuringParallelDetectionStopsPromptly() async throws {
-    let data = personCSV(40_000)
-    let work = Task.detached { try Scrubber.scrub(data, name: "people.csv") }
-    try await Task.sleep(for: .milliseconds(300))
-    let cancelledAt = ContinuousClock.now
-    work.cancel()
-    await #expect(throws: ScrubError.cancelled) { try await work.value }
-    #expect(cancelledAt.duration(to: .now) < .seconds(1))
+    try await expectPrompt {
+        let started = Atomic(false)
+        return try await timeToStop(personCSV(40_000)) { stage, _, _, cancel in
+            // 300 ms into detection, on a thread of its own: a sleeping test
+            // task, or a timer on the queues detection fills, can wake long
+            // after detection has ended.
+            guard stage == .finding, started.compareExchange(expected: false, desired: true, ordering: .relaxed).exchanged else { return }
+            Thread.detachNewThread {
+                Thread.sleep(forTimeInterval: 0.3)
+                cancel()
+            }
+        }
+    }
+}
+
+/// A long text is one value, so its patterns are stopped partway through.
+@Test func cancellingLongTextStopsPromptly() async throws {
+    let text = Data(String(repeating: "robert mitchell asked for a refund on order 4471.\n", count: 60_000).utf8)
+    try await expectPrompt {
+        try await timeToStop(text, name: "notes.txt") { stage, _, _, cancel in
+            if stage == .finding { cancel() }
+        }
+    }
+}
+
+/// Cancelled while the context model reads, between its windows.
+@Test func cancellingWhileReadingStopsPromptly() async throws {
+    let text = Data((0..<3000).map { "Kofi Mensah moved to Tromsø in \(2001 + $0 % 12) and works at Orrinvale Freight." }.joined(separator: "\n").utf8)
+    try await expectPrompt {
+        try await timeToStop(text, name: "notes.txt") { stage, done, _, cancel in
+            if stage == .reading, done > 0 { cancel() }
+        }
+    }
+}
+
+/// Cancelled as the context model finishes, while its findings join the
+/// others' in one long text.
+@Test func cancellingAfterReadingStopsPromptly() async throws {
+    let text = Data((0..<3000).map { "Kofi Mensah moved to Tromsø in \(2001 + $0 % 12) and works at Orrinvale Freight." }.joined(separator: "\n").utf8)
+    try await expectPrompt {
+        try await timeToStop(text, name: "notes.txt") { stage, done, total, cancel in
+            if stage == .reading, done == total, total > 0 { cancel() }
+        }
+    }
+}
+
+/// Cancelled once every value is found, while the table is put back together.
+@Test func cancellingWhileAssemblingTableStopsPromptly() async throws {
+    try await expectPrompt {
+        try await timeToStop(personCSV(40_000)) { stage, done, total, cancel in
+            if stage == .finding, done == total, total > 0 { cancel() }
+        }
+    }
 }
 
 @Test func plainTextScalingBudget() throws {
@@ -166,10 +281,15 @@ private func personCSV(_ count: Int) -> Data {
         #expect(result.counts["PERSON", default: 0] >= lines)
         return start.duration(to: .now)
     }
-    let half = try measure(4_000)
-    let full = try measure(8_000)
-    print("plain text debug: 4000=\(half), 8000=\(full)")
     // Other suites run in parallel, so an absolute budget measures machine
     // load; the ratio between two runs under the same load measures scaling.
+    // That load changes between two runs, so the sizes alternate and the
+    // fastest run of each is compared.
+    var half = Duration.seconds(3600), full = Duration.seconds(3600)
+    for _ in 0..<2 {
+        half = min(half, try measure(4_000))
+        full = min(full, try measure(8_000))
+    }
+    print("plain text debug: 4000=\(half), 8000=\(full)")
     #expect(full < half * 3)
 }

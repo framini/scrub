@@ -3,7 +3,8 @@ import Foundation
 /// Key/value pairs inside text give their values the hints the same keys give in
 /// a JSON file: a JSON body pasted in a curl command or a log line, object
 /// literals in code (`given_name: 'Anna'` in JavaScript, Python's
-/// `{'given_name': 'Anna'}`, Ruby's `"given_name" => "Anna"`) and YAML. Nesting is
+/// `{'given_name': 'Anna'}`, Ruby's `"given_name" => "Anna"`), YAML and a
+/// line's `given_name=Anna` in a properties, .env or INI file. Nesting is
 /// followed, by brackets or by YAML's indentation, so `"id_number": {"value": …}`
 /// is still read as an ID number, and array items take their array's key. A bare
 /// "name" waits for its object to close, since a later sibling can say it is a
@@ -19,6 +20,8 @@ enum KeyedValues {
         var names: [(Span, String)] = []
         var fields: [(String, String)] = []
         var unnamed: [(Range<Int>, String, String)] = []
+        /// Values under a plain "id", which are a person's when the object holds their name or email.
+        var ids: [Range<Int>] = []
         /// Bare numbers in an array, read when it closes: a point's order is only known then.
         var numbers: [Range<Int>] = []
     }
@@ -45,6 +48,10 @@ enum KeyedValues {
     private static let openArray = UInt16(UInt8(ascii: "[")), closeArray = UInt16(UInt8(ascii: "]"))
     private static let comma = UInt16(UInt8(ascii: ",")), semicolon = UInt16(UInt8(ascii: ";")), hyphen = UInt16(UInt8(ascii: "-")), hash = UInt16(UInt8(ascii: "#"))
     private static let space = UInt16(32), tab = UInt16(9), slash = UInt16(UInt8(ascii: "/"))
+    /// What a string's prefix is written with before its quote (`r'…'`, `f'…'`, `rb'…'`).
+    private static let stringPrefixes: Set<String> = ["r", "f", "b", "u", "rb", "br", "fr", "rf"]
+    /// A letter beside an apostrophe inside a word: ASCII, or past Latin-1's signs, but no curly quote.
+    private static func letter(_ unit: UInt16) -> Bool { (65...90).contains(unit) || (97...122).contains(unit) || unit >= 0xC0 && unit != 0x2019 }
     /// Unquoted words that are literals, not values.
     private static let literals: Set<String> = ["true", "false", "null", "none", "nil", "undefined", "yes", "no", "~"]
 
@@ -57,7 +64,7 @@ enum KeyedValues {
     }
 
     static func scan(_ text: String, isCancelled: () -> Bool = { false }) -> Found {
-        guard text.utf16.contains(where: { $0 == doubleQuote || $0 == singleQuote || $0 == colon }) else { return Found() }
+        guard text.utf16.contains(where: { $0 == doubleQuote || $0 == singleQuote || $0 == colon || $0 == equals }) else { return Found() }
         let units = Array(text.utf16)
         var found = Found()
         // The root level stands for loose pairs outside any braces and is never closed.
@@ -83,7 +90,14 @@ enum KeyedValues {
                     }
                 }
             }
-            for (span, value) in level.names where KeyHints.bareNameIsPerson(value, siblings: level.keys, parent: level.key) { found.spans.append(span) }
+            for (span, value) in level.names where KeyHints.bareNameIsPerson(value, siblings: level.keys, parent: level.key, inObject: level.id > 0) { found.spans.append(span) }
+            // A person's own object: its "id" is theirs (see `RecordIDs`).
+            let named = RecordIDs.isPersonCollection(KeyHints.words(level.key).last) || level.fields.contains(where: { RecordIDs.namesPersonType(key: $0.0, value: $0.1) })
+            let beside = level.keys.contains(where: { ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS"].contains(KeyHints.hint($0) ?? "") })
+            // At the top, outside any brackets (YAML, a log line), only with a few fields around.
+            if !level.ids.isEmpty, named || beside, level.id > 0 || level.keys.count >= 3 {
+                for range in level.ids where named || !RecordIDs.isUUID(string(range)) { found.spans.append(Span(range: range, entity: "RECORD_ID", score: 1)) }
+            }
             // Outside brackets every key in the text is a "sibling"; a form field's name must share its object.
             for (range, key, value) in level.unnamed where level.id > 0 {
                 if let field = KeyHints.namedField(key, siblings: level.fields), let entity = KeyHints.hint(field), KeyHints.fits(field, value) {
@@ -122,6 +136,16 @@ enum KeyedValues {
             if units[at] == equals, at + 1 < units.count, units[at + 1] == greater { return at + 2 }
             return nil
         }
+        /// Where a line's "key=value" assignment starts its value, as in a
+        /// properties, .env or INI file (`full_name=Odalys Ferriter`); only for
+        /// a key that starts its line outside brackets, never "==".
+        func assignment(after end: Int, start: Int) -> Int? {
+            var at = end
+            while at < units.count, units[at] == space || units[at] == tab { at += 1 }
+            guard at < units.count, units[at] == equals, inYAML(), lineStart(start) else { return nil }
+            if at + 1 < units.count, units[at + 1] == equals || units[at + 1] == greater { return nil }
+            return at + 1
+        }
         /// The key a new container or value is read under.
         func parentKey() -> String? {
             inYAML() ? blocks.last?.key : levels.last?.key
@@ -140,6 +164,7 @@ enum KeyedValues {
             pending = nil
             guard !trimmed.isEmpty else { return }
             if let own, trimmed.utf16.count <= 80 { levels[levels.count - 1].fields.append((own, trimmed)) }
+            if let own, ["id", "uid"].contains(KeyHints.words(own).joined()), RecordIDs.plainID(trimmed) || RecordIDs.personTyped(trimmed) { levels[levels.count - 1].ids.append(content) }
             if let key { found.fields.append((key, content, levels[levels.count - 1].id)) }
             if KeyHints.hint(key) == nil, KeyHints.isStructural(key) {
                 found.structural.append(content)
@@ -178,6 +203,9 @@ enum KeyedValues {
                 else { found.spans.append(span) }
             } else if let own, KeyHints.fieldValueKeys.contains(KeyHints.words(own).joined()) {
                 levels[levels.count - 1].unnamed.append((content, own, taken))
+            } else if KeyHints.hint(key) == nil, RecordIDs.identifying(key: key, value: taken) {
+                // "customer_id": "cus_4TUvJh" in a pasted body: the person's ID, as in a file.
+                found.spans.append(Span(range: content, entity: "RECORD_ID", score: 1))
             } else if KeyHints.isRole(key), let name = Detector.writtenName(taken) {
                 // "Customer: Priyanka Szymanski", "assignee": "Dana Whitfield": a name written as one.
                 found.spans.append(Span(range: (content.lowerBound + name.lowerBound)..<(content.lowerBound + name.upperBound), entity: "PERSON", score: 0.9))
@@ -186,7 +214,9 @@ enum KeyedValues {
         /// An unquoted value reads as data, not as code (`email: user.email`,
         /// `firstName: string;`) or a literal.
         func plausible(_ value: String, key: String?) -> Bool {
-            if literals.contains(value.lowercased()) || value.contains(where: { "(\"'\\`".contains($0) }) || value.hasSuffix(";") { return false }
+            // An apostrophe inside a word ("O'Sullivan") is no quote.
+            let quoted = value.replacingOccurrences(of: #"(?<=\p{L})'(?=\p{L})"#, with: "", options: .regularExpression)
+            if literals.contains(value.lowercased()) || quoted.contains(where: { "(\"'\\`".contains($0) }) || value.hasSuffix(";") { return false }
             guard let entity = KeyHints.hint(key), ["PERSON", "FIRST_NAME", "LAST_NAME", "LOCATION"].contains(entity) else { return true }
             // A name is capitalised; one token with dots, underscores or a dollar sign is an identifier.
             guard value.first?.isUppercase == true else { return false }
@@ -208,9 +238,17 @@ enum KeyedValues {
                 while next < units.count, units[next] == space || units[next] == tab { next += 1 }
                 return next < units.count && (units[next] == doubleQuote || units[next] == singleQuote)
             }
+            // An apostrophe inside a word ("O'Sullivan") is part of the value, not a quote:
+            // a letter on each side, after no string prefix (Python's r'…', f'…').
+            func apostrophe(_ quote: Int) -> Bool {
+                guard units[quote] == singleQuote, quote > at, quote + 1 < units.count, letter(units[quote - 1]), letter(units[quote + 1]) else { return false }
+                var word = quote
+                while word > at, letter(units[word - 1]) { word -= 1 }
+                return !stringPrefixes.contains(string(word..<quote).lowercased())
+            }
             // It stops before a quote or bracket, which the scan still has to read.
             while end < units.count, units[end] != newline, units[end] != carriageReturn,
-                  ![doubleQuote, singleQuote, openObject, openArray].contains(units[end]),
+                  ![doubleQuote, singleQuote, openObject, openArray].contains(units[end]) || apostrophe(end),
                   !(inside && (units[end] == comma || units[end] == closeObject || units[end] == closeArray)),
                   !(!inside && units[end] == comma && continues(end)),
                   !(units[end] == hash && end > at && (units[end - 1] == space || units[end - 1] == tab)) { end += 1 }
@@ -338,6 +376,11 @@ enum KeyedValues {
                         // A capitalised word before a colon in prose may be a name ("Ticket from Daniel Ferreira: …").
                         if !inYAML() || !(65...90).contains(unit) { found.structural.append(index..<end) }
                         startsKey(string(index..<end), at: index, resumingAt: next, colon: units[skipSpace(end)] == colon)
+                        continue
+                    }
+                    if let next = assignment(after: end, start: index) {
+                        found.structural.append(index..<end)
+                        startsKey(string(index..<end), at: index, resumingAt: next, colon: true)
                         continue
                     }
                     index = end

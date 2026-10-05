@@ -1,0 +1,76 @@
+# Handwritten development cases for addresses written all in lowercase, and lowercase look-alikes.
+# Invented people, streets and numbers only. Cases are separated by "===="; addresses are marked ⟦…⟧.
+bitte schick das paket an ⟦lindenstraße 12, 10115 berlin⟧, danke!
+====
+wohne jetzt in der ⟦gartenstraße 3, 04109 leipzig⟧ seit märz
+====
+neue adresse: ⟦kastanienallee 7a, 79098 freiburg im breisgau⟧
+====
+hi! my new place is ⟦1420 maple ridge dr, boise id 83702⟧ so update the list pls
+====
+ship it to ⟦apt 4b, 233 w elm st, chicago il 60610⟧ thx
+====
+landlord said rent goes to ⟦flat 3, 27 pellow gardens, bristol bs6 5qr⟧ from now on
+====
+can you forward my post to ⟦14 rookery lane, leeds ls6 2ab⟧
+====
+⟦88 tamarack cres, kitchener on n2a 3k9⟧ is the address on the form
+====
+envoyez-le au ⟦12 rue des tilleuls, 69002 lyon⟧ svp
+====
+on a déménagé au ⟦4 bis avenue jean-jaurès, 31000 toulouse⟧ la semaine dernière
+====
+mi piso nuevo: ⟦calle de las huertas 14, 3º izq, 28014 madrid⟧
+====
+il mio indirizzo è ⟦via dei mille 22, 40121 bologna⟧
+====
+ons adres is nu ⟦kerkstraat 41, 3511 lx utrecht⟧
+====
+moro na ⟦rua das flores 88, 1200-195 lisboa⟧ desde janeiro
+====
+vi har flyttat till ⟦storgatan 9, 411 38 göteborg⟧
+====
+pakken kan sendes til ⟦nørregade 14, 1165 københavn k⟧
+====
+subletting at ⟦unit 5/41 tamsin rd, collingwood vic 3066⟧ for july
+====
+{"id": 4412, "note": "ship to ⟦77 orchard way, cambridge cb4 2ld⟧ after the 3rd"}
+====
+id,name,remark
+19,Halvard Brekke,"moved to ⟦seefeldstrasse 112, 8008 zürich⟧"
+====
+<note>courier left it at ⟦ul. długa 17/3, 80-831 gdańsk⟧ again</note>
+====
+[09:12] tomasz: send it to ⟦2205 harbor view blvd, san diego ca 92101⟧
+====
+billing: ⟦po box 4410, halifax ns b3k 5m2⟧
+====
+take the main road for 3 miles and turn left at the second roundabout
+====
+rue de la paix is a monopoly square worth 400 and nobody ever buys it
+====
+version 2.3 street edition ships on 14 may
+====
+we sold 40 park benches and 12 street lamps last quarter
+====
+see section 12 of the highways act 1980 for the duty to maintain
+====
+run man 5 crontab for the file format, then crontab -e
+====
+platform 9, gate 4, row 22 seat 7 — see you there
+====
+chapter 3: the old mill road murders, 212 pages
+====
+order 55120 ships from the main street depot on tuesday
+====
+lindenstrasse ag reported 12% growth in 2023
+====
+take bus 14 to market street and walk 5 min
+====
+update to macos 14.2 and node 20 lts before friday
+====
+turn right after 200 m onto the a40 towards oxford
+====
+unit 3 of the course covers postal addresses in 12 countries
+====
+the 4 bedroom house on a quiet lane sold for 610k

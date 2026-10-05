@@ -107,3 +107,48 @@ func recognizerVariants(_ input: String) throws {
     #expect(try FileManager.default.contentsOfDirectory(atPath: locked.path).isEmpty)
     #expect(try Set(FileManager.default.contentsOfDirectory(atPath: directory.path)) == ["result.txt", "locked"])
 }
+
+/// A stand-in card ending as the real one did showed its last four digits,
+/// and left "last4" beside it nothing to take but a placeholder.
+@Test func standInNumbersNeverKeepTheRealEnding() {
+    // Seeds that drew a stand-in card ending in 9119 before the fix.
+    for seed in [49_799, 78_379, 94_800] + Array(UInt64(0)..<2_000) {
+        let job = Job(seed: seed)
+        let card = job.replacement(for: "CREDIT_CARD", original: "4831860760789119")
+        let last4 = job.replacement(for: "LAST_DIGITS", original: "9119")
+        #expect(!card.hasSuffix("9119"), "seed \(seed): \(card)")
+        #expect(last4.count == 4 && last4.allSatisfy(\.isNumber) && last4 != "9119", "seed \(seed): \(last4)")
+    }
+}
+
+@Test func lastDigitsFollowTheCardNotAPhoneEndingAlike() {
+    // The phone is replaced first and ends as the card does.
+    for seed in UInt64(0)..<200 {
+        let job = Job(seed: seed)
+        _ = job.replacement(for: "PHONE_NUMBER", original: "(646) 380-5792")
+        let card = job.replacement(for: "CREDIT_CARD", original: "4937337937055792")
+        let last4 = job.replacement(for: "LAST_DIGITS", original: "5792")
+        #expect(card.hasSuffix(last4), "seed \(seed): \(card) \(last4)")
+    }
+}
+
+@Test func anchoredPatternsMatchAFullScan() {
+    // The secret patterns are tried only where a match can start; any text
+    // must give the matches a scan of every position gives. The pieces include
+    // a key name split by a value's end, a Kelvin sign and a long s (which
+    // fold to "k" and "s"), non-ASCII spaces, backticks and quotes.
+    let pieces = ["password", "PassWord", "token", "to\u{212A}en", "\u{017F}ecret", "api_key", "session-id", "my", ":", "=", "::", " ", "  ", "    ", "\u{00A0}", "\"", "'", "`", ",", ";", "\n",
+                  "abcd", "x9Kq2", "hunter2hunter2", "mytoken", "Bearer ", "bearer ", "sk_live_", "pk_test_", "ghp_", "github_pat_", "AKIA", "IOSFODNN7EXAMPLE1234", "xoxb-", "eyJ", ".", "-",
+                  "-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----", "Zq81mN0pLs7Tt3Rw9vYx", "é", "日本"]
+    var gen = Gen(seed: 2_026)
+    var texts = ["password=mytoken :wxyz", "token:   'abcd", "private_key\"   =   \"wxyz", "session_id=   \"", "Passphrase   :abcd", "secret: \"abcd`\" token=abcdefgh`", "Authorization: Bearer abcdefghijklmnop0123", "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----"]
+    texts += (0..<3_000).map { _ in (0..<gen.int(1...40)).map { _ in gen.choose(pieces) }.joined() }
+    for regex in Patterns.compiled.map(\.1) where Patterns.starts.keys.contains(where: regex.pattern.hasPrefix) {
+        for text in texts {
+            let units = Array(text.utf16), ns = text as NSString
+            let anchored = Patterns.matches(regex, in: ns, units: units, isCancelled: { false }).map(\.range)
+            let scanned = regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map(\.range)
+            #expect(anchored == scanned, "\(regex.pattern.prefix(20)) on \(text.debugDescription)")
+        }
+    }
+}

@@ -1,0 +1,98 @@
+{
+  "addressLookAlikes" : {
+    "cases" : 40,
+    "passed" : 34
+  },
+  "birthDates" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "birthYears" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "companiesWithoutPeople" : {
+    "cases" : 40,
+    "passed" : 25
+  },
+  "datesNotBirths" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "employersOfPeople" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "extensionLookAlikes" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "handlesInProse" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "headersWithoutPeople" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "labelledIDs" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "labelsWithoutValues" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "mailHeaders" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "nonLatinNames" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "nonLatinNotNames" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "phoneExtensions" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "placesInProse" : {
+    "cases" : 40,
+    "passed" : 28
+  },
+  "poBoxes" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "secretWordsNotSecrets" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "secretsInProse" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "stackedAddresses" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "titledNames" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "titlesWithoutPeople" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "worldAddresses" : {
+    "cases" : 40,
+    "passed" : 40
+  },
+  "yearsNotBirths" : {
+    "cases" : 40,
+    "passed" : 40
+  }
+}

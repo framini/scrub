@@ -15,7 +15,8 @@ public enum XMLFile: FileFormat {
         guard document.dtd == nil else { throw ScrubError.unsupported("xml_doctype") }
         guard document.rootElement() != nil else { throw ScrubError.unsupported("invalid_xml") }
         var leaves: [DocumentLeaf] = []
-        var nodes: [XMLNode] = []
+        // Each value's nodes: one, or the text nodes of an element with inline elements, read as one (see `inline`).
+        var nodes: [[XMLNode]] = []
         var valueIDs: [Int] = []
         var namedNodes: [XMLNode] = []
         var nameIDs: [Int] = []
@@ -23,9 +24,18 @@ public enum XMLFile: FileFormat {
         func local(_ name: String?) -> String? { name?.split(separator: ":").last.map(String.init) }
         func add(_ node: XMLNode, key: String?, records: [Int], words: Set<String>) {
             guard let value = node.stringValue, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-            nodes.append(node)
+            nodes.append([node])
             valueIDs.append(leaves.count)
             leaves.append(DocumentLeaf(value, key: key, records: records, contextWords: words))
+        }
+        /// Text split by inline elements ("<i>Odal</i>ys Ferriter wrote…") read as one value: its
+        /// pieces joined by `Visible.joint`, which detection reads through and stand-ins keep.
+        func addJoined(_ texts: [XMLNode], key: String?, records: [Int], words: Set<String>) {
+            let values = texts.map { $0.stringValue ?? "" }
+            guard values.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return }
+            nodes.append(texts)
+            valueIDs.append(leaves.count)
+            leaves.append(DocumentLeaf(values.joined(separator: Visible.joint), key: key, records: records, contextWords: words))
         }
         func addName(_ node: XMLNode, records: [Int]) {
             guard let name = node.name else { return }
@@ -57,13 +67,8 @@ public enum XMLFile: FileFormat {
                         elementKey = pair[position]
                     }
                 }
-                if let name = local(element.name), KeyHints.fieldValueKeys.contains(KeyHints.words(name).joined()) {
-                    let siblingTexts: [(String, String)] = ((element.parent as? XMLElement)?.children ?? []).prefix(64).compactMap { node in
-                        guard let sibling = node as? XMLElement, sibling !== element, sibling.childCount <= 1, let name = local(sibling.name) else { return nil }
-                        return (name, sibling.stringValue ?? "")
-                    }
-                    elementKey = KeyHints.namedField(name, siblings: siblingTexts) ?? elementKey
-                }
+                elementKey = Self.labelledField(element) ?? elementKey
+                if KeyHints.hint(elementKey) == nil, let part = Self.namePart(element) { elementKey = part }
                 func key(_ name: String?, resolved: String?, parent: String?, value: String?, siblings: @autoclosure () -> [String]) -> String? {
                     if KeyHints.isBareName(name), KeyHints.isBareName(resolved), let value, !KeyHints.bareNameIsPerson(value, siblings: siblings(), parent: parent) { return nil }
                     return resolved
@@ -82,16 +87,73 @@ public enum XMLFile: FileFormat {
                     let resolved = local(attribute.name).flatMap { KeyHints.namedField($0, siblings: attributeTexts) } ?? KeyHints.resolve(local(attribute.name), parent: elementKey)
                     add(attribute, key: key(local(attribute.name), resolved: resolved, parent: local(element.name), value: attribute.stringValue, siblings: names(element)), records: ancestry, words: words)
                 }
-                for child in element.children ?? [] {
-                    if child is XMLElement { try walk(child, records: ancestry, keys: currentKeys, parentKey: elementKey) }
-                    else {
-                        if child.kind == .processingInstruction { addName(child, records: ancestry) }
-                        // <attribute name="email">…</attribute> names its own text.
-                        let attributeTexts = (element.attributes ?? []).compactMap { a in local(a.name).map { ($0, a.stringValue ?? "") } }
-                        let named = attributeTexts.first { KeyHints.fieldNameKeys.contains(KeyHints.words($0.0).joined()) }.flatMap { KeyHints.header($0.1) }
-                        add(child, key: child.kind == .text ? key(local(element.name), resolved: KeyHints.hint(elementKey) == nil ? named ?? elementKey : elementKey, parent: keys.last, value: child.stringValue, siblings: names(element.parent as? XMLElement)) : nil, records: records.isEmpty ? ancestry : records, words: words)
+                // The inline elements' names and attributes are read as any; their text with the element's.
+                func readNames(within node: XMLNode) {
+                    for child in node.children ?? [] {
+                        guard let inner = child as? XMLElement else {
+                            if child.kind == .comment || child.kind == .processingInstruction {
+                                if child.kind == .processingInstruction { addName(child, records: ancestry) }
+                                add(child, key: nil, records: ancestry, words: words)
+                            }
+                            continue
+                        }
+                        readInline(inner)
                     }
                 }
+                func readInline(_ inner: XMLElement) {
+                    addName(inner, records: ancestry)
+                    for attribute in inner.attributes ?? [] {
+                        addName(attribute, records: ancestry)
+                        add(attribute, key: KeyHints.resolve(local(attribute.name), parent: elementKey), records: ancestry, words: words)
+                    }
+                    readNames(within: inner)
+                }
+                // <attribute name="email">…</attribute> names its own text.
+                let attributeTexts = (element.attributes ?? []).compactMap { a in local(a.name).map { ($0, a.stringValue ?? "") } }
+                let named = attributeTexts.first { KeyHints.fieldNameKeys.contains(KeyHints.words($0.0).joined()) }.flatMap { KeyHints.header($0.1) }
+                let textKey = KeyHints.hint(elementKey) == nil ? named ?? elementKey : elementKey
+                let textRecords = records.isEmpty ? ancestry : records
+                func addRun(_ texts: [XMLNode]) {
+                    let joined = texts.map { $0.stringValue ?? "" }.joined()
+                    addJoined(texts, key: key(local(element.name), resolved: textKey, parent: keys.last, value: joined, siblings: names(element.parent as? XMLElement)), records: textRecords, words: words)
+                }
+                if let texts = Self.inline(element) {
+                    readNames(within: element)
+                    addRun(texts)
+                    return
+                }
+                func read(_ child: XMLNode) throws {
+                    if child is XMLElement { return try walk(child, records: ancestry, keys: currentKeys, parentKey: elementKey) }
+                    if child.kind == .processingInstruction { addName(child, records: ancestry) }
+                    add(child, key: child.kind == .text ? key(local(element.name), resolved: textKey, parent: keys.last, value: child.stringValue, siblings: names(element.parent as? XMLElement)) : nil, records: textRecords, words: words)
+                }
+                // Text beside fields: each run of it between them is read as one with
+                // the formatting inside it ("Spoke with <i>Odal</i>ys … <password>…"),
+                // and each field under its own name.
+                var run: [XMLNode] = [], texts: [XMLNode] = []
+                func flush() throws {
+                    defer { run = []; texts = [] }
+                    let own = run.contains { $0.kind == .text && !($0.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                    if own, texts.count > 1, texts.count <= 512, run.contains(where: { $0 is XMLElement }) {
+                        for case let inner as XMLElement in run { readInline(inner) }
+                        addRun(texts)
+                    } else {
+                        for node in run { try read(node) }
+                    }
+                }
+                for child in element.children ?? [] {
+                    if let inner = child as? XMLElement, !Self.namesField(inner), let inside = Self.texts(in: inner, depth: 1) {
+                        run.append(inner)
+                        texts += inside
+                    } else if child.kind == .text, !(child.stringValue ?? "").contains(Visible.joint) {
+                        run.append(child)
+                        texts.append(child)
+                    } else {
+                        try flush()
+                        try read(child)
+                    }
+                }
+                try flush()
             } else {
                 if node.kind == .processingInstruction { addName(node, records: []) }
                 add(node, key: nil, records: [], words: [])
@@ -99,90 +161,262 @@ public enum XMLFile: FileFormat {
         }
         for child in document.children ?? [] { try walk(child, records: [], keys: [], parentKey: nil) }
         progress(.finding, 0, leaves.count)
-        let values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection)
+        // A name's own long digits ("order_48213907") are drawn first, namespaces
+        // first, as any value's: the same number written in a value is then theirs.
+        let order = namedNodes.indices.filter { namedNodes[$0].kind == .namespace } + namedNodes.indices.filter { namedNodes[$0].kind != .namespace }
+        let drawn = JSONFile.drawDigits(order.map { leaves[nameIDs[$0]].text }, job: job)
+        var values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
+        let records = leaves.map(\.lastRecord)
         progress(.finding, leaves.count, leaves.count)
-        var markedValues: [(String, String)] = []
-        for (index, node) in nodes.enumerated() {
-            let value = values[valueIDs[index]]
-            if node.stringValue != value.text { node.stringValue = value.text }
-            for mark in value.marks { markedValues.append((TextRanges.substring(value.text, mark.range), mark.entity)) }
-        }
-        let unresolved = values.flatMap(\.unresolved)
         progress(.checking, 0, 1)
-        let originalNames = Set(namedNodes.compactMap(\.name))
-        var usedNames = originalNames
-        var renamedNames: [String: String] = [:]
-        var prefixes: [String: String] = [:]
-        func safeName(_ local: String, original: String, prefix: String? = nil) -> String {
-            let candidate = prefix.map { $0 + ":" + local } ?? local
-            guard candidate != original else { return original }
-            var value = String(local.filter { $0.isASCII && ($0.isLetter || $0.isNumber || "-_.".contains($0)) })
-            if value.first.map({ !$0.isLetter && $0 != "_" }) ?? true { value = "n" + value }
-            let base = value
-            var qualified = prefix.map { $0 + ":" + value } ?? value
-            var counter = 2
-            while usedNames.contains(qualified) && qualified != original {
-                value = base + String(counter)
-                qualified = prefix.map { $0 + ":" + value } ?? value
-                counter += 1
-            }
-            usedNames.insert(qualified)
-            return qualified
-        }
-        func renamed(_ name: String, value: DocumentValue) -> String {
-            var candidate = value.marks.isEmpty ? name : value.text
-            let (numbered, _) = JSONFile.replaceDigits(candidate, job: job)
-            candidate = numbered
-            for person in job.gazetteer["PERSON"] ?? [] {
+        // An element's or an attribute's name, read as a value: its own long digits,
+        // as drawn above, and a person's name written into it ("OdalysFerriter",
+        // "odalys_ferriter") are replaced here, once, namespaces first; each writing of the file then
+        // names the node from the value as edits and choices leave it. A name so
+        // written is a handle of its person's, so their edits and a person keeping
+        // it as written reach it.
+        var rewritten: [String: (String, [Mark])] = [:]
+        func rewrite(_ own: String) -> (String, [Mark]) {
+            if let known = rewritten[own] { return known }
+            let (digits, numbers) = JSONFile.replaceDigits(own, drawn: drawn)
+            var candidate = digits as NSString
+            var marks = numbers
+            // In a fixed order: a stand-in drawn here, or one name's replacement
+            // reaching into another's, must not follow a set's hash order.
+            for person in (job.gazetteer["PERSON"] ?? []).sorted() {
                 let parts = person.split(separator: " ")
                 guard parts.count == 2 else { continue }
                 let camel = String(parts[0]) + String(parts[1])
                 let snake = parts.joined(separator: "_").lowercased()
-                guard candidate.localizedCaseInsensitiveContains(camel) || candidate.localizedCaseInsensitiveContains(snake) else { continue }
+                guard (candidate as String).localizedCaseInsensitiveContains(camel) || (candidate as String).localizedCaseInsensitiveContains(snake) else { continue }
                 let fake = job.replacement(for: "PERSON", original: person).split(separator: " ").map { $0.filter { $0.isASCII && $0.isLetter } }
                 guard fake.count == 2 else { continue }
-                candidate = candidate.replacingOccurrences(of: camel, with: fake.joined(), options: .caseInsensitive)
-                    .replacingOccurrences(of: snake, with: fake.joined(separator: "_").lowercased(), options: .caseInsensitive)
+                for (form, written) in [(camel, fake.joined()), (snake, fake.joined(separator: "_").lowercased())] {
+                    var from = 0
+                    while from < candidate.length {
+                        let found = candidate.range(of: form, options: .caseInsensitive, range: NSRange(location: from, length: candidate.length - from))
+                        guard found.location != NSNotFound else { break }
+                        let original = candidate.substring(with: found)
+                        _ = job.variant(original, fake: written, entity: "USERNAME", source: person)
+                        candidate = candidate.replacingCharacters(in: found, with: written) as NSString
+                        let range = found.location..<(found.location + (written as NSString).length)
+                        // Earlier marks after it move with it.
+                        marks = marks.map { $0.range.lowerBound >= found.location + found.length ? $0.moved(to: ($0.range.lowerBound + range.count - found.length)..<($0.range.upperBound + range.count - found.length)) : $0 }
+                        marks.append(Mark(range: range, entity: "USERNAME", original: original))
+                        from = range.upperBound
+                    }
+                }
             }
-            return candidate
+            let made = (candidate as String, marks.sorted { $0.range.lowerBound < $1.range.lowerBound })
+            rewritten[own] = made
+            return made
         }
-        for (index, node) in namedNodes.enumerated() where node.kind == .namespace {
-            guard let name = node.name else { continue }
-            let replacement = renamedNames[name] ?? safeName(renamed(name, value: values[nameIDs[index]]), original: name)
-            renamedNames[name] = replacement
-            if replacement != name { prefixes[name] = replacement; node.name = replacement; markedValues.append((replacement, "PERSON")) }
-        }
-        for (index, node) in namedNodes.enumerated() where node.kind != .namespace {
-            guard let name = node.name else { continue }
-            let pieces = name.split(separator: ":", maxSplits: 1).map(String.init)
-            let candidate: String
-            if let existing = renamedNames[name] {
-                candidate = existing
-            } else if pieces.count == 2 {
-                let prefix = prefixes[pieces[0]] ?? pieces[0]
-                let raw = renamed(name, value: values[nameIDs[index]])
-                let local = raw.split(separator: ":").last.map(String.init) ?? raw
-                candidate = safeName(local, original: name, prefix: prefix)
-            } else {
-                candidate = safeName(renamed(name, value: values[nameIDs[index]]), original: name)
+        for index in order { values[nameIDs[index]] = JSONFile.rewritingOwnText(values[nameIDs[index]], with: rewrite) }
+        let originalNames = namedNodes.map(\.name)
+        let takenNames = Set(originalNames.compactMap { $0 })
+        /// Each node named from its value as `values` write it: a valid XML name
+        /// no other node holds, or its own name where the value is as written.
+        func name(_ values: [DocumentValue]) -> [(String, String, Bool)] {
+            var marked: [(String, String, Bool)] = []
+            var usedNames = takenNames
+            // The local names of the nodes renamed: what a repaired name may never become.
+            let renamedOriginals = Set(order.compactMap { index in
+                originalNames[index].flatMap { name in values[nameIDs[index]].text == name ? nil : (name.split(separator: ":").last.map(String.init) ?? name).lowercased() }
+            })
+            var renamedNames: [String: String] = [:]
+            var prefixes: [String: String] = [:]
+            func safeName(_ local: String, original: String, prefix: String? = nil) -> String {
+                let candidate = prefix.map { $0 + ":" + local } ?? local
+                guard candidate != original else { return original }
+                let squeezed = Review.squeezed(local)
+                let own = (original.split(separator: ":").last.map(String.init) ?? original).lowercased()
+                // What a name is made valid or told apart with never spells an original:
+                // "123" for <n123> is not written <n123>, nor "n12" beside an <n12> as <n123>.
+                func safe(_ value: String) -> Bool {
+                    let folded = value.lowercased()
+                    return !(folded.contains(own) && !squeezed.lowercased().contains(own)) && !renamedOriginals.contains(folded)
+                }
+                let starts = squeezed.first.map({ !$0.isLetter && $0 != "_" }) ?? true ? ["n", "x", "v", "k", "q"].map { $0 + squeezed } : [squeezed]
+                var counter = 1
+                while true {
+                    for base in starts {
+                        let value = counter == 1 ? base : base + String(counter)
+                        let qualified = prefix.map { $0 + ":" + value } ?? value
+                        guard !usedNames.contains(qualified), safe(value) else { continue }
+                        usedNames.insert(qualified)
+                        return qualified
+                    }
+                    counter += 1
+                }
             }
-            renamedNames[name] = candidate
-            if candidate != name { node.name = candidate; markedValues.append((candidate, "PERSON")) }
+            for index in order {
+                let node = namedNodes[index], value = values[nameIDs[index]]
+                guard let name = originalNames[index] else { continue }
+                // One name written the same way is one name, wherever it stands.
+                let seen = name + "\u{0}" + value.text
+                let replacement: String
+                if let known = renamedNames[seen] {
+                    replacement = known
+                } else if node.kind == .namespace {
+                    replacement = safeName(value.text, original: name)
+                } else if let colon = name.firstIndex(of: ":") {
+                    let prefix = String(name[..<colon])
+                    let local = value.text.split(separator: ":").last.map(String.init) ?? value.text
+                    replacement = safeName(local, original: name, prefix: prefixes[prefix] ?? prefix)
+                } else {
+                    replacement = safeName(value.text, original: name)
+                }
+                renamedNames[seen] = replacement
+                if replacement != name {
+                    if node.kind == .namespace { prefixes[name] = replacement }
+                    // Each stand-in as the name writes it, so a click on one reaches its finding.
+                    let pieces = value.marks.map { (Review.squeezed(TextRanges.substring(value.text, $0.range)), $0.entity, $0.byHand) }
+                        .filter { !$0.0.isEmpty && replacement.contains($0.0) }
+                    let mark = value.marks.first
+                    marked += pieces.isEmpty ? [(replacement, mark?.entity ?? "PERSON", mark?.byHand ?? false)] : pieces
+                }
+                if node.name != replacement { node.name = replacement }
+            }
+            return marked
         }
-        var output = job.counts.isEmpty ? text : XMLSerialization.render(document)
-        output = output.replacingOccurrences(of: #"^<\?xml(?=\s)[\s\S]*?\?>\s*"#, with: "", options: .regularExpression)
-        if declarationEnd(in: source) != nil, let end = text.range(of: "?>") { output = String(text[..<end.upperBound]) + "\n" + output }
-        guard try parses(Data(output.utf8)) else { throw ScrubError.unsupported("internal") }
-        var marks: [Mark] = []
-        for (value, entity) in markedValues where !value.isEmpty {
-            for range in TextRanges.ranges(of: value, in: output, options: []) where !marks.contains(where: { $0.range.overlaps(range) }) { marks.append(Mark(range: range, entity: entity)) }
+        func render(_ values: [DocumentValue], counts: [String: Int]) throws -> ScrubResult {
+            var markedValues: [(String, String, Bool)] = []
+            for (index, group) in nodes.enumerated() {
+                let value = values[valueIDs[index]]
+                if group.count == 1 {
+                    if group[0].stringValue != value.text { group[0].stringValue = value.text }
+                } else {
+                    // Parted where they were joined; were a joint ever lost, the text goes whole into the first piece.
+                    let pieces = value.text.components(separatedBy: Visible.joint)
+                    let written = pieces.count == group.count ? pieces : [pieces.joined()] + Array(repeating: "", count: group.count - 1)
+                    for (node, piece) in zip(group, written) where node.stringValue != piece { node.stringValue = piece }
+                }
+                for mark in value.marks { markedValues.append((TextRanges.substring(value.text, mark.range).replacingOccurrences(of: Visible.joint, with: ""), mark.entity, mark.byHand)) }
+            }
+            markedValues += name(values)
+            let unresolved = values.flatMap(\.unresolved)
+            var output = counts.isEmpty ? text : XMLSerialization.render(document)
+            output = output.replacingOccurrences(of: #"^<\?xml(?=\s)[\s\S]*?\?>\s*"#, with: "", options: .regularExpression)
+            if declarationEnd(in: source) != nil, let end = text.range(of: "?>") { output = String(text[..<end.upperBound]) + "\n" + output }
+            guard try parses(Data(output.utf8)) else { throw ScrubError.unsupported("internal") }
+            var marks: [Mark] = []
+            for (value, entity, byHand) in markedValues where !value.isEmpty {
+                for range in TextRanges.ranges(of: value, in: output, options: []) where !marks.contains(where: { $0.range.overlaps(range) }) { marks.append(Mark(range: range, entity: entity, byHand: byHand)) }
+            }
+            marks.sort { $0.range.lowerBound < $1.range.lowerBound }
+            let length = (output as NSString).length
+            let limit = min(length, 200_000)
+            return ScrubResult(format: "xml", output: Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: counts, unresolved: unresolved)
         }
-        marks.sort { $0.range.lowerBound < $1.range.lowerBound }
+        var result = try render(values, counts: job.counts)
+        result.review = Review(values: values, counts: job.counts, records: records, people: job.personLinks(), squeezed: Set(nameIDs), render: render)
         progress(.checking, 1, 1)
-        let length = (output as NSString).length
-        let limit = min(length, 200_000)
-        return ScrubResult(format: "xml", output: Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: job.counts, unresolved: unresolved)
+        return result
     }
+    /// The text nodes of an element whose text runs around inline elements
+    /// ("<note><i>Oda</i>lys Ferriter wrote…</note>", "<name><b>Odal</b>ys</name>"),
+    /// in document order; nil for any other element. It holds text of its own
+    /// beside its elements, and those hold only text and such elements, a few
+    /// levels deep, so a record's fields (<first>, <last> under <person>) are
+    /// each still read under their own name. So is a field beside text of
+    /// the record's own ("<account>Active<password>…</password></account>"):
+    /// only formatting and elements that name no field are read through. Then
+    /// each run of text between the fields is read whole on its own instead.
+    static func inline(_ element: XMLElement) -> [XMLNode]? {
+        let children = element.children ?? []
+        guard children.contains(where: { $0 is XMLElement }),
+              children.contains(where: { $0.kind == .text && !($0.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+              let texts = texts(in: element, depth: 0), texts.count > 1 else { return nil }
+        return texts
+    }
+    /// The text nodes inside an element, in document order, when it holds
+    /// only text and elements that name no field, at most four levels down
+    /// from `depth`; nil otherwise.
+    static func texts(in element: XMLElement, depth: Int) -> [XMLNode]? {
+        var texts: [XMLNode] = []
+        func collect(_ node: XMLNode, depth: Int) -> Bool {
+            guard depth <= 4 else { return false }
+            for child in node.children ?? [] {
+                if let inner = child as? XMLElement {
+                    guard !namesField(inner), collect(inner, depth: depth + 1) else { return false }
+                } else if child.kind == .text {
+                    // A text that already holds a joint could not be parted again.
+                    guard !(child.stringValue ?? "").contains(Visible.joint) else { return false }
+                    texts.append(child)
+                }
+                if texts.count > 512 { return false }
+            }
+            return true
+        }
+        return collect(element, depth: depth) ? texts : nil
+    }
+    /// Elements that format a run of text, which a word may be split across.
+    private static let phrasing: Set<String> = ["a", "abbr", "b", "bdi", "bdo", "big", "br", "cite", "code", "data", "del", "dfn", "em", "emphasis", "font", "i", "ins", "kbd",
+                                                "mark", "q", "s", "samp", "small", "span", "strike", "strong", "sub", "sup", "time", "tt", "u", "var", "wbr"]
+    /// Whether an element names a field of its own, which keeps its own key
+    /// whatever text sits beside it: an attribute says what it holds
+    /// (<field name="ssn">, <data key="password">, even on formatting), or
+    /// its name does ("password", "nationalId", "customer_id", "manager"),
+    /// or an element beside it does (<name>ssn</name><value>…</value>), as
+    /// it would with no text around. Formatting with none of these never does.
+    static func namesField(_ element: XMLElement) -> Bool {
+        guard let name = element.name?.split(separator: ":").last.map(String.init) else { return false }
+        let named = (element.attributes ?? []).contains { attribute in
+            guard let key = attribute.name?.split(separator: ":").last.map(String.init) else { return false }
+            return KeyHints.fieldNameKeys.contains(KeyHints.words(key).joined()) && KeyHints.header(attribute.stringValue ?? "") != nil
+        }
+        if named || labelledField(element) != nil { return true }
+        if phrasing.contains(name.lowercased()) { return false }
+        // A bare <name> in a sentence ("Ms <name>Brisa V…</name> called") names a product as
+        // often as a person, so it is read with the words around it, which tell which; under
+        // a record of a person ("<customer>Active<name>…") it is that person's, as it is anywhere.
+        if KeyHints.isBareName(name) {
+            guard let parent = element.parent as? XMLElement, let parentName = parent.name?.split(separator: ":").last.map(String.init) else { return false }
+            let siblings = ((parent.attributes ?? []) + (parent.children ?? []).filter { $0 is XMLElement && $0 !== element }).compactMap { $0.name?.split(separator: ":").last.map(String.init) }
+            return KeyHints.isPersonsRecord(siblings: siblings, parent: parentName)
+        }
+        return KeyHints.hint(name) != nil || RecordIDs.isPersonKey(name) || KeyHints.isRole(name)
+    }
+    /// The field a value element stands for when an element beside it names
+    /// it (<name>ssn</name><value>…</value>, <value>…</value><key>password</key>),
+    /// read the same whether or not the record holds text of its own.
+    static func labelledField(_ element: XMLElement) -> String? {
+        func local(_ name: String?) -> String? { name?.split(separator: ":").last.map(String.init) }
+        guard let name = local(element.name), KeyHints.fieldValueKeys.contains(KeyHints.words(name).joined()) else { return nil }
+        let siblings: [(String, String)] = ((element.parent as? XMLElement)?.children ?? []).prefix(64).compactMap { node in
+            guard let sibling = node as? XMLElement, sibling !== element, sibling.childCount <= 1, let name = local(sibling.name) else { return nil }
+            return (name, sibling.stringValue ?? "")
+        }
+        return KeyHints.namedField(name, siblings: siblings)
+    }
+    /// What a <first>, <last>, <given>, <middle> or <family> element is read as
+    /// when it holds part of a name ("<person><first>Odalys</first><last>Ferriter</last>"):
+    /// its value is written as a name, and its record is a person's, it sits
+    /// beside the other part written as a name, or the value is a known name.
+    /// Elsewhere (`<first>true</first>`, `<first>2024-01-01</first>`) it is no name.
+    static func namePart(_ element: XMLElement) -> String? {
+        func local(_ name: String?) -> String? { name?.split(separator: ":").last.map(String.init) }
+        func part(_ element: XMLElement) -> String? {
+            local(element.name).flatMap { namePartKeys[KeyHints.words($0).joined()] }
+        }
+        func value(_ element: XMLElement) -> String? {
+            guard element.childCount == 1, element.children?.first?.kind == .text else { return nil }
+            let value = (element.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let words = value.split(separator: " ")
+            guard (1...3).contains(words.count), words.allSatisfy({ word in
+                word.first?.isUppercase == true && word.allSatisfy { $0.isLetter || "'’.-".contains($0) }
+                    && !NameShape.months.contains(word.lowercased()) && !NameShape.weekdays.contains(word.lowercased())
+            }), KeyHints.fits("first_name", value) else { return nil }
+            return value
+        }
+        guard let own = part(element), let written = value(element), let parent = element.parent as? XMLElement else { return nil }
+        let siblings = (parent.children ?? []).compactMap { $0 as? XMLElement }.filter { $0 !== element }
+        if KeyHints.isPersonsRecord(siblings: siblings.compactMap { local($0.name) }, parent: local(parent.name)) { return own }
+        if siblings.contains(where: { sibling in part(sibling).map { $0 != own } == true && value(sibling) != nil }) { return own }
+        let known = written.lowercased().split { !$0.isLetter }.contains { Names.firstFolded.contains(String($0)) || Names.lastFolded.contains(String($0)) }
+        return known ? own : nil
+    }
+    private static let namePartKeys = ["first": "first_name", "given": "first_name", "middle": "middle_name", "last": "last_name", "family": "last_name"]
     static func parses(_ data: Data) throws -> Bool {
         guard let source = try? decodeXML(data) else { return false }
         let text = normalizedDeclaration(source)

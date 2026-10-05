@@ -2,3 +2,24 @@
 build/
 .DS_Store
 .swiftpm/
+
+# Name model training scratch
+Tools/NameModel/.venv/
+Tools/NameModel/*.jsonl
+Tools/NameModel/prose.txt
+Tools/NameModel/__pycache__/
+Sources/ScrubCore/Resources/*.pt
+Tools/ContextModel/.venv/
+Tools/ContextModel/__pycache__/
+Tools/ContextModel/*.jsonl
+Tools/ContextModel/prose.txt
+Tools/ContextModel/pruned/
+Tools/ContextModel/checkpoint/
+
+# Address model training scratch
+Tools/AddressModel/.venv/
+Tools/AddressModel/raw/
+Tools/AddressModel/data/
+Tools/AddressModel/__pycache__/
+Sources/ScrubCore/Resources/AddressModel.bin.pt
+Sources/ScrubCore/Resources/AddressModelWide.bin.pt

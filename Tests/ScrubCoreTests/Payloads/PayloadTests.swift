@@ -28,7 +28,7 @@ struct PayloadProperties {
                 let found: [Finding]
                 do {
                     let result = try Scrubber.scrub(Data(rendered.text.utf8), name: rendering.filename, forceFullDetection: false, seed: run.seed(index))
-                    found = Judge.judge(payload, rendered, output: result.output)
+                    found = Judge.judge(payload, rendered, output: result.output) + Judge.componentLeaks(payload, rendered, output: result.output)
                 } catch {
                     found = [Finding(problem: "error", rendering: rendering.rawValue, truth: "-", key: "-", parent: "-", detail: "\(error)")]
                 }

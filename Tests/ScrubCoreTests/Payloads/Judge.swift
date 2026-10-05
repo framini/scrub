@@ -1,4 +1,5 @@
 import Foundation
+import ScrubTestSupport
 @testable import ScrubCore
 
 struct Finding: Hashable {
@@ -144,6 +145,15 @@ enum Judge {
             if original.text.contains(":") { return output.contains(":") ? nil : "not an IPv6 address" }
             return output.range(of: #"^\d{1,3}(\.\d{1,3}){3}$"#, options: .regularExpression) != nil ? nil : "not an IPv4 address"
         case .username: return output.isEmpty || output.contains(" ") ? "not a username" : nil
+        case .recordID:
+            // Its type prefix and its shape stay, so joins still work.
+            // A type prefix is letters before "_" or "-": "cus_", "E-"; a UUID has none.
+            let prefix = { (s: String) -> String in
+                let letters = String(s.prefix { $0.isLetter })
+                guard let next = s.dropFirst(letters.count).first, "_-".contains(next), !letters.isEmpty else { return "" }
+                return letters + String(next)
+            }
+            return prefix(original.text) == prefix(output) && mask(original.text) == mask(output) ? nil : "not an ID shaped like \(original.text)"
         case .lastDigits, .initials: return mask(original.text) == mask(output) ? nil : "shape \(mask(original.text)) → \(mask(output))"
         case .age: return Int(output).map { (0...120).contains($0) } == true ? nil : "not an age"
         case .region:
@@ -273,7 +283,8 @@ enum Judge {
             // Short values that turn up anywhere by chance are judged where they sit.
             if [.lastDigits, .age, .initials, .unit].contains(kind) { return nil }
             if kind == .dobYear || kind == .ssnLast4 || kind == .zip {
-                return output.range(of: #"(?<!\d)"# + NSRegularExpression.escapedPattern(for: value) + #"(?!\d)"#, options: .regularExpression) != nil ? value : nil
+                // Every IPv6 stand-in starts "2001:db8:", the documentation prefix: no birth year of 2001.
+                return output.range(of: #"(?<!\d)"# + NSRegularExpression.escapedPattern(for: value) + #"(?!\d|:db8:)"#, options: .regularExpression) != nil ? value : nil
             }
             if kind.isName || kind == .city || kind == .region {
                 // Stand-ins come from the same lists; only a word no stand-in uses proves a leak.
@@ -298,6 +309,25 @@ enum Judge {
         if kind == .street, let name = value.split(separator: " ", maxSplits: 1).last,
            output.range(of: String(name), options: .caseInsensitive) != nil { return String(name) }
         return nil
+    }
+
+    /// Parts of personal values still in the output, judged from the
+    /// generator's truth alone (see `ComponentLeaks`): a name's word, an
+    /// email's local part, a number's digits or its last four.
+    static func componentLeaks(_ payload: PNode, _ rendered: Rendered, output: Data) -> [Finding] {
+        let planted = payload.leaves().compactMap { leaf -> ComponentLeaks.Planted? in
+            guard case .pii(let kind) = leaf.leaf.truth else { return nil }
+            switch kind {
+            case .fullName, .firstName, .lastName, .middleName: return .init(leaf.leaf.text, kind: .name)
+            case .email: return .init(leaf.leaf.text, kind: .email)
+            case .phone, .ssn, .taxID, .card, .account, .license, .passport: return .init(leaf.leaf.text, kind: .number)
+            case .username, .recordID: return .init(leaf.leaf.text, kind: .other)
+            default: return nil
+            }
+        }
+        return ComponentLeaks.leaks(planted, input: rendered.text, output: String(decoding: output, as: UTF8.self)).map { part in
+            Finding(problem: "componentLeak", rendering: rendered.rendering.rawValue, truth: "-", key: "-", parent: "-", detail: "still has \(part)")
+        }
     }
 
     static func jsonValue(_ value: JSONValue, at path: [Int]) -> JSONValue? {

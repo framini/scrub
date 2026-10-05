@@ -105,7 +105,9 @@ struct ProcessingView: View {
     private var percent: Int {
         switch stage {
         case .starting: 4
-        case .finding: total > 0 ? 10 + 80 * done / total : 10
+        // Finding starts at 10 and ends at 90; reading free text closely fills most of the way between.
+        case .finding: total > 0 && done == total ? 90 : 10
+        case .reading: total > 0 ? 10 + 75 * done / total : 10
         case .checking: 95
         }
     }

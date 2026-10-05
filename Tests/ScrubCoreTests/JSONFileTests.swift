@@ -162,7 +162,8 @@ func orderedJSONFixtureOutput(_ name: String) throws {
     let data = try Data(contentsOf: #require(Bundle.module.url(forResource: "customers", withExtension: "json")))
     let result = try Scrubber.scrub(data, name: "customers.json")
     let rows = try #require(JSONSerialization.jsonObject(with: result.output) as? [[String: Any]])
-    #expect(rows[0]["id"] as? String == "cus_1")
+    // A customer's ID names them: a stand-in of its shape ("cus_" and one digit).
+    #expect((rows[0]["id"] as? String).map { $0 != "cus_1" && $0.range(of: #"^cus_\d$"#, options: .regularExpression) != nil } == true, "\(rows[0])")
     #expect(rows[0]["plan"] as? String == "enterprise")
     #expect(!String(decoding: result.output, as: UTF8.self).contains("robert.mitchell@acme-corp.com"))
     #expect(result.counts.values.reduce(0, +) > 0)
@@ -264,4 +265,20 @@ func bareNameKeyNeedsAPersonRecord(_ input: String, _ replaced: Bool) throws {
         #expect(output.range(of: #""\#(key)": "\d{9,11}""#, options: .regularExpression) != nil)
     }
     #expect(output.range(of: #""locality": "[^"]+""#, options: .regularExpression).map { !output[$0].contains("San Francisco") && !output[$0].contains(" Hill") } == true)
+}
+
+@Test func jsonIsWrittenInTimeLinearInItsLengthWhateverItHolds() throws {
+    // A character outside ASCII early on ("Café Lumen"), then many numbers, each set where it is written.
+    func time(_ count: Int) throws -> Duration {
+        let text = #"{"venue":"Café Lumen","readings":["# + (0..<count).map { (index: Int) -> String in String(1000 + index) }.joined(separator: ",") + "]}"
+        let value = try OrderedJSON.parse(text)
+        let clock = ContinuousClock()
+        let started = clock.now
+        let (output, _) = OrderedJSON.render(value)
+        #expect(output.contains("Café Lumen"))
+        return clock.now - started
+    }
+    let short = try time(4_000), long = try time(32_000)
+    // Eight times the numbers take about eight times as long; measured afresh each time, sixty-four.
+    #expect(long < short * 16 + .milliseconds(500), "\(short) then \(long)")
 }

@@ -38,16 +38,18 @@ enum OrderedJSON {
     static func render(_ value: JSONValue, valueMarks: [String: [Mark]] = [:], keyMarks: [String: [Mark]] = [:]) -> (String, [Mark]) {
         var output = ""
         var marks: [Mark] = []
-        func write(_ text: String) { output += text }
+        // The output's length in UTF-16, kept as it grows: measured afresh, it costs the whole output each time.
+        var length = 0
+        func write(_ text: String) { output += text; length += text.utf16.count }
         func writeString(_ value: String, _ source: [Mark]) {
             if source.isEmpty { write(quote(value)); return }
             write("\"")
             var cursor = 0
             for mark in source.sorted(by: { $0.range.lowerBound < $1.range.lowerBound }) where mark.range.lowerBound >= cursor {
                 write(String(quote(TextRanges.substring(value, cursor..<mark.range.lowerBound)).dropFirst().dropLast()))
-                let start = (output as NSString).length
+                let start = length
                 write(String(quote(TextRanges.substring(value, mark.range)).dropFirst().dropLast()))
-                marks.append(Mark(range: start..<(output as NSString).length, entity: mark.entity))
+                marks.append(Mark(range: start..<length, entity: mark.entity, byHand: mark.byHand))
                 cursor = mark.range.upperBound
             }
             write(String(quote(TextRanges.substring(value, cursor..<(value as NSString).length)).dropFirst().dropLast()))
@@ -78,9 +80,9 @@ enum OrderedJSON {
                 write(String(repeating: "  ", count: depth) + "]")
             case .string(let string): writeString(string, valueMarks[path] ?? [])
             case .number(let number):
-                let start = (output as NSString).length
+                let start = length
                 write(number)
-                for mark in valueMarks[path] ?? [] { marks.append(Mark(range: (start + mark.range.lowerBound)..<(start + mark.range.upperBound), entity: mark.entity)) }
+                for mark in valueMarks[path] ?? [] { marks.append(Mark(range: (start + mark.range.lowerBound)..<(start + mark.range.upperBound), entity: mark.entity, byHand: mark.byHand)) }
             case .bool(let bool): write(bool ? "true" : "false")
             case .null: write("null")
             }
