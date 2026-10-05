@@ -32,11 +32,18 @@ public enum CSVFile: FileFormat {
         // A flattened name under a business, a product or an app ("application.name") is no
         // one's, unless the columns beside it under the same object make it a person's own
         // ("application.dob"): then it is read as a bare "name" is in JSON.
+        // The object a column sits under: its path before the last dot, so a field of several
+        // words ("application.date_of_birth") is one field; without a dot, all but its last word.
+        func parent(_ column: Int) -> [String] {
+            let header = columns[column]
+            if let dot = header.lastIndex(of: ".") { return KeyHints.words(String(header[..<dot])) }
+            return Array(KeyHints.words(header).dropLast())
+        }
         let owned: [Int: [String]] = Dictionary(uniqueKeysWithValues: columns.indices.compactMap { column in
-            let parts = KeyHints.words(columns[column])
-            guard parts.count >= 2, KeyHints.isBareName(parts.last), KeyHints.hint(keys[column]) == nil,
-                  KeyHints.isNotPeople(parts.dropLast().joined(separator: "_")) else { return nil }
-            let siblings = columns.indices.filter { other in other != column && KeyHints.words(columns[other]).dropLast().elementsEqual(parts.dropLast()) }
+            let parts = KeyHints.words(columns[column]), under = parent(column)
+            guard parts.count >= 2, !under.isEmpty, KeyHints.isBareName(parts.last), KeyHints.hint(keys[column]) == nil,
+                  KeyHints.isNotPeople(under.joined(separator: "_")) else { return nil }
+            let siblings = columns.indices.filter { other in other != column && parent(other) == under }
             return siblings.isEmpty ? nil : (column, siblings.map { keys[$0] })
         })
         for row in rows.indices {

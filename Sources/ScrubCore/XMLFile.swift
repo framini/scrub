@@ -168,11 +168,14 @@ public enum XMLFile: FileFormat {
         // An element's or an attribute's name, read as a value: its own long digits
         // and a person's name written into it ("OdalysFerriter", "odalys_ferriter")
         // are replaced here, once, namespaces first; each writing of the file then
-        // names the node from the value as edits and choices leave it.
-        var rewritten: [String: String] = [:]
-        func rewrite(_ own: String) -> String {
+        // names the node from the value as edits and choices leave it. A name so
+        // written is a handle of its person's, so their edits and a person keeping
+        // it as written reach it.
+        var rewritten: [String: (String, [Mark])] = [:]
+        func rewrite(_ own: String) -> (String, [Mark]) {
             if let known = rewritten[own] { return known }
-            var candidate = JSONFile.replaceDigits(own, job: job).0
+            var candidate = JSONFile.replaceDigits(own, job: job).0 as NSString
+            var marks: [Mark] = []
             // In a fixed order: a stand-in drawn here, or one name's replacement
             // reaching into another's, must not follow a set's hash order.
             for person in (job.gazetteer["PERSON"] ?? []).sorted() {
@@ -180,14 +183,28 @@ public enum XMLFile: FileFormat {
                 guard parts.count == 2 else { continue }
                 let camel = String(parts[0]) + String(parts[1])
                 let snake = parts.joined(separator: "_").lowercased()
-                guard candidate.localizedCaseInsensitiveContains(camel) || candidate.localizedCaseInsensitiveContains(snake) else { continue }
+                guard (candidate as String).localizedCaseInsensitiveContains(camel) || (candidate as String).localizedCaseInsensitiveContains(snake) else { continue }
                 let fake = job.replacement(for: "PERSON", original: person).split(separator: " ").map { $0.filter { $0.isASCII && $0.isLetter } }
                 guard fake.count == 2 else { continue }
-                candidate = candidate.replacingOccurrences(of: camel, with: fake.joined(), options: .caseInsensitive)
-                    .replacingOccurrences(of: snake, with: fake.joined(separator: "_").lowercased(), options: .caseInsensitive)
+                for (form, written) in [(camel, fake.joined()), (snake, fake.joined(separator: "_").lowercased())] {
+                    var from = 0
+                    while from < candidate.length {
+                        let found = candidate.range(of: form, options: .caseInsensitive, range: NSRange(location: from, length: candidate.length - from))
+                        guard found.location != NSNotFound else { break }
+                        let original = candidate.substring(with: found)
+                        _ = job.variant(original, fake: written, entity: "USERNAME", source: person)
+                        candidate = candidate.replacingCharacters(in: found, with: written) as NSString
+                        let range = found.location..<(found.location + (written as NSString).length)
+                        // Earlier marks after it move with it.
+                        marks = marks.map { $0.range.lowerBound >= found.location + found.length ? $0.moved(to: ($0.range.lowerBound + range.count - found.length)..<($0.range.upperBound + range.count - found.length)) : $0 }
+                        marks.append(Mark(range: range, entity: "USERNAME", original: original))
+                        from = range.upperBound
+                    }
+                }
             }
-            rewritten[own] = candidate
-            return candidate
+            let made = (candidate as String, marks.sorted { $0.range.lowerBound < $1.range.lowerBound })
+            rewritten[own] = made
+            return made
         }
         let order = namedNodes.indices.filter { namedNodes[$0].kind == .namespace } + namedNodes.indices.filter { namedNodes[$0].kind != .namespace }
         for index in order { values[nameIDs[index]] = JSONFile.rewritingOwnText(values[nameIDs[index]], with: rewrite) }
@@ -203,7 +220,7 @@ public enum XMLFile: FileFormat {
             func safeName(_ local: String, original: String, prefix: String? = nil) -> String {
                 let candidate = prefix.map { $0 + ":" + local } ?? local
                 guard candidate != original else { return original }
-                var value = String(local.filter { $0.isASCII && ($0.isLetter || $0.isNumber || "-_.".contains($0)) })
+                var value = Review.squeezed(local)
                 if value.first.map({ !$0.isLetter && $0 != "_" }) ?? true { value = "n" + value }
                 let base = value
                 var qualified = prefix.map { $0 + ":" + value } ?? value
@@ -273,7 +290,7 @@ public enum XMLFile: FileFormat {
             return ScrubResult(format: "xml", output: Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: counts, unresolved: unresolved)
         }
         var result = try render(values, counts: job.counts)
-        result.review = Review(values: values, counts: job.counts, records: records, people: job.personLinks(), render: render)
+        result.review = Review(values: values, counts: job.counts, records: records, people: job.personLinks(), squeezed: Set(nameIDs), render: render)
         progress(.checking, 1, 1)
         return result
     }

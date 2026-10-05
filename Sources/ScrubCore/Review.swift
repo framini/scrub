@@ -122,6 +122,9 @@ final class Review: @unchecked Sendable {
     private let records: [Int?]
     /// Values written as bare numbers (a JSON number), which only a number may replace.
     let numeric: Set<Int>
+    /// Values written as an XML name, which keeps only some of a value's
+    /// characters (see `squeezed(_:)`): what is written there is read so too.
+    let squeezed: Set<Int>
     /// The people the scrub drew names for, and for each finding of a name,
     /// or of an email, username or initials built from one, whose it is.
     let people: PersonLinks
@@ -137,12 +140,13 @@ final class Review: @unchecked Sendable {
     static func matchKey(_ text: String, entity: String) -> String { caseSensitive.contains(entity) ? text : text.lowercased() }
 
     /// `records` holds the record each value sits in, when the file has records.
-    init(values: [DocumentValue], counts: [String: Int], records: [Int?] = [], people: PersonLinks = PersonLinks(), numeric: Set<Int> = [], render: @escaping ([DocumentValue], [String: Int]) throws -> ScrubResult) {
+    init(values: [DocumentValue], counts: [String: Int], records: [Int?] = [], people: PersonLinks = PersonLinks(), numeric: Set<Int> = [], squeezed: Set<Int> = [], render: @escaping ([DocumentValue], [String: Int]) throws -> ScrubResult) {
         self.values = values
         self.counts = counts
         self.render = render
         self.records = records
         self.numeric = numeric
+        self.squeezed = squeezed
         self.people = people
         struct Group {
             let entity: String, original: String, standIn: String, suspected: Bool, doubt: Doubt?
