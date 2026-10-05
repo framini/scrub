@@ -259,7 +259,10 @@ final class StandIns {
             digits[digits.count - 1] = Character(String((0...9).first { Patterns.luhn(stem + [$0]) } ?? 0))
         }
         var iterator = digits.makeIterator()
-        return String(fake.map { $0.isASCII && $0.isNumber ? iterator.next() ?? $0 : $0 })
+        let ending = String(fake.map { $0.isASCII && $0.isNumber ? iterator.next() ?? $0 : $0 })
+        // An identifier's check outranks its ending: a stand-in drawn for it stays one (see `identifierStandIn`, which draws around the ending).
+        if let recognizer = Recognizers.recognizing(original), recognizer.passes(fake), !recognizer.passes(ending) { return fake }
+        return ending
     }
     /// Notes a value others may be read off, under every scope it sits in:
     /// a number's ending, and a birth date's year and day. Called for every
@@ -1056,7 +1059,7 @@ final class StandIns {
         if let identity, let written = reused(identity, original) { fake = written }
         if fake == original {
             for _ in 0..<16 {
-                guard let made = Recognizers.standIn(for: original, using: &rng) else { break }
+                guard let made = identifierStandIn(original) else { break }
                 if lead(made) { fake = made; break }
             }
         }
@@ -1065,6 +1068,18 @@ final class StandIns {
         assigned[key] = fake
         if let identity, identity.recognizer.passes(fake), assigned[identity.key] == nil { assigned[identity.key] = String(identity.recognizer.kept(fake)) }
         return fake
+    }
+    /// A fresh identifier of `original`'s kind whose last four digits can be written as a
+    /// number where its original's are ("last4": 4725): no zero leads them.
+    private func identifierStandIn(_ original: String) -> String? {
+        let real = original.filter { $0.isASCII && $0.isNumber }
+        let bare = real.count >= 7 && bareEndings.contains(String(real.suffix(4)))
+        var made: String?
+        for _ in 0..<16 {
+            made = Recognizers.standIn(for: original, using: &rng)
+            guard bare, let drawn = made, drawn.filter({ $0.isASCII && $0.isNumber }).dropLast(3).last == "0" else { break }
+        }
+        return made
     }
     /// The stand-in the same identifier took written another way, in this one's layout.
     private func reused(_ identity: (recognizer: Recognizer, key: String), _ original: String) -> String? {
@@ -1146,7 +1161,7 @@ final class StandIns {
     private static let digitsOnly: Set<String> = ["PHONE_NUMBER", "US_SSN", "ID_NUMBER", "POSTAL_CODE", "US_BANK_NUMBER", "US_PASSPORT", "US_DRIVER_LICENSE", "US_ITIN", "MEDICAL_LICENSE"]
     private func make(_ entity: String, _ original: String, _ persona: Persona?, _ place: Place? = nil) -> String {
         // An identifier the registry knows takes a fresh one passing the same check, as a form validating it would ask.
-        if Recognizers.entities.contains(entity), let made = Recognizers.standIn(for: original, using: &rng) { return made }
+        if Recognizers.entities.contains(entity), let made = identifierStandIn(original) { return made }
         // An address typed all in lowercase is read and rewritten as if cased, and lowercased again.
         if entity == "ADDRESS", let cased = AddressBlock.cased(original) { return make(entity, cased, persona, place).lowercased() }
         if let masked = ["US_SSN", "CREDIT_CARD", "PHONE_NUMBER", "US_BANK_NUMBER", "ID_NUMBER", "LAST_DIGITS"].contains(entity) ? masked(original) : nil { return masked }

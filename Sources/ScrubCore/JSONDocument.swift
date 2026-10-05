@@ -32,7 +32,32 @@ final class JSONDocument {
         func add(_ source: JSONSource, records: [Int] = [], key: String? = nil) -> JSONDocument {
             let document = JSONDocument(source)
             collect(document, source.root, key: key, path: "", records: records, keys: key.map { [$0] } ?? [], depth: 0)
+            identifyNumbers()
             return document
+        }
+        /// A number no key names, kept until its whole field is read.
+        private struct BareNumber {
+            let document: JSONDocument
+            let path: String
+            let number: String
+            let key: String?
+            let records: [Int]
+            let field: String
+        }
+        private var bareNumbers: [BareNumber] = []
+        /// Numbers no key names, read by field as strings are (see `Fields.column`): a field of
+        /// them nearly all passing one identifier's check holds that identifier, written as numbers.
+        private func identifyNumbers() {
+            defer { bareNumbers = [] }
+            for column in Dictionary(grouping: bareNumbers, by: \.field).values {
+                guard let recognizer = Fields.column(column.map(\.number)) else { continue }
+                for item in column where Recognizers.candidates(item.number).contains(where: { $0.name == recognizer.name }) {
+                    item.document.valueIDs[item.path] = leaves.count
+                    var leaf = DocumentLeaf(item.number, key: item.key, records: item.records, numericEntity: recognizer.entity)
+                    leaf.field = item.field
+                    leaves.append(leaf)
+                }
+            }
         }
 
         /// Keys whose value says what kind of thing a record's other values are ("type": "CPR").
@@ -85,17 +110,33 @@ final class JSONDocument {
                 }
                 document.valueIDs[path] = leaves.count
                 var leaf = DocumentLeaf(string, key: key, records: records, contextWords: Set(keys.flatMap { KeyHints.words($0) }))
-                leaf.kindWords = typed
+                leaf.namingWords = Self.naming(keys, typed)
                 leaf.field = keys.joined(separator: ".")
                 leaves.append(leaf)
             case .number(let number):
-                guard let entity = JSONFile.numericEntity(key: key, number: number, context: Set(keys.flatMap { KeyHints.words($0) }).union(typed)) else { break }
+                guard let entity = JSONFile.numericEntity(key: key, number: number, context: Self.naming(keys, typed)) else {
+                    if (7...20).contains(number.count), number.allSatisfy({ $0.isASCII && $0.isNumber }) {
+                        bareNumbers.append(BareNumber(document: document, path: path, number: number, key: key, records: records, field: keys.joined(separator: ".")))
+                    }
+                    break
+                }
                 document.valueIDs[path] = leaves.count
                 var leaf = DocumentLeaf(number, key: key, records: records, numericEntity: entity)
                 leaf.field = keys.joined(separator: ".")
                 leaves.append(leaf)
             default: break
             }
+        }
+        /// Keys that only hold a value, naming nothing of their own ("number", "id_value").
+        private static let slots: Set<String> = ["number", "num", "no", "nr", "value", "val", "id", "identifier", "ident", "code", "digits", "text", "data", "document", "doc"]
+        /// The words that may name an identifier under `keys`: the innermost key's, and where it
+        /// is only a slot, those of the keys around it and of its record's kind field. A batch
+        /// number under "medicare" is a batch's; "medicare": {"number": …} is the card's.
+        static func naming(_ keys: [String], _ typed: Set<String>) -> Set<String> {
+            guard let own = keys.last else { return typed }
+            let words = KeyHints.words(own)
+            guard !words.isEmpty, words.allSatisfy(slots.contains) else { return Set(words) }
+            return Set(keys.flatMap { KeyHints.words($0) }).union(typed)
         }
         /// The document a string writes: itself when it opens as one, or what its base64 decodes to.
         private static func document(in string: String) -> (String, Bool)? {

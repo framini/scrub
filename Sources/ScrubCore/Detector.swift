@@ -40,13 +40,14 @@ public final class Detector {
     /// already holds stand-ins: the model reads the words around each one, so
     /// it would judge the stand-ins' context rather than the original's.
     /// `context` holds the context model's reading of the text, whose findings fill only what nothing else found.
-    func base(_ text: String, key: String? = nil, contextWords: Set<String> = [], modelled: Bool = true, context: ContextStage.Reading? = nil) -> [Span] {
+    /// `naming`: the words that may name an identifier in `text`, where they are fewer than `contextWords` (see `DocumentLeaf.namingWords`).
+    func base(_ text: String, key: String? = nil, contextWords: Set<String> = [], naming: Set<String>? = nil, modelled: Bool = true, context: ContextStage.Reading? = nil) -> [Span] {
         autoreleasepool {
             doubts = []
             foundLinks = nil
             // A person a reading detector found, cut to what a name can hold (see NameShape).
             // A rule's person keeps its words, but not the verb that opens its sentence ("Call Odalys").
-            var spans = found(text, key: key, contextWords: contextWords, modelled: modelled, context: context).compactMap { span in
+            var spans = found(text, key: key, contextWords: contextWords, naming: naming, modelled: modelled, context: context).compactMap { span in
                 span.entity != "PERSON" ? span : span.score < 0.95 ? NameShape.trimmed(span, in: text) : NameShape.withoutCommand(span, in: text)
             }
             // A literal of the code or JSON around a value ("livemode": false, None) is no one, whatever a model reads.
@@ -106,8 +107,8 @@ public final class Detector {
         return [Span(range: name, entity: "PERSON", score: spans.map(\.score).max() ?? 1)]
     }
     /// What `base` finds, and the people it doubts.
-    func read(_ text: String, key: String? = nil, contextWords: Set<String> = [], context: ContextStage.Reading? = nil) -> (spans: [Span], doubts: [Span]) {
-        let spans = base(text, key: key, contextWords: contextWords, context: context)
+    func read(_ text: String, key: String? = nil, contextWords: Set<String> = [], naming: Set<String>? = nil, context: ContextStage.Reading? = nil) -> (spans: [Span], doubts: [Span]) {
+        let spans = base(text, key: key, contextWords: contextWords, naming: naming, context: context)
         return (spans, doubts)
     }
     /// Doubted people cut to what a name holds, outside every finding and
@@ -158,7 +159,7 @@ public final class Detector {
         }
         return [Span(range: 0..<(text as NSString).length, entity: entity, score: 1)]
     }
-    private func found(_ text: String, key: String?, contextWords: Set<String>, modelled: Bool, context: ContextStage.Reading?) -> [Span] {
+    private func found(_ text: String, key: String?, contextWords: Set<String>, naming: Set<String>?, modelled: Bool, context: ContextStage.Reading?) -> [Span] {
         do {
             if let keyed = Self.keyed(text, key: key) { return keyed }
             if KeyHints.isRole(key), let name = Self.writtenName(text) { return [Span(range: name, entity: "PERSON", score: 1)] }
@@ -167,7 +168,8 @@ public final class Detector {
             let plainWord = text.allSatisfy { $0.isASCII && $0.isLowercase }
                 && !Names.firstFolded.contains(text) && !Names.lastFolded.contains(text)
             guard !plainWord else { return [] }
-            var spans = Patterns.find(text, contextWords: Set(KeyHints.words(key)).union(contextWords), isCancelled: isCancelled).compactMap { span in
+            let keyWords = Set(KeyHints.words(key))
+            var spans = Patterns.find(text, contextWords: keyWords.union(contextWords), naming: naming.map(keyWords.union), isCancelled: isCancelled).compactMap { span in
                 span.entity == "ADDRESS" ? Self.addressRange(span.range, in: text as NSString).map { Span(range: $0, entity: span.entity, score: span.score) } : span
             }
             spans.append(contentsOf: Self.spelledByEmail(spans, in: text, isCancelled: isCancelled))

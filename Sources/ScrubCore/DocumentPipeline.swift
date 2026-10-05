@@ -9,9 +9,10 @@ struct DocumentLeaf: Sendable {
     /// The records this value sits in, innermost first.
     var enclosing: [Int] { records.all.reversed() }
     let contextWords: Set<String>
-    /// The words its record's kind field writes ("type": "CPR"): they name an identifier
-    /// among its values for the detectors, and say nothing about whose record it is.
-    var kindWords: Set<String> = []
+    /// The words that may name an identifier it holds: its own key's, and where that key is
+    /// only a slot ("number", "value") those of the keys around it and of its record's kind
+    /// field ("type": "CPR"). Nil where every context word may. They say nothing about whose record it is.
+    var namingWords: Set<String>?
     let numericEntity: String?
     /// A column header or similar label: read for patterns only, since the name
     /// model takes words like "Dob" for places.
@@ -700,7 +701,7 @@ enum DocumentPipeline {
                     if leaf.numericEntity != nil || KeyHints.hint(leaf.key) != nil && !leaf.text.isEmpty { local.append(nil) }
                     else if leaf.fieldName { local.append(Patterns.find(leaf.seen, isCancelled: { cancelled.isSet })) }
                     else {
-                        let read = detector.read(leaf.seen, key: leaf.key, contextWords: leaf.contextWords.union(leaf.kindWords), context: context[index])
+                        let read = detector.read(leaf.seen, key: leaf.key, contextWords: leaf.contextWords, naming: leaf.namingWords, context: context[index])
                         local.append(read.spans)
                         if !read.doubts.isEmpty { doubts.append((index, read.doubts)) }
                     }

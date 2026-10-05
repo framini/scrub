@@ -130,7 +130,7 @@ enum Recognizers {
             return c + [rfcDigit(c[...])]
         }),
         Recognizer("CODICE_FISCALE", keys: ["codicefiscale", "fiscalcode"], forms: [
-            .init(#"(?i)\b(?:[A-Z][AEIOU][AEIOUX]|[AEIOU]X{2}|[B-DF-HJ-NP-TV-Z]{2}[A-Z]){2}[\dLMNP-V]{2}[A-EHLMPR-T](?:[04LQ][1-9MNP-V]|[15MR][\dLMNP-V]|[26NS][0-8LMNP-U]|[37PT][01LM])[A-MZ][1-9MNP-V][\dLMNP-V]{2}[A-Z]\b"#, 0.6, alone: true),
+            .init(#"(?i)\b(?:[A-Z][AEIOU][AEIOUX]|[AEIOU]X{2}|[B-DF-HJ-NP-TV-Z]{2}[A-Z]){2}[\dLMNP-V]{2}[A-EHLMPR-T](?:[04LQ][1-9MNP-V]|[15MR][\dLMNP-V]|[26NS][0-8LMNP-U]|[37PT][01LM])[A-MZ][\dLMNP-V]{3}[A-Z]\b"#, 0.6, alone: true),
         ], context: ["codice", "fiscale", "cf"], check: { characters in
             characters.count == 16 && fiscalLetter(characters[0..<15]) == characters[15]
         }, draw: { _, rng in
@@ -254,9 +254,17 @@ enum Recognizers {
         }),
         Recognizer("CPR", keys: ["cpr", "cprnummer", "cprnumber"], forms: [
             .init(#"\b(?:0[1-9]|[12]\d|3[01])(?:0[1-9]|1[0-2])\d{2}-\d{4}\b"#, 0.1),
+            .init(#"\b(?:0[1-9]|[12]\d|3[01])(?:0[1-9]|1[0-2])\d{6}\b"#, 0.05),
         ], context: ["cpr", "personnummer"], verifies: false, check: { characters in
             guard let d = numbers(characters), d.count == 10 else { return false }
-            return realDate(year: 1900 + d[4] * 10 + d[5], month: d[2] * 10 + d[3], day: d[0] * 10 + d[1])
+            // The century is read off the year and the seventh digit, as the CPR register writes it.
+            let year = d[4] * 10 + d[5]
+            let century = switch d[6] {
+            case 0...3: 1900
+            case 4, 9: year <= 36 ? 2000 : 1900
+            default: year <= 57 ? 2000 : 1800
+            }
+            return realDate(year: century + year, month: d[2] * 10 + d[3], day: d[0] * 10 + d[1])
         }, draw: { _, rng in
             let date = randomDate(&rng)
             return characters(twoDigits(date.day) + twoDigits(date.month) + twoDigits(date.year % 100) + randomDigits(4, &rng))
@@ -363,13 +371,13 @@ enum Recognizers {
             d.append(tcknTenth(d))
             return characters(d + [d.reduce(0, +) % 10])
         }),
-        Recognizer("NRIC", keys: ["nric", "nricno", "nricnumber", "nricfin"], forms: [
-            .init(#"\b[STFG]\d{7}[A-Z]\b"#, 0.3),
+        Recognizer("NRIC", keys: ["nric", "nricno", "nricnumber", "nricfin", "finnumber"], forms: [
+            .init(#"\b[STFGM]\d{7}[A-Z]\b"#, 0.3),
         ], context: ["nric", "fin"], check: { characters in
             guard characters.count == 9, let d = numbers(Array(characters[1..<8])) else { return false }
             return nricLetter(characters[0], d) == characters[8]
-        }, draw: { _, rng in
-            let lead = pick("ST", &rng)
+        }, draw: { like, rng in
+            let lead = like.first.map { "STFGM".contains($0) ? $0 : "S" } ?? pick("ST", &rng)
             let d = randomDigits(7, &rng)
             return [lead] + characters(d) + [nricLetter(lead, d) ?? "A"]
         }),
@@ -511,7 +519,7 @@ enum Recognizers {
         }),
         Recognizer("EPIC", keys: ["epicnumber", "voterid", "voteridnumber", "votercardnumber"], forms: [
             .init(#"\b[A-Z]{3}\d{7}\b"#, 0.3),
-        ], context: ["voter", "epic", "elector"], verifies: false, check: { $0.count == 10 }, draw: { _, rng in
+        ], context: ["voter", "elector", "epic number", "epic card"], verifies: false, check: { $0.count == 10 }, draw: { _, rng in
             [pick(letters, &rng), pick(letters, &rng), pick(letters, &rng)] + characters(randomDigits(7, &rng))
         }),
         Recognizer("THAI_ID", keys: ["thaiid", "thainationalid"], forms: [
@@ -584,8 +592,9 @@ enum Recognizers {
         }),
         Recognizer("ETHEREUM", entity: "CRYPTO", keys: ["ethaddress", "ethereumaddress"], forms: [
             .init(#"\b0x[0-9a-fA-F]{40}\b"#, 0.3),
-        ], context: ["wallet", "eth", "ethereum", "crypto"], folds: false, verifies: true, separators: "", check: { $0.count == 42 }, draw: { _, rng in
-            Array("0x") + (0..<40).map { _ in pick("0123456789abcdef", &rng) }
+        // Its check is its length: a 20-byte hash is written the same way, so it is named or not one.
+        ], context: ["wallet", "eth", "ethereum", "crypto"], folds: false, verifies: false, separators: "", check: { $0.count == 42 }, draw: { like, rng in
+            Array("0x") + like.dropFirst(2).map { $0.isNumber ? pick(digits, &rng) : $0.isUppercase ? pick("ABCDEF", &rng) : pick("abcdef", &rng) }
         }),
         Recognizer("MAC_ADDRESS", keys: ["macaddress", "macaddr", "hardwareaddress", "bssid", "wifimac", "devicemac"], forms: [
             .init(#"(?<![0-9A-Fa-f:-])[0-9A-Fa-f]{2}([:-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:-])"#, 0.6, alone: true),
@@ -631,6 +640,8 @@ enum Recognizers {
     private static func standIn(for original: String, as recognizer: Recognizer, using rng: inout any RandomNumberGenerator) -> String? {
         let kept = recognizer.kept(original.trimmingCharacters(in: .whitespaces))
         let fits = { (characters: [Character]) -> Bool in
+            // No zero leads one whose original had none: the same identifier may be written as a JSON number elsewhere.
+            guard characters.first != "0" || kept.first == "0" else { return false }
             let written = write(characters, like: original, recognizer)
             return recognizer.passes(written) && recognizer.writes(written.trimmingCharacters(in: .whitespaces))
         }
@@ -798,10 +809,12 @@ enum Recognizers {
     private static func verhoeffDigit(_ body: [Int]) -> Int { (0...9).first { verhoeff(body + [$0]) == 0 } ?? 0 }
 
     private static func nricLetter(_ lead: Character, _ digits: [Int]) -> Character? {
-        let sum = zip(digits, [2, 7, 6, 5, 4, 3, 2]).reduce(0) { $0 + $1.0 * $1.1 } + ("TG".contains(lead) ? 4 : 0)
+        let sum = zip(digits, [2, 7, 6, 5, 4, 3, 2]).reduce(0) { $0 + $1.0 * $1.1 } + ("TG".contains(lead) ? 4 : lead == "M" ? 3 : 0)
         switch lead {
         case "S", "T": return Array("JZIHGFEDCBA")[sum % 11]
         case "F", "G": return Array("XWUTRQPNMLK")[sum % 11]
+        // Issued from 2022, read off its own table backwards (as the government's own forms check it).
+        case "M": return Array("KLJNPQRTUWX")[10 - sum % 11]
         default: return nil
         }
     }

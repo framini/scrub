@@ -47,7 +47,8 @@ enum Patterns {
         #"\b(?:sk|pk|rk)_"#: { units in prefixed(units, by: ["sk_", "pk_", "rk_", "gh", "github_pat_", "AKIA", "ASIA", "xox", "eyJ", "-----BEGIN "], after: ["Bearer ", "bearer "]) },
         #"(?<=(?:password|"#: { units in afterKeyedSeparator(units) },
     ]
-    static func find(_ text: String, contextWords: Set<String> = [], isCancelled: () -> Bool = { Task.isCancelled }) -> [Span] {
+    /// `naming`: the words that may name an identifier, where fewer than `contextWords`.
+    static func find(_ text: String, contextWords: Set<String> = [], naming: Set<String>? = nil, isCancelled: () -> Bool = { Task.isCancelled }) -> [Span] {
         var spans: [Span] = []
         // One UTF-16 copy for every pattern: matching a native string copies it
         // into UTF-16 on every call, and the anchored tries below make many.
@@ -83,7 +84,7 @@ enum Patterns {
             }
             for match in matches(regex, in: ns, units: units, isCancelled: isCancelled) { take(match) }
         }
-        return spans + Recognizers.find(text, ns: ns, units: units, contextWords: contextWords, isCancelled: isCancelled)
+        return spans + Recognizers.find(text, ns: ns, units: units, contextWords: naming ?? contextWords, isCancelled: isCancelled)
     }
     /// Every match a full scan finds, in order; a pattern with known start
     /// positions is tried only there.

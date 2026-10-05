@@ -202,3 +202,77 @@ private func recognizer(_ name: String) -> Recognizer? { Recognizers.all.first {
     Fields.decide(leaves, &founds)
     #expect(founds.allSatisfy { $0.isEmpty }, "\(founds)")
 }
+
+/// The value at `path` in a parsed document: a key in an object, an index in a list.
+private func value(_ root: JSONValue, _ path: String...) -> JSONValue? {
+    var node = root
+    for step in path {
+        switch node {
+        case .object(let pairs): guard let next = pairs.first(where: { $0.0 == step })?.1 else { return nil }; node = next
+        case .array(let members): guard let index = Int(step), members.indices.contains(index) else { return nil }; node = members[index]
+        default: return nil
+        }
+    }
+    return node
+}
+
+@Test func aColumnOfNumbersIsReadAsStringsAre() throws {
+    let body = #"{"rows":[{"ref":11144477735},{"ref":52998224725},{"ref":39053344705},{"ref":86288366757}]}"#
+    try check(body, gone: ["11144477735", "52998224725", "39053344705", "86288366757"]) { route, root, output in
+        for index in 0..<4 {
+            guard case .number(let made)? = value(root, "rows", String(index), "ref") else { Issue.record("\(route): not a number: \(output)"); continue }
+            #expect(Recognizers.recognizing(made)?.name == "CPF", "\(route): \(made)")
+        }
+    }
+}
+
+@Test func oneReferenceRepeatedIsOneChance() throws {
+    // "123456782" passes a nine-digit check by chance; four line items writing it are one value, not four.
+    let body = #"{"items":[{"order_id":"123456782","sku":"A1"},{"order_id":"123456782","sku":"B2"},{"order_id":"123456782","sku":"C3"},{"order_id":"123456782","sku":"D4"}]}"#
+    for route in Route.allCases {
+        let output = try route.scrub(body)
+        #expect(output.components(separatedBy: "123456782").count == 5, "\(route): \(output)")
+    }
+}
+
+@Test func hashesAreNoWallets() throws {
+    let hashes = ["0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed", "0xfb6916095ca1df60bb79ce92ce3ea74c37c5d359", "0xdbf03b407c01e7cd3cbea99509d93f8dddc8c6fb", "0xd1220a0cf47c7b9be7a2e6ba89f429762e7b9adb"]
+    let body = #"{"blocks":["# + hashes.map { #"{"parent_hash":"\#($0)"}"# }.joined(separator: ",") + "]}"
+    for route in Route.allCases {
+        let output = try route.scrub(body)
+        for hash in hashes { #expect(output.contains(hash), "\(route): \(output)") }
+    }
+}
+
+@Test func namingWordsReachOnlyASlot() throws {
+    // A batch number under "medicare" is the batch's; a work item typed "EPIC" is no voter card.
+    let body = #"{"medicare":{"batch_id":2123456701,"number":"2123456701"},"ticket":{"type":"EPIC","code":"ABC1234567"}}"#
+    for route in Route.allCases {
+        let output = try route.scrub(body)
+        #expect(output.contains(#""batch_id":2123456701"#) && output.contains("ABC1234567"), "\(route): \(output)")
+        #expect(output.components(separatedBy: "2123456701").count == 2, "\(route): the card's number stayed: \(output)")
+    }
+}
+
+@Test func checksFollowTheirRegisters() throws {
+    // Issued from 2022; the turn of the century's leap day; a birthplace code led by a zero.
+    func kinds(_ value: String) -> Set<String> { Set(Recognizers.candidates(value).map(\.name)) }
+    #expect(kinds("M1234567K").contains("NRIC") && !kinds("M1234567L").contains("NRIC"))
+    #expect(kinds("290200-4001").contains("CPR") && !kinds("290201-4001").contains("CPR"))
+    #expect(kinds("RSSMRA85T10A001V").contains("CODICE_FISCALE"))
+    let body = #"{"people":[{"type":"FIN","number":"M1234567K"},{"type":"CPR","number":"2902004001"}],"note":"codice RSSMRA85T10A001V"}"#
+    try check(body, gone: ["M1234567K", "2902004001", "RSSMRA85T10A001V"])
+}
+
+@Test func anIdentifiersStandInSurvivesEveryLaterStep() throws {
+    // Written as a string first and a number after, and beside its own last four digits.
+    for seed in UInt64(1)...24 {
+        for route in Route.allCases {
+            let output = try route.scrub(#"{"a":{"cpf":"529.982.247-25"},"b":{"cpf":52998224725},"last4":4725}"#, seed: seed)
+            guard let root = try? OrderedJSON.parse(String(output[output.firstIndex(of: "{")!...output.lastIndex(of: "}")!])),
+                  case .string(let written)? = value(root, "a", "cpf"), case .number(let number)? = value(root, "b", "cpf") else { Issue.record("\(route) \(seed): \(output)"); continue }
+            #expect(Recognizers.recognizing(written)?.name == "CPF" && Recognizers.recognizing(number)?.name == "CPF", "\(route) \(seed): \(output)")
+            #expect(written.filter(\.isNumber) == number, "\(route) \(seed): \(output)")
+        }
+    }
+}
