@@ -121,19 +121,30 @@ func csvFormulaVariantsRemainInertAfterWriting(_ cell: String) throws {
 /// read once, never once per column.
 enum WideHeaders {
     static func repeated(_ column: String, _ count: Int) -> String { Array(repeating: column, count: count).joined(separator: ",") }
-    static let distinct: String = "email," + (0..<20_000).map { (index: Int) -> String in "r\(index).application.name" }.joined(separator: ",")
-    static let all: [String] = [distinct, "application.dob," + repeated("application.name", 20_000), repeated("fields.0.value,fields.0.name", 10_000), "customer_id," + repeated("name", 20_000)]
+    /// Each shape of header `count` columns wide.
+    static func header(_ shape: String, _ count: Int) -> String {
+        switch shape {
+        case "distinct": return "email," + (0..<count).map { (index: Int) -> String in "r\(index).application.name" }.joined(separator: ",")
+        case "nested": return "application.dob," + repeated("application.name", count)
+        case "pairs": return repeated("fields.0.value,fields.0.name", count / 2)
+        default: return "customer_id," + repeated("name", count)
+        }
+    }
 }
 
-@Test(arguments: WideHeaders.all)
-func csvReadsAWideHeaderInOnePass(_ header: String) throws {
-    // A short row, so the time is the header's alone.
-    let text = header + "\nJane Roe,1984-03-02\nAn Wu,1990-01-01\n"
-    let clock = ContinuousClock()
-    let started = clock.now
-    let result = try Scrubber.scrub(Data(text.utf8), name: "wide.csv", forceFullDetection: false, seed: 9)
-    let took = clock.now - started
-    #expect(result.format == "csv")
-    // Read once per column this takes seconds; once per pair of columns, minutes.
-    #expect(took < .seconds(60), "\(header.prefix(40)): \(took)")
+@Test(arguments: ["distinct", "nested", "pairs", "flat"])
+func csvReadsAWideHeaderInOnePass(_ shape: String) throws {
+    func time(_ count: Int) throws -> Duration {
+        // A short row, so the time is the header's alone.
+        let text = WideHeaders.header(shape, count) + "\nJane Roe,1984-03-02\nAn Wu,1990-01-01\n"
+        let clock = ContinuousClock()
+        let started = clock.now
+        let result = try Scrubber.scrub(Data(text.utf8), name: "wide.csv", forceFullDetection: false, seed: 9)
+        #expect(result.format == "csv")
+        return clock.now - started
+    }
+    let narrow = try time(5_000), wide = try time(20_000)
+    // Read once per column, four times the columns take about four times as long;
+    // once per pair of columns, sixteen. A ratio holds on a busy machine where a time would not.
+    #expect(wide < narrow * 8 + .seconds(2), "\(shape): \(narrow) then \(wide)")
 }

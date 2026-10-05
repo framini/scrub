@@ -576,10 +576,17 @@ extension Review {
         let lowered = standIn.lowercased()
         // A revised finding is no longer written with its stand-in as made.
         let made = (marking.byStandIn[lowered] ?? []).filter { revisions[$0] == nil }
-        for index in made + (self.marking?.revised?.byStandIn[lowered] ?? []) {
+        var written = made + (self.marking?.revised?.byStandIn[lowered] ?? [])
+        // An XML name writes a stand-in squeezed ("Jane Roe" as <JaneRoe>): there it is still its finding's.
+        func squeezedTo(_ index: Int) -> Bool { Self.squeezed(revisions[index]?.standIn ?? findings[index].standIn).lowercased() == lowered }
+        if !squeezed.isEmpty, Self.squeezed(standIn) == standIn {
+            let known = Set(written)
+            written += findings.indices.filter { !known.contains($0) && squeezedTo($0) }
+        }
+        for index in written {
             let finding = findings[index]
             let current = revisions[index]?.standIn ?? finding.standIn
-            guard Self.matchKey(current, entity: finding.entity) == Self.matchKey(standIn, entity: finding.entity) else { continue }
+            guard Self.matchKey(current, entity: finding.entity) == Self.matchKey(standIn, entity: finding.entity) || !squeezed.isEmpty && squeezedTo(index) else { continue }
             // The same value as it reads, plainly or inside a link, whatever kind it was read as,
             // and the same person's: another person's "Odalys" is kept or edited on her own.
             let read = Self.read(finding.original), key = Self.matchKey(read, entity: finding.entity)

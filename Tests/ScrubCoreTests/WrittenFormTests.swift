@@ -24,6 +24,27 @@ import Testing
         return try result.applying(choices, marks: marks, edits: edits)
     }
 
+    // MARK: A surname with an apostrophe
+
+    @Test func aSurnamesPartAfterItsApostropheIsRefusedOnItsOwn() throws {
+        for (name, joined, part) in [("Teodoro O’Quillan", "OQuillan", "Quillan"), ("Odalys D'Ferriter", "DFerriter", "Ferriter")] {
+            let inputs = [
+                ("txt", "Ticket 4471 was opened by \(name) on Tuesday.\n"),
+                ("json", #"{"customer_name":"\#(name)","plan":"pro"}"#),
+                ("csv", "customer_name,plan\n\(name),pro\n"),
+                ("xml", "<ticket><customer_name>\(name)</customer_name><plan>pro</plan></ticket>"),
+            ]
+            for (ext, text) in inputs {
+                let result = try Self.scrub(text, ext)
+                let customer = try #require(result.findings.first { $0.original == name }, "\(ext): \(result.findings.map(\.original))")
+                for typed in ["Jane \(part)", "Jane \(joined)", "jane.\(part.lowercased())@corvane.test", "\(part) Roe"] {
+                    #expect(result.refusal(typed, for: [customer]) != nil, "\(ext): \(typed)")
+                }
+                #expect(result.refusal("Jane Roe", for: [customer]) == nil, "\(ext)")
+            }
+        }
+    }
+
     // MARK: An XML name keeps only some characters
 
     @Test func aReplacementAnElementNameWouldJoinIntoTheOriginalIsNeverWritten() throws {

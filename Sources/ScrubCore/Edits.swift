@@ -486,7 +486,9 @@ extension Review {
                 // A word read with its apostrophe left out or a space for it, as a reading of the text is too:
                 // "O’Sullivan" is "osullivan" and "o sullivan". "O" alone is no word of hers.
                 let nameWords = Review.nameWords(Visible.plain(original))
-                for word in nameWords {
+                // And a word's part after its apostrophe, on its own: "Sullivan" of "O’Sullivan".
+                let after = nameWords.compactMap { word in word.lastIndex(where: Review.apostrophes.contains).map { String(word[word.index(after: $0)...]) } }
+                for word in nameWords + after.filter({ $0.count >= 3 && $0.allSatisfy(\.isLetter) && !Review.particles.contains($0.lowercased()) }) {
                     let folded = Review.folded(word), joinings = Review.joinings(folded)
                     for read in joinings.isEmpty ? [folded] : joinings where seenWords.insert(read).inserted { words.append((read, word)) }
                 }

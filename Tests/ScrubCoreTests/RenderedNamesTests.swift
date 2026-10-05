@@ -87,6 +87,71 @@ import Testing
         #expect(try Self.keys(kept) == ["Odalys", "first_name"], "\(Self.output(kept))")
     }
 
+    // MARK: Numbers in names
+
+    /// A key's or a tag's own number, written again in the text around it,
+    /// before the name or after it, in each place a file can name a node.
+    static let numbered: [(ext: String, text: String, name: String)] = [
+        ("json", #"{"order_48213907":{"customer":"Odalys Ferriter","note":"Archived under 48213907"}}"#, "order_"),
+        ("json", #"{"note":"Archived under 48213907","order_48213907":{"customer":"Odalys Ferriter"}}"#, "order_"),
+        ("xml", "<orders><order_48213907><customer>Odalys Ferriter</customer><note>Archived under 48213907</note></order_48213907></orders>", "<order_"),
+        ("xml", #"<orders><note>Archived under 48213907</note><order ref_48213907="open"><customer>Odalys Ferriter</customer></order></orders>"#, " ref_"),
+    ]
+
+    static func parses(_ result: ScrubResult, _ ext: String) -> Bool {
+        ext == "xml" ? XMLParser(data: result.output).parse() : (try? JSONSerialization.jsonObject(with: result.output)) != nil
+    }
+
+    @Test func aNumberInANameIsReplacedWhereverTheFileWritesIt() throws {
+        for (ext, text, name) in Self.numbered {
+            let result = try Self.scrub(text, ext)
+            let output = Self.output(result)
+            #expect(!output.contains("48213907"), "\(ext): \(output)")
+            let number = try #require(result.findings.first { $0.original == "48213907" }, "\(ext): \(result.findings.map(\.original)) \(output)")
+            // One stand-in, in the name and in the text.
+            #expect(output.contains(name + number.standIn), "\(ext): \(output)")
+            #expect(output.contains("Archived under \(number.standIn)"), "\(ext): \(output)")
+            #expect(Self.parses(result, ext))
+            // Typed back for another value, it is refused; a fresh one is not.
+            let customer = try #require(result.findings.first { $0.original == "Odalys Ferriter" })
+            #expect(result.refusal("48213907", for: [customer]) != nil, "\(ext)")
+            #expect(result.refusal("Order 48213907", for: [customer]) != nil, "\(ext)")
+            #expect(result.refusal("Jane Roe", for: [customer]) == nil, "\(ext)")
+            // Clicked where the name holds it, it is the number's finding.
+            guard case .text(let preview, let marks, _) = result.preview else { Issue.record("\(ext): no text preview"); continue }
+            let at = (preview as NSString).range(of: name + number.standIn)
+            let click = at.location + (name as NSString).length + 1
+            #expect(result.pick(in: preview, marks: marks, range: click..<click).replaced.map(\.id) == [number.id], "\(ext)")
+            // Kept as written, it is the original everywhere again; edited, the edit everywhere.
+            let kept = try result.applying(Choices(left: [number.id]))
+            #expect(Self.output(kept).contains(name + "48213907") && Self.output(kept).contains("Archived under 48213907"), "\(ext): \(Self.output(kept))")
+            let edited = try Self.edit(result, number, replacement: "55501234")
+            #expect(Self.output(edited).contains(name + "55501234") && Self.output(edited).contains("Archived under 55501234"), "\(ext): \(Self.output(edited))")
+            #expect(Self.parses(edited, ext))
+            // The same scrub, the same bytes.
+            #expect(try Self.scrub(text, ext).output == result.output)
+        }
+    }
+
+    @Test func aNumberInACSVHeaderIsReplacedWhereverTheFileWritesIt() throws {
+        for text in ["order_48213907,customer,note\n1,Odalys Ferriter,Archived under 48213907\n",
+                     "customer,note,ref 48213907\nOdalys Ferriter,Archived under 48213907,open\n"] {
+            let result = try Self.scrub(text, "csv")
+            let output = Self.output(result)
+            #expect(!output.contains("48213907"), "\(output)")
+            let number = try #require(result.findings.first { $0.original == "48213907" }, "\(result.findings.map(\.original)) \(output)")
+            #expect(output.components(separatedBy: number.standIn).count == 3, "\(output)")
+            let customer = try #require(result.findings.first { $0.original == "Odalys Ferriter" })
+            #expect(result.refusal("48213907", for: [customer]) != nil)
+            #expect(result.refusal("Jane Roe", for: [customer]) == nil)
+            let kept = try result.applying(Choices(left: [number.id]))
+            #expect(Self.output(kept).components(separatedBy: "48213907").count == 3, "\(Self.output(kept))")
+            let edited = try Self.edit(result, number, replacement: "55501234")
+            #expect(Self.output(edited).components(separatedBy: "55501234").count == 3, "\(Self.output(edited))")
+            #expect(try Self.scrub(text, "csv").output == result.output)
+        }
+    }
+
     // MARK: XML names
 
     static let tagged = "<root><Odalys>hello</Odalys><first_name>Odalys</first_name></root>"
@@ -103,6 +168,22 @@ import Testing
         let undone = try edited.applying(result.choices, marks: Marks(), edits: Edits())
         #expect(undone.output == result.output, "\(Self.output(undone))")
         #expect(try undone.applying(edited.choices, marks: edited.marks, edits: edited.edits).output == edited.output)
+    }
+
+    @Test func anEditedNameWrittenIntoAnElementNameIsStillItsFindingWhenClicked() throws {
+        let result = try Self.scrub(Self.tagged, "xml")
+        let name = try #require(result.findings.first { $0.original == "Odalys" })
+        for typed in ["Jane Roe", "Jane"] {
+            let edited = try Self.edit(result, name, replacement: typed)
+            let squeezed = typed.replacingOccurrences(of: " ", with: "")
+            #expect(Self.output(edited).contains("<\(squeezed)>hello</\(squeezed)>"), "\(Self.output(edited))")
+            guard case .text(let preview, let marks, _) = edited.preview else { Issue.record("no text preview"); continue }
+            // On the element's name, and in the field's text, the same finding.
+            for place in [(preview as NSString).range(of: "<" + squeezed + ">").location + 2, (preview as NSString).range(of: ">" + typed + "<").location + 2] {
+                let picked = edited.pick(in: preview, marks: marks, range: place..<place)
+                #expect(picked.replaced.map(\.id) == [name.id], "\(typed) at \(place): \(picked)")
+            }
+        }
     }
 
     @Test func keptAsWrittenAnElementNameIsItsOwnAgain() throws {
