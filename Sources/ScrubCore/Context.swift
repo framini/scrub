@@ -71,9 +71,10 @@ public enum KeyHints {
         ("username login handle screenname nickname", "USERNAME"),
         ("nationalid nationalidnumber nationalidentifier nationalinsurancenumber nino personalnumber personalidnumber personnummer idnumber identitynumber identitycard idcard idcardnumber governmentid identitydocument passport passportnumber passportno passportid taxid taxnumber taxpayerid tin sin socialinsurancenumber driverlicense driverslicense driverlicensenumber licensenumber driverlicence driverslicence drivinglicence drivinglicense licencenumber driverlicencenumber nif nie dni cpf curp pesel bsn aadhaar documentnumber accountnumber bankaccountnumber acctnumber accountno acctno acctnum routingnumber ein creditfilenumber cpfnumber nis nisnumber cic electorkey electornumber docnumber documentno licenseplate platenumber", "ID_NUMBER")
     ]
+    /// Every key name and the kind it hints, the registry's identifiers' keys among them (see `Recognizers`).
     private static let hints = Dictionary(uniqueKeysWithValues: groups.flatMap { names, entity in
         names.split(separator: " ").map { (String($0), entity) }
-    })
+    }).merging(Recognizers.keyNames) { listed, _ in listed }
     // Real keys qualify the field ("db_password", "webhook_secret"), so the last
     // word decides. "max_tokens" or "sort_key" name no secret and stay as they are.
     private static let secretLast: Set<String> = ["password", "passwd", "pwd", "passphrase", "secret", "token", "credential", "credentials", "cvv", "cvc", "otp"]

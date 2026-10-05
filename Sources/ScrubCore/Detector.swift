@@ -368,7 +368,7 @@ public final class Detector {
     private static func certain(_ span: Span) -> Bool {
         ["EMAIL_ADDRESS", "CREDIT_CARD", "IBAN_CODE", "IP_ADDRESS", "SECRET"].contains(span.entity) || span.entity == "US_SSN" && span.score >= 0.85
             // An identifier passing its own check, in a form chance seldom writes or named so (see `Recognizers`).
-            || span.entity == Recognizers.entity && span.score >= 0.85
+            || Recognizers.entities.contains(span.entity) && span.score >= 0.85
             // A link's part read by its key or its collection, and a person's ID by its prefix ("cus_…").
             || span.url != nil || span.entity == "RECORD_ID"
     }

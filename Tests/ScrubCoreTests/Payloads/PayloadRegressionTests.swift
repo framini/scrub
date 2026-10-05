@@ -154,7 +154,7 @@ func unixTimesAreNoPhoneNumbers(_ name: String, _ text: String) throws {
     let json = #"{"id": "vrf_8Hk2mQ9xLp1Ra", "num_family_names": 1, "email_count": 2, "total_phone_numbers": 0, "has_ssn": true, "first_name_match_score": 97, "dob_source": "credit_header", "url": "https://api.example.com/verifications/vrf_8Hk2mQ9xLp1Ra/documents/1/face.jpeg"}"#
     #expect(try scrub(json, as: "counts.json") == json)
     #expect(KeyHints.hint("customer_phone_number") == "PHONE_NUMBER" && KeyHints.hint("billing_email") == "EMAIL_ADDRESS")
-    #expect(KeyHints.hint("num_family_names") == nil && KeyHints.header("num_family_names") == nil && KeyHints.hint("company_name") == nil && KeyHints.hint("mac_address") == nil)
+    #expect(KeyHints.hint("num_family_names") == nil && KeyHints.header("num_family_names") == nil && KeyHints.hint("company_name") == nil && KeyHints.hint("mac_address") != "ADDRESS")
 }
 
 @Test func keysInPastedTextAreNoNames() throws {

@@ -1116,6 +1116,8 @@ final class StandIns {
                                              "pmb", "blk", "block", "top", "wohnung", "appt", "apto", "piso", "bureau", "sala", "bloco", "depto", "int", "escalier", "bâtiment", "plot"]
     private static let digitsOnly: Set<String> = ["PHONE_NUMBER", "US_SSN", "ID_NUMBER", "POSTAL_CODE", "US_BANK_NUMBER", "US_PASSPORT", "US_DRIVER_LICENSE", "US_ITIN", "MEDICAL_LICENSE"]
     private func make(_ entity: String, _ original: String, _ persona: Persona?, _ place: Place? = nil) -> String {
+        // An identifier the registry knows takes a fresh one passing the same check, as a form validating it would ask.
+        if Recognizers.entities.contains(entity), let made = Recognizers.standIn(for: original, using: &rng) { return made }
         // An address typed all in lowercase is read and rewritten as if cased, and lowercased again.
         if entity == "ADDRESS", let cased = AddressBlock.cased(original) { return make(entity, cased, persona, place).lowercased() }
         if let masked = ["US_SSN", "CREDIT_CARD", "PHONE_NUMBER", "US_BANK_NUMBER", "ID_NUMBER", "LAST_DIGITS"].contains(entity) ? masked(original) : nil { return masked }
@@ -1259,8 +1261,6 @@ final class StandIns {
             return kept + (0..<24).map { _ in String(pick(alphabet) ?? "a") }.joined()
         case "RECORD_ID": return recordID(like: original)
         case "ID_NUMBER", "POSTAL_CODE":
-            // A national identifier takes a fresh one that passes its check, as a form validating it would ask.
-            if entity == "ID_NUMBER", let made = Recognizers.standIn(for: original, using: &rng) { return made }
             let lead = original.firstIndex(where: \.isNumber)
             return String(original.indices.map { index in
                 let char = original[index]

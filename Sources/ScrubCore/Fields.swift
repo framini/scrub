@@ -25,6 +25,7 @@ enum Fields {
                 for index in members { founds[index] = [] }
                 continue
             }
+            identify(members, leaves, &founds)
             carry(members, leaves, &founds)
         }
     }
@@ -40,6 +41,27 @@ enum Fields {
         // Written again and again: half of them repeats, or any repeat among capitals' codes.
         let distinct = Set(values)
         return distinct.count <= 12 && (distinct.count * 2 <= values.count || distinct.count < values.count && values.allSatisfy { $0 == $0.uppercased() })
+    }
+
+    /// A field whose values nearly all pass one identifier's check holds that
+    /// identifier, though no key or word names it: four values passing even a
+    /// one-in-ten check by chance is one field in ten thousand, as a
+    /// structured analysis reads a column by what its cells are.
+    private static func identify(_ members: [Int], _ leaves: [DocumentLeaf], _ founds: inout [[Span]]) {
+        let values = members.filter { !leaves[$0].seen.trimmingCharacters(in: .whitespaces).isEmpty }
+        guard values.count >= 4 else { return }
+        var passing: [String: [Int]] = [:]
+        for index in values {
+            guard let recognizer = Recognizers.recognizing(leaves[index].seen), recognizer.verifies else { continue }
+            passing[recognizer.name, default: []].append(index)
+        }
+        guard let (name, indices) = passing.max(by: { $0.value.count < $1.value.count }), indices.count * 10 >= values.count * 9,
+              let recognizer = Recognizers.all.first(where: { $0.name == name }) else { return }
+        for index in indices {
+            let length = (leaves[index].seen as NSString).length
+            if founds[index].contains(where: { $0.range.count * 5 >= length * 4 && $0.score >= 0.85 }) { continue }
+            founds[index] = [Span(range: 0..<length, entity: recognizer.entity, score: 0.9)]
+        }
     }
 
     /// The kind most of a field's values were read as, given to those read as nothing that could be one too.
