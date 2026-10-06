@@ -56,7 +56,7 @@ public enum XMLFile: FileFormat {
                 var elementKey = KeyHints.resolve(local(element.name), parent: parentKey)
                 // A list's items take the list's key: <given><given>Anna</given></given>, <phones><item>…</item></phones>.
                 if KeyHints.hint(elementKey) == nil, KeyHints.hint(parentKey) != nil, let name = local(element.name)?.lowercased(),
-                   let container = keys.last?.lowercased(), name == container || container.hasPrefix(name) && container.count <= name.count + 2 || ["item", "entry", "element", "value", "li"].contains(name) {
+                   let container = keys.last.map({ KeyHints.words($0).joined() }), name == container || container.hasPrefix(name) && container.count <= name.count + 2 || ["item", "entry", "element", "value", "li"].contains(name) {
                     elementKey = parentKey
                 }
                 // A point listed as two numbers: <coordinates><c>-122.44</c><c>47.25</c></coordinates>.
@@ -69,6 +69,15 @@ public enum XMLFile: FileFormat {
                 }
                 elementKey = Self.labelledField(element) ?? elementKey
                 if KeyHints.hint(elementKey) == nil, let part = Self.namePart(element) { elementKey = part }
+                // A card's or a document's expiry, and a birth's date or year, by the record around them (see `KeyHints.expiry`, `KeyHints.birthField`).
+                if KeyHints.hint(elementKey) == nil, let name = local(element.name), let parent = element.parent as? XMLElement {
+                    let siblings = (parent.children ?? []).compactMap { $0 as? XMLElement }.filter { $0 !== element }
+                        .compactMap { sibling in local(sibling.name).map { ($0, (sibling.children ?? []).contains { $0 is XMLElement } ? "" : (sibling.stringValue ?? "")) } }
+                    let kind = Set(siblings.filter { ["type", "kind", "object"].contains(KeyHints.words($0.0).joined()) }.flatMap { KeyHints.words($0.1) })
+                    let text = (element.children ?? []).contains { $0 is XMLElement } ? nil : element.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let expiry = KeyHints.expiry(name, siblings: siblings.map(\.0), parent: local(parent.name), kind: kind) { elementKey = expiry }
+                    else if let born = KeyHints.birthField(name, value: text, siblings: siblings, kind: kind) { elementKey = born }
+                }
                 func key(_ name: String?, resolved: String?, parent: String?, value: String?, siblings: @autoclosure () -> [String]) -> String? {
                     if KeyHints.isBareName(name), KeyHints.isBareName(resolved), let value, !KeyHints.bareNameIsPerson(value, siblings: siblings(), parent: parent) { return nil }
                     return resolved

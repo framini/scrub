@@ -115,7 +115,7 @@ public enum JSONFile: FileFormat {
         if KeyHints.hint(key) == nil, number.allSatisfy({ $0.isASCII && $0.isNumber }), let entity = Recognizers.named(number, by: context.union(KeyHints.words(key))) { return entity }
         // A customer or patient number names them as an ID string would.
         if KeyHints.hint(key) == nil, RecordIDs.identifying(key: key, value: number), number.allSatisfy({ $0.isASCII && $0.isNumber }) { return "RECORD_ID" }
-        if let hint = KeyHints.hint(key), ["AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE"].contains(hint) { return KeyHints.fits(key, number) ? hint : nil }
+        if let hint = KeyHints.hint(key), ["AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE", "EXPIRY_DATE"].contains(hint) { return KeyHints.fits(key, number) ? hint : nil }
         // A secret written as a number, whole or not ("password": -12345, "pin": 12.50), is one;
         // a country's personal number under "pin" (6613687085361) is that identifier.
         if KeyHints.hint(key) == "SECRET" {

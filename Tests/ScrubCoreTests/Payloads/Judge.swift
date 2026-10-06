@@ -47,6 +47,8 @@ enum Judge {
             if rendered.rendering == .curl || rendered.rendering == .logLine {
                 guard let open = text.firstIndex(of: "{"), let close = text.lastIndex(of: "}") else { add("invalid", nil, "no JSON body left"); return findings }
                 body = String(text[open...close])
+                // A quote in a stand-in ("O'Brien") is written the shell's way inside a single-quoted body.
+                if rendered.rendering == .curl { body = body.replacingOccurrences(of: "'\\''", with: "'") }
             }
             guard let parsed = try? OrderedJSON.parse(body) else { add("invalid", nil, "JSON no longer parses: \(body.prefix(300))"); return findings }
             if let problem = sameShape(payload, parsed, path: "$") { add("shapeChanged", nil, problem); return findings }
@@ -162,6 +164,10 @@ enum Judge {
         case .dobDay: return Int(output).map { (1...31).contains($0) } == true ? nil : "not a day"
         case .mrz: return MRZ.misfit(original.text, output)
         case .age: return Int(output).map { (0...120).contains($0) } == true ? nil : "not an age"
+        case .expiry:
+            // A month or a year alone may change width ("6" → "11"); anything longer keeps its layout.
+            if original.text.count <= 2 { return Int(output).map { (1...99).contains($0) } == true ? nil : "not a month or a year" }
+            return mask(original.text) == mask(output) ? nil : "shape \(mask(original.text)) → \(mask(output))"
         case .region:
             let countries = { (s: String) in Set(Places.regions.filter { $0.code == s || $0.name.caseInsensitiveCompare(s) == .orderedSame }.map(\.country)) }
             guard Places.region(output) != nil else { return "not a region" }
@@ -337,7 +343,7 @@ enum Judge {
     static func leaked(_ value: String, kind: Kind, in output: String) -> String? {
         if output.range(of: value, options: [.caseInsensitive]) != nil, value.count >= 4 || kind == .dobYear {
             // Short values that turn up anywhere by chance are judged where they sit.
-            if [.lastDigits, .age, .initials, .unit].contains(kind) { return nil }
+            if [.lastDigits, .age, .initials, .unit, .expiry].contains(kind) { return nil }
             if kind == .dobYear || kind == .ssnLast4 || kind == .zip {
                 // Every IPv6 stand-in starts "2001:db8:", the documentation prefix: no birth year of 2001.
                 return output.range(of: #"(?<!\d)"# + NSRegularExpression.escapedPattern(for: value) + #"(?!\d|:db8:)"#, options: .regularExpression) != nil ? value : nil

@@ -277,6 +277,14 @@ struct LeakGate {
                 }
             }
             let key = segment.letters.lowercased()
+            // A possessive run into the name, as a slug writes it ("ashdowns-garden"): the name, its "s" kept.
+            if key.count >= 5, key.hasSuffix("s"), !lengths.contains(key.count) || parts[key] == nil && combos[key] == nil, lengths.contains(key.count - 1),
+               let part = parts[String(key.dropLast())], segment.range.count == key.count {
+                let name = segment.range.lowerBound..<(segment.range.upperBound - 1)
+                found.leaks.append(Leak(range: name, entity: plain ? "PERSON" : "USERNAME", fake: Self.cased(part.fake, like: String(segment.letters.dropLast())), source: part.source))
+                index += 1
+                continue
+            }
             if lengths.contains(key.count) {
                 if let part = parts[key] {
                     // Alone it is a name; inside a handle it is the handle's.

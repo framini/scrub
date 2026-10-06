@@ -31,7 +31,7 @@ public final class Job {
     private var kinds: [String: (entity: String, score: Double, whole: Bool)] = [:]
     /// Names and places take their stand-ins from a person or an address, and
     /// these from what they are read off; each keeps the kind it was read as.
-    private static let ownKinds: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME", "INITIALS", "LOCATION", "REGION", "POSTAL_CODE", "ADDRESS", "LATITUDE", "LONGITUDE", "COORDINATES", "AGE", "LAST_DIGITS", "TIME_ZONE"]
+    private static let ownKinds: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME", "INITIALS", "LOCATION", "REGION", "POSTAL_CODE", "ADDRESS", "LATITUDE", "LONGITUDE", "COORDINATES", "AGE", "LAST_DIGITS", "TIME_ZONE", "EXPIRY_DATE"]
     private func noteKind(_ original: String, _ span: Span, whole: Bool) {
         guard !Self.ownKinds.contains(span.entity) else { return }
         if let known = kinds[original], known.score > span.score || known.score == span.score && (known.whole || !whole) { return }
@@ -89,6 +89,8 @@ public final class Job {
                 let value = span.url.map { URLs.decode(TextRanges.substring(text, span.range), $0) } ?? TextRanges.substring(text, span.range)
                 // Replaced wherever it appears, so a name must at least have letters.
                 if span.entity != "PHONE_NUMBER", !value.contains(where: \.isLetter) { continue }
+                // An initial alone ("middleName": "A") is a letter of every word and ID: it stays where it was found.
+                if span.entity != "PHONE_NUMBER", value.filter(\.isLetter).count < 2 { continue }
                 gazetteer[span.entity, default: []].insert(value)
                 if span.entity == "PERSON" {
                     _ = standIns.people.registerFull(value)

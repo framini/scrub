@@ -152,6 +152,11 @@ public final class Detector {
     static func keyed(_ text: String, key: String?) -> [Span]? {
         guard let entity = KeyHints.hint(key), !text.isEmpty else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespaces)
+        // Someone's value hashed: a stand-in digest of its shape, never an email or a name in its place.
+        if KeyHints.digestKinds.contains(entity), KeyHints.isDigest(trimmed), let found = text.range(of: trimmed) {
+            let start = NSRange(found, in: text).location
+            return [Span(range: start..<(start + (trimmed as NSString).length), entity: "RECORD_ID", score: 1)]
+        }
         if trimmed.utf16.count <= 96, trimmed.contains(where: \.isNumber), let named = Recognizers.named(trimmed, by: Set(KeyHints.words(key))), named != entity,
            let found = text.range(of: trimmed) {
             let start = NSRange(found, in: text).location
@@ -184,6 +189,12 @@ public final class Detector {
             // A street or a house named alone is asked about, never replaced on a guess.
             doubts += unsure
             spans = Self.addressed(spans, in: text)
+            // A country left unreplaced after a word of place is still a place: no model guess makes it
+            // someone ("Shipping to Jordan"), though "Jordan is waiting" may be.
+            let nations = spans.filter { span in
+                span.entity == "LOCATION" && ContextStage.nations.contains(ContextStage.normalPlace(TextRanges.substring(text, span.range)))
+                    && Context.words(before: span.range.lowerBound, in: text, limit: 1).first.map { Self.placeWords.contains($0.lowercased()) } == true
+            }.map(\.range)
             spans.removeAll { Self.namesNoOne($0, in: text) }
             // A place right after a title or a rank is the person it names: "Private Ellery", "Ms Paris".
             spans = spans.map { span in span.entity == "LOCATION" && Self.titled(span.range, in: text) ? Span(range: span.range, entity: "PERSON", score: span.score) : span }
@@ -230,7 +241,7 @@ public final class Detector {
             spans.append(contentsOf: CapitalNames.scan(text, isCancelled: isCancelled).filter { span in !unsaid.contains { $0.overlaps(span.range) } })
             // The name model only fills gaps: where anything else found something, that finding stands.
             var covered = IndexSet()
-            for range in spans.map(\.range) + quiet + written.quiet + organisations + labelled.labels where !range.isEmpty { covered.insert(integersIn: range) }
+            for range in spans.map(\.range) + nations + quiet + written.quiet + organisations + labelled.labels where !range.isEmpty { covered.insert(integersIn: range) }
             // A person only a model read is judged by what else agrees (see PersonScorer): by
             // the learned scorer where the context model read the whole text, else by hand rules.
             let people = context?.people ?? []
@@ -387,6 +398,7 @@ public final class Detector {
             // A link's part read by its key or its collection, and a person's ID by its prefix ("cus_…").
             || span.url != nil || span.entity == "RECORD_ID"
     }
+    private static let placeWords: Set<String> = ["to", "in", "from", "into", "across", "via", "of", "throughout", "within", "outside"]
     private static let titles: Set<String> = ["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "madam"]
     /// A title alone ("Mr.", "Ms") or before a role ("Madam Chair", "Mr Justice") names no one,
     /// and a rank alone ("Constable", "Private") is neither someone nor a place.
@@ -394,6 +406,8 @@ public final class Detector {
         guard span.entity == "PERSON" || span.entity == "LOCATION" else { return false }
         let words = TextRanges.substring(text, span.range).split(separator: " ")
         if span.entity == "LOCATION" {
+            // A country, a continent or a nationality ("of Norway", "Danish", "Finnish Export Controls") is shared by millions: no one's place.
+            if ContextStage.nations.contains(ContextStage.normalPlace(TextRanges.substring(text, span.range))) { return true }
             return words.allSatisfy { NameShape.isRole(String($0)) && (WrittenNames.ranks.contains($0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ". "))) || WrittenNames.wordRanks.contains($0.lowercased())) }
         }
         return words.allSatisfy { word in

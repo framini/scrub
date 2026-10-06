@@ -18,6 +18,8 @@ enum Kind: String {
     case mrz
     /// A person's or account's record ID ("customer_id"), replaced in its own shape (see README).
     case recordID
+    /// A card's or an identity document's expiry, whole or a part ("exp_month": 6, "expiry": "04/29").
+    case expiry
     var isName: Bool { [.fullName, .firstName, .lastName, .middleName].contains(self) }
 }
 
@@ -84,7 +86,8 @@ struct Person {
     func link(_ what: String) -> String { "p\(id).\(what)" }
 }
 
-enum KeyStyle { case snake, camel, pascal, kebab, upper }
+/// `field`: generated classes' members, "nameField", "address2Field".
+enum KeyStyle { case snake, camel, pascal, kebab, upper, field }
 
 struct PayloadGen {
     var gen: Gen
@@ -93,7 +96,7 @@ struct PayloadGen {
     init(seed: UInt64) {
         gen = Gen(seed: seed)
         style = .snake
-        style = [KeyStyle.snake, .snake, .snake, .camel, .camel, .camel, .pascal, .kebab, .upper][gen.int(0...8)]
+        style = [KeyStyle.snake, .snake, .snake, .camel, .camel, .camel, .pascal, .kebab, .upper, .field][gen.int(0...9)]
     }
 
     // Given and family names from many places, common and rare. Most are
@@ -179,6 +182,7 @@ struct PayloadGen {
         case .kebab: return words.joined(separator: "-")
         case .upper: return words.joined(separator: "_").uppercased()
         case .camel: return words.enumerated().map { $0.offset == 0 ? $0.element : $0.element.capitalized }.joined()
+        case .field: return words.enumerated().map { $0.offset == 0 ? $0.element : $0.element.capitalized }.joined() + "Field"
         case .pascal: return words.map(\.capitalized).joined()
         }
     }

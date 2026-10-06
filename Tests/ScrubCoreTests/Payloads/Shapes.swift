@@ -5,7 +5,7 @@ import Foundation
 /// results, payments, list pages, form fields, webhooks, audit logs, HR records,
 /// FHIR patients, bank accounts and identity checks (see `identity`).
 extension PayloadGen {
-    static let shapes = ["signup", "applicant", "verification", "payment", "list", "form", "webhook", "audit", "employee", "patient", "bank", "identity"]
+    static let shapes = ["signup", "applicant", "verification", "payment", "list", "form", "webhook", "audit", "employee", "patient", "bank", "identity", "card", "screening"]
 
     mutating func payload(_ shape: String) -> PNode {
         switch shape {
@@ -20,6 +20,8 @@ extension PayloadGen {
         case "employee": return employee()
         case "patient": return patient()
         case "identity": return identity()
+        case "card": return cardRecord()
+        case "screening": return screening()
         default: return bank()
         }
     }
@@ -44,8 +46,8 @@ extension PayloadGen {
         }
     }
 
-    static let firstKeys = [["first", "name"], ["given", "name"], ["firstname"], ["fname"], ["forename"], ["name", "first"]]
-    static let lastKeys = [["last", "name"], ["family", "name"], ["surname"], ["lastname"], ["lname"], ["name", "last"]]
+    static let firstKeys = [["first", "name"], ["given", "name"], ["firstname"], ["fname"], ["forename"], ["name", "first"], ["nombre"], ["prenom"], ["vorname"]]
+    static let lastKeys = [["last", "name"], ["family", "name"], ["surname"], ["lastname"], ["lname"], ["name", "last"], ["apellido", "paterno"], ["nachname"], ["apellido"]]
     static let fullKeys = [["full", "name"], ["legal", "name"], ["customer", "name"], ["applicant", "name"], ["account", "holder", "name"], ["contact", "name"], ["display", "name"]]
     static let emailKeys = [["email"], ["email", "address"], ["primary", "email"], ["contact", "email"], ["personal", "email"], ["email", "addr"]]
     static let phoneKeys = [["phone"], ["phone", "number"], ["mobile"], ["mobile", "number"], ["mobile", "phone"], ["cell", "phone"], ["home", "phone"], ["contact", "phone"], ["telephone"]]
@@ -208,7 +210,7 @@ extension PayloadGen {
     mutating func payment() -> PNode {
         let p = person()
         let last4 = String(p.card.filter(\.isNumber).suffix(4))
-        var card: [(String, PNode)] = [("issuer", keep(gen.choose(["Northwind Visa Sandbox", "Harbor Federal Credit Union", "Bluebird Bank"]))), ("brand", keep(p.card.hasPrefix("4") ? "visa" : "mastercard")), ("last4", linked(leaf(last4, .pii(.lastDigits)), p.link("card"))), ("exp_month", keep(String(gen.int(1...12)), number: true)), ("exp_year", keep(String(gen.int(2026...2031)), number: true)), ("funding", keep("credit"))]
+        var card: [(String, PNode)] = [("issuer", keep(gen.choose(["Northwind Visa Sandbox", "Harbor Federal Credit Union", "Bluebird Bank"]))), ("brand", keep(p.card.hasPrefix("4") ? "visa" : "mastercard")), ("last4", linked(leaf(last4, .pii(.lastDigits)), p.link("card"))), ("exp_month", leaf(String(gen.int(1...12)), .pii(.expiry), number: true)), ("exp_year", leaf(String(gen.int(2026...2031)), .pii(.expiry), number: true)), ("funding", keep("credit"))]
         if gen.int(0...1) == 0 { card.append(("number", linked(leaf(p.card, .pii(.card)), p.link("card")))) }
         let addressPairs: [(String, PNode)] = [("city", leaf(p.city, .pii(.city))), ("country", keep(p.country)), ("line1", leaf(p.street, .pii(.street))), ("line2", .null), ("postal_code", leaf(p.zip, .pii(.zip))), ("state", region(p))]
         let billing: PNode = .object([("address", linked(.object(addressPairs), addressLink())), ("email", linked(leaf(p.email, .pii(.email)), p.link("name"))), ("name", linked(leaf(p.full, .pii(.fullName)), p.link("name"))), ("phone", phone(p))])

@@ -20,6 +20,10 @@ enum KeyedValues {
         var names: [(Span, String)] = []
         var fields: [(String, String)] = []
         var unnamed: [(Range<Int>, String, String)] = []
+        /// Values whose key names a date's part with nothing to say whose date: a birth's, once the record's kind or a name beside them says so.
+        var dated: [(Range<Int>, String, String)] = []
+        /// Values under an expiry's key, a card's or a document's once the record around them says so (see `KeyHints.expiry`).
+        var expiring: [(Range<Int>, String, String)] = []
         /// Values under a plain "id", which are a person's when the object holds their name or email.
         var ids: [Range<Int>] = []
         /// Bare numbers in an array, read when it closes: a point's order is only known then.
@@ -80,6 +84,28 @@ enum KeyedValues {
         }
     }
 
+    /// A record's dates that are a birth's, by its kind or a person's name beside them (see `KeyHints.birthField`).
+    /// `around`: the object holding this one, whose fields say whose an expiry in parts is ("card": {"last4": …, "expiration": {"month": …}}).
+    private static func births(_ level: Level, around: Level?) -> [Span] {
+        guard !level.dated.isEmpty || !level.expiring.isEmpty else { return [] }
+        let kind = Set(level.fields.filter { ["type", "kind", "object"].contains(KeyHints.words($0.0).joined()) }.flatMap { KeyHints.words($0.1) })
+        let born: [Span] = level.dated.compactMap { range, key, value in
+            guard let born = KeyHints.birthField(key, value: value, siblings: level.fields, kind: kind), KeyHints.fits(born, value) else { return nil }
+            return Span(range: range, entity: "DATE_OF_BIRTH", score: 1)
+        }
+        let expiring: [Span] = level.expiring.compactMap { range, key, value in
+            guard let expiry = KeyHints.expiry(key, siblings: level.keys, parent: level.key, kind: kind), KeyHints.fits(expiry, value) else { return nil }
+            return Span(range: range, entity: "EXPIRY_DATE", score: 1)
+        }
+        // An expiry written in parts: its object's own key names it, the object around it says it is a card's.
+        var parts: [Span] = []
+        if let key = level.key, KeyHints.isExpiryKey(key), let around, KeyHints.expiry(key, siblings: around.keys, parent: around.key, kind: []) != nil {
+            for (range, part, value) in level.dated where ["month", "year", "day", "mm", "yy", "yyyy", "dd"].contains(KeyHints.words(part).joined()) && value.contains(where: \.isNumber) {
+                parts.append(Span(range: range, entity: "EXPIRY_DATE", score: 1))
+            }
+        }
+        return born + expiring + parts
+    }
     static func find(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
         scan(text, isCancelled: isCancelled).spans
     }
@@ -122,6 +148,8 @@ enum KeyedValues {
             if !level.ids.isEmpty, named || beside, level.id > 0 || level.keys.count >= 3 {
                 for range in level.ids where named || !RecordIDs.isUUID(string(range)) { found.spans.append(Span(range: range, entity: "RECORD_ID", score: 1)) }
             }
+            // A record about a birth ({type: BIRTH, year: 1976}) or a person's search ({name: …, year: 1952}).
+            if level.id > 0 { found.spans += births(level, around: levels.last) }
             // Outside brackets every key in the text is a "sibling"; a form field's name must share its object.
             for (range, key, value) in level.unnamed where level.id > 0 {
                 if let field = KeyHints.namedField(key, siblings: level.fields), let entity = KeyHints.hint(field), KeyHints.fits(field, value) {
@@ -241,6 +269,11 @@ enum KeyedValues {
                 levels[levels.count - 1].codes.append(content)
             } else if let own, KeyHints.fieldValueKeys.contains(KeyHints.words(own).joined()) {
                 levels[levels.count - 1].unnamed.append((content, own, taken))
+                if KeyHints.hint(key) == nil { levels[levels.count - 1].dated.append((content, own, taken)) }
+            } else if let own, KeyHints.hint(key) == nil, KeyHints.isExpiryKey(own) {
+                levels[levels.count - 1].expiring.append((content, own, taken))
+            } else if let own, KeyHints.hint(key) == nil, KeyHints.mayBeBirthPart(own) {
+                levels[levels.count - 1].dated.append((content, own, taken))
             } else if KeyHints.hint(key) == nil, RecordIDs.identifying(key: key, value: taken) {
                 // "customer_id": "cus_4TUvJh" in a pasted body: the person's ID, as in a file.
                 found.spans.append(Span(range: content, entity: "RECORD_ID", score: 1))
@@ -257,7 +290,7 @@ enum KeyedValues {
             if literals.contains(value.lowercased()) || quoted.contains(where: { "(\"'\\`".contains($0) }) || value.hasSuffix(";") { return false }
             guard let entity = KeyHints.hint(key), ["PERSON", "FIRST_NAME", "LAST_NAME", "LOCATION"].contains(entity) else { return true }
             // A name is capitalised; one token with dots, underscores or a dollar sign is an identifier.
-            guard value.first?.isUppercase == true else { return false }
+            guard value.first.map({ $0.isUppercase || !$0.isCased }) == true else { return false }
             return value.contains(" ") || !value.contains(where: { $0 == "." || $0 == "_" || $0 == "$" })
         }
         /// The unquoted value after a key, up to the end of the line (or, inside
@@ -452,6 +485,8 @@ enum KeyedValues {
             found.structural += inner.structural.map(moved)
             found.keys += inner.keys.map(moved)
         }
+        // YAML's nested mappings write their fields at the root's level: a search's name and year are read there.
+        for level in levels { found.spans += births(level, around: nil) }
         found.spans.sort { $0.range.lowerBound < $1.range.lowerBound }
         return found
     }

@@ -167,7 +167,7 @@ enum Correction {
         let parts = linked.isEmpty ? [] : URLs.components(in: output)
         for leak in gated.leaks where !ours(leak.range, "PERSON") {
             if Links.named.contains(leak.entity), linked.contains(where: { $0.overlaps(leak.range) }) {
-                if let part = parts.first(where: { $0.range == leak.range }) {
+                if let part = parts.first(where: { $0.range == leak.range }) ?? parts.first(where: { $0.part == .path && $0.range.contains(leak.range.lowerBound) && $0.range.upperBound >= leak.range.upperBound && Self.slugWord(leak.range, of: $0.range, in: output) }) {
                     found.spans.append(Span(range: leak.range, entity: leak.entity, score: 1.1, url: part.part))
                     found.leaks[leak.range] = leak
                 } else {
@@ -182,6 +182,16 @@ enum Correction {
         return found
     }
 
+    /// Whether `range` is a whole word of a path segment written as a slug, its
+    /// words joined by hyphens or underscores ("odalys-ferriter", "ashdowns-garden"
+    /// with its possessive "s"): replacing it leaves the link a link.
+    static func slugWord(_ range: Range<Int>, of segment: Range<Int>, in text: String) -> Bool {
+        let ns = text as NSString
+        let joiners: Set<unichar> = [45, 95, 43]
+        func edge(_ at: Int) -> Bool { at < segment.lowerBound || at >= segment.upperBound || joiners.contains(ns.character(at: at)) }
+        let closes = edge(range.upperBound) || ns.character(at: range.upperBound) == 115 && edge(range.upperBound + 1)
+        return edge(range.lowerBound - 1) && closes && (range != segment)
+    }
     /// A guess about a person, below the surety of a found original, made of
     /// ordinary words that are no one's first name or surname ("Later"). A
     /// name that is also a word ("Olive", "Randy") is still caught.
@@ -211,8 +221,10 @@ struct OriginalMatcher {
     static func spreads(_ original: String, entity: String = "") -> Bool {
         // A region code ("WA", "IN", "OR") is a word everywhere else, and
         // initials, ages, coordinates and time zones only mean something where they were found.
-        if ["REGION", "INITIALS", "AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE", "COORDINATES", "TIME_ZONE"].contains(entity) { return false }
+        if ["REGION", "INITIALS", "AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE", "COORDINATES", "TIME_ZONE", "EXPIRY_DATE"].contains(entity) { return false }
         if entity == "SECRET", KeyHints.isCommonValue(original) { return false }
+        // A masked number ("*********7731") is as specific as its mask and digits together.
+        if original.filter({ "*•●Xx#".contains($0) }).count >= 3, original.filter(\.isNumber).count >= 4 { return true }
         let significant = original.filter { $0.isLetter || $0.isNumber }
         return significant.count >= (significant.allSatisfy(\.isNumber) ? 5 : 2)
     }

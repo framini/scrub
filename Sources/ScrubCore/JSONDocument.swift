@@ -74,7 +74,7 @@ final class JSONDocument {
         }
 
         /// Keys whose value says what kind of thing a record's other values are ("type": "CPR").
-        private static let kindKeys: Set<String> = ["type", "kind", "idtype", "idkind", "documenttype", "doctype", "documentkind", "identifiertype", "identificationtype", "identitytype", "scheme", "idscheme", "typecode", "category", "system"]
+        private static let kindKeys: Set<String> = ["type", "kind", "object", "idtype", "idkind", "documenttype", "doctype", "documentkind", "identifiertype", "identificationtype", "identitytype", "scheme", "idscheme", "typecode", "category", "system"]
         /// `typed`: the words a record's own kind field writes, which name its other values as a key would.
         private func collect(_ document: JSONDocument, _ value: JSONValue, key: String?, path: String, records: [Int], keys: [String], depth: Int, listed: Bool = false, typed: Set<String> = []) {
             // Each kind of value read in its own frame: a document nested sixty levels deep recurses
@@ -111,6 +111,11 @@ final class JSONDocument {
                 case .object, .array: inherited = KeyHints.namedField(pair.0, siblings: named) ?? KeyHints.resolveContainer(pair.0, parent: key, listed: listed)
                 default: inherited = KeyHints.namedField(pair.0, siblings: named) ?? KeyHints.resolve(pair.0, parent: key, listed: listed, value: pair.1.stringValue)
                 }
+                // The record's ancestors say whose it is too: "documents": [{"analysis": {"extracted_data": {"expiration_date": …}}}].
+                if let expiry = KeyHints.expiry(pair.0, siblings: pairs.map(\.0), parent: ([key ?? ""] + keys).joined(separator: "_"), kind: kind.union(typed)) { inherited = expiry }
+                // A document's own number in a record whose kind names the document ({"object": "driver_license", "number": …}).
+                if KeyHints.hint(inherited) == nil, KeyHints.isDocumentNumber(pair.0), !kind.isDisjoint(with: KeyHints.documentKinds) { inherited = "document_number" }
+                if KeyHints.hint(inherited) == nil, let born = KeyHints.birthField(pair.0, value: pair.1.stringValue ?? pair.1.numberText, siblings: named, kind: kind) { inherited = born }
                 if KeyHints.isBareName(pair.0), case .string(let name) = pair.1,
                    !KeyHints.bareNameIsPerson(name, siblings: pairs.map(\.0), parent: key) { inherited = nil }
                 // The kind a record says reaches its own values, and through a slot ("number": {"value": …}, "number": […]) the values it wraps.
@@ -230,6 +235,15 @@ final class JSONDocument {
         return output == number ? String(number.dropLast()) + String(((Int(String(number.last!)) ?? 0) + 1) % 10) : output
     }
     /// The document written with each changed token's new value, and the marks over them.
+    /// Whether a stand-in in a key was written inside one of its words: a letter or a digit runs on at either end.
+    private static func insideWord(_ value: DocumentValue) -> Bool {
+        let ns = value.text as NSString
+        func joins(_ at: Int) -> Bool {
+            guard at >= 0, at < ns.length, let scalar = Unicode.Scalar(ns.character(at: at)) else { return false }
+            return CharacterSet.alphanumerics.contains(scalar)
+        }
+        return value.marks.contains { !$0.range.isEmpty && (joins($0.range.lowerBound - 1) || joins($0.range.upperBound)) }
+    }
     func render(_ values: [DocumentValue]) -> (String, [Mark]) {
         var edits: [(range: Range<Int>, value: String, marks: [Mark])] = []
         func written(_ text: String, _ marks: [Mark], original: String) -> (String, [Mark])? {
@@ -247,7 +261,8 @@ final class JSONDocument {
                     if let id = keyIDs[childPath] {
                         let scrubbed = values[id]
                         let whole = scrubbed.marks.count == 1 && scrubbed.marks[0].range == 0..<(scrubbed.text as NSString).length
-                        if !(fieldKeys.contains(childPath) && whole) { key = scrubbed.text; marks = scrubbed.marks }
+                        // A key's word is no value: a name matched inside one ("lengthOfTheCurrentLease") leaves the key as written.
+                        if !(fieldKeys.contains(childPath) && whole), !Self.insideWord(scrubbed) { key = scrubbed.text; marks = scrubbed.marks }
                     }
                     var unique = key
                     if unique != pair.0 { while outputs.contains(unique) || given.contains(unique) { unique += "_" } }
@@ -308,4 +323,5 @@ final class JSONDocument {
 
 extension JSONValue {
     var stringValue: String? { if case .string(let value) = self { return value }; return nil }
+    var numberText: String? { if case .number(let value) = self { return value }; return nil }
 }

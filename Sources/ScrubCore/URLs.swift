@@ -168,6 +168,8 @@ enum URLs {
             // "/@odalysferriter" and "/~odalys" are someone's handle wherever they sit, the first segment too.
             let bare = value.hasPrefix("~") || value.hasPrefix("@")
             guard let key = component.key ?? (bare ? "" : nil) else { return nil }
+            // An avatar's address is the hash of its owner's email ("/avatar/3b7e0c19…").
+            if ["avatar", "avatars"].contains(key), KeyHints.isDigest(value) { return "RECORD_ID" }
             guard bare || collections.contains(key) else { return RecordIDs.prefixed(value) && RecordIDs.isPersonCollection(key) ? "RECORD_ID" : nil }
             if value.allSatisfy(\.isNumber) { return value.count >= 3 ? "RECORD_ID" : nil }
             if RecordIDs.prefixed(value) { return "RECORD_ID" }

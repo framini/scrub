@@ -4,6 +4,8 @@ import Darwin
 enum Patterns {
     private static let definitions: [(String, String, Double, Set<String>, NSRegularExpression.Options)] = [
         ("EMAIL_ADDRESS", #"\b[a-zA-Z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-zA-Z0-9!#$%&'*+/=?^_`{|}~-]+)*@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)+\b"#, 1, [], []),
+        // Written into a link's query, its "@" escaped ("jo.pratt%40example.org").
+        ("EMAIL_ADDRESS", #"(?<![\w.%+-])[a-zA-Z0-9][a-zA-Z0-9._+-]*%40[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}\b"#, 1, [], []),
         ("CREDIT_CARD", #"(?<![\w-])(?:\d[ -]?){12,18}\d(?![\w-])"#, 0.6, ["card", "credit", "visa", "mastercard", "payment"], []),
         ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2} ?\d{2}(?:[ -]?[A-Z0-9]{4}){2,6}(?:[ -]?[A-Z0-9]{4})?(?:[ -]?[A-Z0-9]{1,3})?(?![A-Z0-9])"#, 0.6, ["iban", "bank", "account"], []),
         // Its country set apart and its check digits opening the first group ("ME 2551 0000 0000 0623 4133").
@@ -11,6 +13,8 @@ enum Patterns {
         // In its bank's own grouping ("ES10 0075 0080 11 0600658108", "ES72 2013-0692-81-0201150993").
         ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2}\d{2}(?:[ -][A-Z0-9]{1,10}){2,8}(?![A-Z0-9])"#, 0.6, ["iban", "bank", "account"], []),
         ("IP_ADDRESS", #"(?<![\w:.]|[A-Za-z]/)(?:[0-9A-Fa-f:]+:)?(?:\d{1,3}\.){3}\d{1,3}(?![\w:.])|(?<![\w:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f:]{0,4}(?![\w:])"#, 0.6, ["ip", "address"], []),
+        // A client's address written into its host's name ("198-51-100-23.cust.example.net"), as reverse DNS writes it.
+        ("IP_ADDRESS", #"(?<![\w.-])(?:\d{1,3}-){3}\d{1,3}(?=\.[A-Za-z][\w-]*\.[A-Za-z])"#, 0.85, [], []),
         ("US_SSN", #"(?<![\d-])\d{3}([- ])\d{2}\1\d{4}(?![\d-])"#, 0.85, ["ssn", "social", "security"], []),
         ("US_SSN", #"\b\d{5}-\d{4}\b|\b\d{3}-\d{6}\b|\b\d{9}\b|\b\d{3}[- .]\d{2}[- .]\d{4}\b"#, 0.05, ["ssn", "ssns", "ssid", "social", "security"], []),
         ("US_SSN", #"\b\d{3}[- .]\d{2}[- .]\d{4}\b"#, 0.5, ["ssn", "ssns", "ssid", "social", "security"], []),
@@ -23,6 +27,8 @@ enum Patterns {
         ("PHONE_NUMBER", #"(?<![\w+-])(?:\+?1)?[2-9]\d{2}[2-9]\d{6}(?![\w-])"#, 0.3, ["phone", "call", "called", "cell", "mobile", "tel", "telephone", "number", "text", "reach", "fax", "sms", "whatsapp", "dial"], []),
         // "Thandiwe Haddad (thandiwe.haddad@gmail.com) called": the name an email is given beside.
         ("PERSON", #"(?<![\p{L}'’.-])\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*){1,3}(?=[ \t]*\([ \t]*[^()\s@]+@[^()\s]+[ \t]*\))"#, 0.9, [], []),
+        // A party to a case written as a person ("NORTHWIND COLLECTIONS LLC Et Al VS NELL TORVIK"); a business there is left to others.
+        ("PARTY", #"(?<=\b(?:VS|Vs|vs|V|v)\.?[ \t])\p{Lu}[\p{L}'’-]+(?:[ \t]\p{Lu}\.?)?(?:[ \t]\p{Lu}[\p{L}'’-]+){1,2}(?=[ \t]*(?:$|[,;)\]]|[ \t](?:ET|Et|et)[ \t]+(?:AL|Al|al)\b))"#, 0.9, [], []),
         ("DATE_OF_BIRTH", #"\b\d{4}([-/.])\d{1,2}\1\d{1,2}\b|\b\d{1,2}([-/.])\d{1,2}\2\d{4}\b"#, 0.1, Context.birth, []),
         ("ADDRESS", #"\b\d{1,6}[A-Z]?\s+(?:[A-Z][a-z]+\.?\s+){1,4}(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Way|Lane|Ln|Drive|Dr|Court|Ct|Place|Pl|Terrace|Ter|Parkway|Pkwy|Highway|Hwy|Circle|Cir|Square|Sq|Trail|Trl|Alley|Row|Crescent|Close)\b\.?(?:\s+(?:N|S|E|W|NE|NW|SE|SW)\b)?(?:,?\s+(?:Apt|Apartment|Suite|Ste|Unit|Floor|Fl|#)\.?\s*[A-Za-z0-9-]+)?"#, 0.6, [], []),
         // A passport's, ID card's or visa's machine-readable zone: all its lines, or one (see `MachineZone`).
@@ -74,6 +80,13 @@ enum Patterns {
                 if entity == "SECRET", let cut = URLs.queryValueEnd(ns, range) { range = range.lowerBound..<cut }
                 let value = TextRanges.substring(text, range)
                 if entity == "PERSON" && NameTagger.namesOrganisation(value) { return }
+                if entity == "PARTY" {
+                    let words = value.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+                    guard let first = words.first, NameLists.isFirst(first), !NameTagger.namesOrganisation(value),
+                          !words.contains(where: { NameTagger.organisationWords.contains($0.lowercased()) }) else { return }
+                    spans.append(Span(range: range, entity: "PERSON", score: base))
+                    return
+                }
                 // "token": null is no secret, nor "pwd": undefined.
                 if entity == "SECRET", Detector.literals.contains(value) { return }
                 // An object's reference under a key an API calls its "token" ("entity_token": "P-MSBW…") unlocks nothing (see `KeyHints.fits`).
@@ -200,6 +213,7 @@ enum Patterns {
             // "::" alone is the unspecified address: no host's.
             guard value.contains(where: \.isHexDigit) else { return false }
             var v4 = in_addr(); var v6 = in6_addr()
+            if !value.contains("."), !value.contains(":") { return value.replacingOccurrences(of: "-", with: ".").withCString { inet_pton(AF_INET, $0, &v4) == 1 } }
             return value.withCString { inet_pton(AF_INET, $0, &v4) == 1 || inet_pton(AF_INET6, $0, &v6) == 1 }
         default: return true
         }

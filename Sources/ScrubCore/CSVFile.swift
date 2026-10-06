@@ -59,13 +59,25 @@ public enum CSVFile: FileFormat {
         })
         // Whether the columns make a bare "name" a person's, read once for every cell.
         let personsRecord = KeyHints.isPersonsRecord(siblings: keys, parent: nil)
+        // A bare "name" column at least half of whose cells are people's names holds people's names in the rest:
+        // "Venkataraman" under "Name" beside "Тобиас Хальворсен".
+        let peopleColumns = Set(keys.indices.filter { column in
+            guard KeyHints.isBareName(keys[column]) else { return false }
+            let cells = rows.indices.compactMap { column < rows[$0].count ? rows[$0][column] : nil }.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            let people = cells.filter { KeyHints.bareNameIsPerson($0, personsRecord: personsRecord) }.count
+            return people > 0 && people * 2 >= cells.count
+        })
         for row in rows.indices {
             if row.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
             for column in rows[row].indices {
                 var key = column < keys.count ? keys[column] : nil
                 // A column naming fields holds field names ("zip", "email"), and a bare
                 // "name" is a person's only as it is in JSON.
-                if naming.contains(column) || KeyHints.isBareName(key) && !KeyHints.bareNameIsPerson(rows[row][column], personsRecord: personsRecord) { key = nil }
+                // Under a list of a person's other names ("aka.0.name") a name is one whatever it is.
+                // A row may run past its header: its extra cells have no column.
+                let underNames = column < parents.count && ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(KeyHints.hint(parents[column].filter { !$0.allSatisfy(\.isNumber) }.joined(separator: "_")) ?? "")
+                let cell = rows[row][column], peopleColumn = peopleColumns.contains(column) && cell.split(separator: " ").count <= 5 && cell.first?.isUppercase == true && cell.allSatisfy { $0.isLetter || " .'’-".contains($0) }
+                if naming.contains(column) || KeyHints.isBareName(key) && !underNames && !peopleColumn && !KeyHints.bareNameIsPerson(cell, personsRecord: personsRecord) { key = nil }
                 if let fields = owned[column], KeyHints.ownRecord(fields, value: rows[row][column]) { key = "name" }
                 if let siblings = named[column] {
                     let texts = siblings.compactMap { $0 < rows[row].count ? (KeyHints.words(columns[$0]).last!, rows[row][$0]) : nil }

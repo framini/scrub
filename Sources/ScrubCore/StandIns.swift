@@ -70,6 +70,8 @@ final class StandIns {
         noteSource(entity, original, fake)
         // "ODALYS@KESTREL.EXAMPLE" is the same address as in lowercase, and keeps its capitals.
         if entity == "EMAIL_ADDRESS", original.contains(where: \.isLetter), original == original.uppercased() { return fake.uppercased() }
+        // A name written in capitals ("HALVORSEN", as a passport's data page writes it) takes one in capitals.
+        if ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(entity), original.filter(\.isLetter).count >= 2, original == original.uppercased(), original != original.lowercased() { return fake.uppercased() }
         return fake
     }
     /// A username or an email's local part, and the stand-in each took: "user
@@ -85,6 +87,11 @@ final class StandIns {
     private func drawn(_ entity: String, _ original: String, persona: Persona?, address: AddressParts?) -> String {
         let actual = entity == "LOCATION" && people.knows(original) ? "PERSON" : entity
         if actual == "AGE" { return age(original) }
+        if actual == "EXPIRY_DATE" { return expiry(original) }
+        // An address escaped into a link ("jo.pratt%40example.org") is the address, and stays escaped.
+        if actual == "EMAIL_ADDRESS", !original.contains("@"), original.range(of: "%40", options: .caseInsensitive) != nil {
+            return drawn(entity, original.replacingOccurrences(of: "%40", with: "@", options: .caseInsensitive), persona: persona, address: address).replacingOccurrences(of: "@", with: "%40")
+        }
         // A team's or a list's mailbox ("ops-team@…") names no one: it keeps its name, and only its domain is another.
         if actual == "EMAIL_ADDRESS", original.contains("@"), People.isRoleMailbox(original) { return String(original.prefix { $0 != "@" }) + "@" + people.domain(of: original) }
         // A birth date's month or day alone follows the date of its own record.
@@ -334,6 +341,57 @@ final class StandIns {
     /// file from 2024), so there it moves with a birth date it could have been
     /// the age at, up to 30 years ago. Where that scope's birth dates fit
     /// none, or the document holds none, it tells nothing and stays.
+    /// Each expiry's stand-in, by the part its key says it is and as written: one card's "2029" is one year wherever it is.
+    private var expiries: [String: String] = [:]
+    /// A card's or a document's expiry in its own layout: a year a few years on,
+    /// a month of the year, a day every month has, each run of digits as wide as it
+    /// was. "0331" is a month and a year, "2030" a year, "6" a month unless its key says year.
+    private func expiry(_ original: String) -> String {
+        let trimmed = original.trimmingCharacters(in: .whitespaces)
+        let cacheKey = (part.map { "\($0)" } ?? "") + "\u{0}" + trimmed
+        if let known = expiries[cacheKey] { return known }
+        // Never the year, month or day written: a stand-in that reads as the original hides nothing.
+        // "0833" and "082033" are a month and a year run together: each part is written.
+        let written = Set(trimmed.split(whereSeparator: { !$0.isNumber }).flatMap { run -> [Int] in
+            [Int(run), run.count >= 4 ? Int(run.prefix(2)) : nil, run.count >= 4 ? Int(run.suffix(run.count - 2)) : nil, run.count >= 4 ? Int(run.suffix(2)) : nil].compactMap { $0 }
+        })
+        var year = now + Int.random(in: 1...8, using: &rng), month = Int.random(in: 1...12, using: &rng), day = Int.random(in: 1...12, using: &rng)
+        for _ in 0..<8 where written.contains(year) || written.contains(year % 100) { year = now + Int.random(in: 1...8, using: &rng) }
+        for _ in 0..<8 where written.contains(month) { month = Int.random(in: 1...12, using: &rng) }
+        for _ in 0..<8 where written.contains(day) { day = Int.random(in: 1...12, using: &rng) }
+        func padded(_ value: Int, _ width: Int) -> String { width >= 2 ? String(format: "%0*d", width, value) : String(value) }
+        let runs = trimmed.split(whereSeparator: { !($0.isASCII && $0.isNumber) }).map(String.init)
+        var made: String
+        if runs.count == 1, runs[0] == trimmed {
+            let value = Int(trimmed) ?? 0, width = trimmed.count
+            switch width {
+            case 1, 2 where part == .day: made = padded(day + 12, trimmed.first == "0" ? 2 : 1)
+            case 1, 2: made = part == .year || part == nil && value > 12 ? padded(year % 100, width) : padded(month, trimmed.first == "0" ? 2 : 1)
+            case 4: made = part == .year || Int(trimmed.prefix(2)).map({ $0 > 12 }) == true ? String(year) : padded(month, 2) + padded(year % 100, 2)
+            case 6: made = padded(month, 2) + String(year)
+            default: made = String(year)
+            }
+        } else {
+            // A four-digit run is the year; the short runs a month and a day, each 12 or less so either order reads.
+            let full = runs.contains { $0.count == 4 }
+            var small = [month, day].makeIterator()
+            var output = "", digits = ""
+            func flush() {
+                guard !digits.isEmpty else { return }
+                if digits.count == 4 { output += String(year) }
+                else if !full, digits.count == 2, !output.isEmpty, output.contains(where: \.isNumber) { output += padded(year % 100, 2) }
+                else { output += padded(small.next() ?? 1, digits.count) }
+                digits = ""
+            }
+            for character in trimmed {
+                if character.isASCII && character.isNumber { digits.append(character) } else { flush(); output.append(character) }
+            }
+            flush()
+            made = output
+        }
+        expiries[cacheKey] = made
+        return made
+    }
     private func age(_ original: String) -> String {
         guard let age = Int(original.trimmingCharacters(in: .whitespaces)) else { return original }
         let distance = { (year: Int) in abs((self.now - year) - age) }
@@ -1107,10 +1165,16 @@ final class StandIns {
         let real = original.filter { $0.isASCII && $0.isNumber }
         let bare = real.count >= 7 && bareEndings.contains(String(real.suffix(4)))
         var made: String?
-        for _ in 0..<16 {
+        // Letters and digits where the original has them, when a draw can give that: "S5366188" stays a letter and seven digits.
+        func layout(_ value: String) -> String { String(value.filter { $0.isLetter || $0.isNumber }.map { $0.isNumber ? "9" : "A" }) }
+        for _ in 0..<24 {
             made = Recognizers.standIn(for: original, preferring: identifier(original)?.recognizer, using: &rng)
-            guard bare, let drawn = made, drawn.filter({ $0.isASCII && $0.isNumber }).dropLast(3).last == "0" else { break }
+            guard let drawn = made else { break }
+            if bare, drawn.filter({ $0.isASCII && $0.isNumber }).dropLast(3).last == "0" { continue }
+            if layout(drawn) == layout(original) { break }
         }
+        // Digits alone stay digits: a passport's nine digits that pass another kind's check by chance take no check letter.
+        if let drawn = made, !original.contains(where: \.isLetter), drawn.contains(where: \.isLetter) { return nil }
         return made
     }
     /// Another number's stand-in digits poured into an identifier, where they still make one of its
@@ -1163,6 +1227,7 @@ final class StandIns {
         }
         defer { if let made = assigned[key] { noteSource(entity, original, made) } }
         if entity == "AGE" { return age(original) }
+        if entity == "EXPIRY_DATE" { return expiry(original) }
         if entity == "LAST_DIGITS" {
             bareEndings.insert(digits)
             let fake = lastDigits(original)
@@ -1215,6 +1280,12 @@ final class StandIns {
         if Recognizers.drawn.contains(entity), let made = identifierStandIn(original) { return made }
         // An address typed all in lowercase is read and rewritten as if cased, and lowercased again.
         if entity == "ADDRESS", let cased = AddressBlock.cased(original) { return make(entity, cased, persona, place).lowercased() }
+        // A middle initial ("A", "q.") takes another letter, written as it was.
+        if ["FIRST_NAME", "LAST_NAME", "PERSON"].contains(entity), original.filter(\.isLetter).count == 1, let letter = original.first(where: \.isLetter) {
+            var made = letter
+            for _ in 0..<8 where made.lowercased() == letter.lowercased() { made = pick(Array("ABCDEFGHJKLMNPRSTW")) ?? "J" }
+            return original.replacingOccurrences(of: String(letter), with: letter.isLowercase ? made.lowercased() : String(made))
+        }
         if let masked = ["US_SSN", "CREDIT_CARD", "PHONE_NUMBER", "US_BANK_NUMBER", "ID_NUMBER", "LAST_DIGITS"].contains(entity) ? masked(original) : nil { return masked }
         if entity == "LAST_DIGITS" { return lastDigits(original) }
         if entity == "PHONE_NUMBER" { return phone(original, place) }
@@ -1340,6 +1411,10 @@ final class StandIns {
             return "GB82WEST12345698765432"
         case "IP_ADDRESS":
             // A documentation address, never the one written nor one spelling it ("203.0.113.106" holds "203.0.113.10").
+            // Written into a host's name with dashes ("198-51-100-23"), it stays so.
+            if !original.contains("."), !original.contains(":"), original.contains("-") {
+                return "203-0-113-" + String(Int.random(in: 1...254, using: &rng))
+            }
             var made = original
             for _ in 0..<16 where made.lowercased().contains(original.lowercased()) || original.lowercased().contains(made.lowercased()) {
                 // In the original's form: an IPv4 address written inside an IPv6 one ("::ffff:192.0.2.1") stays so, and one of fewer parts keeps their count.
@@ -1622,7 +1697,9 @@ extension StandIns {
         let text = String(field).replacingOccurrences(of: "<", with: "")
         guard !text.isEmpty else { return Array(field) }
         var fake = String(drawn("ID_NUMBER", text, persona: nil, address: nil).uppercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) })
-        if fake.isEmpty || fake == text { fake = idLike(text) }
+        // A zone's number keeps its own letters and digits where they were: a passport's nine digits stay nine digits.
+        func shape(_ value: String) -> String { String(value.map { $0.isNumber ? "9" : "A" }) }
+        if fake.isEmpty || fake == text || shape(fake) != shape(text) { fake = idLike(text) }
         return Array(MachineZone.fit(fake, field.count))
     }
     /// A zone's birth date (YYMMDD): the stand-in year of the same birth year,
