@@ -1161,8 +1161,11 @@ enum Recognizers {
     /// The kinds whose stand-ins the registry draws: a postcode follows its stand-in place and a
     /// phone number its numbering, as `StandIns` draws them; the registry only finds those.
     static let drawn = entities.subtracting(["POSTAL_CODE", "PHONE_NUMBER"])
-    /// Keys that name a kind, written as one ("umid card", "korean_brn"): a field's name, not a value in it.
-    static let fieldNames = Set(all.flatMap { recognizer in recognizer.keys.union(recognizer.context.map { $0.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) } }) }.filter { $0.count >= 3 })
+    /// Keys that name a kind ("umid card", "korean_brn"): a field's name, not a value in it. Only its keys and
+    /// phrases of several words: a single context word may be someone's name too ("Nas", a key in a map of people).
+    static let fieldNames = Set(all.flatMap { recognizer in
+        recognizer.keys.union(recognizer.context.filter { $0.contains(" ") }.map { $0.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) } })
+    }.filter { $0.count >= 3 })
     /// Every key a recognizer is written under, and the kind it names (see `KeyHints.hint`).
     static let keyNames: [String: String] = all.reduce(into: [:]) { names, recognizer in
         for key in recognizer.keys where names[key] == nil { names[key] = recognizer.entity }
@@ -1271,7 +1274,8 @@ enum Recognizers {
     /// or fewer only as a whole word or before a word for "number" ("cpr" in "cprnummer", not "cprs").
     static func mentions(_ word: String, _ part: String) -> Bool {
         if word == part { return true }
-        if part.count >= 4 { return word.hasPrefix(part) || word.hasSuffix(part) }
+        // At a compound's end only after a word of its own ("numberplate", "kundensteuernummer"), not a syllable ("template").
+        if part.count >= 4 { return word.hasPrefix(part) || word.hasSuffix(part) && word.count - part.count >= 4 }
         return word.hasPrefix(part) && numberWords.contains(String(word.dropFirst(part.count)))
     }
     /// The words before `range` that may name it, stopwords left out, nearest five.

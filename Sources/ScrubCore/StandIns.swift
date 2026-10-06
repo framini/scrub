@@ -128,9 +128,11 @@ final class StandIns {
         let key = plain + (place.map { "\u{0}" + $0.city + "\u{0}" + $0.region } ?? "")
         let stablePerson = ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(actual)
         let stableEmail = actual == "EMAIL_ADDRESS" && (persona != nil || people.find(email: original) != nil)
-        if !stablePerson && !stableEmail, let found = assigned[key] { return found }
-        // One identifier written two ways ("11774270-H", "11774270h") keeps one stand-in, each in its own layout.
         let identity = Recognizers.drawn.contains(actual) ? identifier(original) : nil
+        // A value named here as another kind than where it was first drawn ("pasaporte", then "claim_number") keeps
+        // that stand-in only if it is one of this kind too.
+        if !stablePerson && !stableEmail, let found = assigned[key], identity.map({ Self.fits(found, $0.recognizer) }) ?? true { return found }
+        // One identifier written two ways ("11774270-H", "11774270h") keeps one stand-in, each in its own layout.
         if let identity, let written = reused(identity, original) {
             assigned[key] = written
             return written
@@ -225,6 +227,8 @@ final class StandIns {
     var scopes: [String] = []
     /// The words naming the value being drawn (see `Job.enter`).
     var naming: Set<String> = []
+    /// The identifier the value's field holds, decided across its values: its stand-in is of that kind first.
+    var kind: String?
     /// Set by a draw read off another value when the nearest scope holding
     /// one holds several that disagree: it takes the first, and review asks.
     var unclear = false
@@ -988,6 +992,10 @@ final class StandIns {
         } else if plus, let code = original.split(whereSeparator: { !$0.isNumber && $0 != "+" }).first, code.count >= 2 {
             let country = code.dropFirst()
             fresh = country + (country.count..<digits.count).map { index in index == country.count ? digit(true) : digit() }.joined()
+        } else if digits.count >= 7, digits.first == "0" {
+            // A national number keeps its trunk zero and the digit after it, which says mobile or landline
+            // ("082 …" in South Africa, "07…" in the UK): the rest is drawn.
+            fresh = String(digits.prefix(2)) + (2..<digits.count).map { _ in digit() }.joined()
         } else if digits.count >= 7 {
             fresh = self.digits(digits.count)
         } else if digits.count >= 4, !plus {
@@ -1064,8 +1072,8 @@ final class StandIns {
     }
     func number(_ original: String) -> String {
         let key = "ID_NUMBER\u{0}" + original
-        if let found = assigned[key] { return found }
         let identity = identifier(original)
+        if let found = assigned[key], identity.map({ Self.fits(found, $0.recognizer) }) ?? true { return found }
         // A number can't start with a zero its original didn't.
         let lead: (String) -> Bool = { original.first == "0" || $0.first != "0" }
         var fake = original
@@ -1104,13 +1112,18 @@ final class StandIns {
     /// The stand-in the same identifier took written another way, in this one's layout.
     private func reused(_ identity: (recognizer: Recognizer, key: String), _ original: String) -> String? {
         guard let found = assigned[identity.key], found.count == identity.recognizer.kept(original.trimmingCharacters(in: .whitespaces)).count else { return nil }
-        return Recognizers.write(Array(found), like: original, identity.recognizer)
+        let written = Recognizers.write(Array(found), like: original, identity.recognizer)
+        return Self.fits(written, identity.recognizer) ? written : nil
+    }
+    /// Whether `made` is one of `recognizer`'s kind: it passes the check and a form writes it whole.
+    private static func fits(_ made: String, _ recognizer: Recognizer) -> Bool {
+        recognizer.passes(made) && recognizer.writes(made.trimmingCharacters(in: .whitespaces))
     }
     /// The kind an identifier is and its characters without separators, the same however it is written.
     private func identifier(_ original: String) -> (recognizer: Recognizer, key: String)? {
         // Of the kinds whose checks it passes, the one the words around it name ("routing_number": a bank's, not a tax file's).
         let kinds = Recognizers.candidates(original).filter { Recognizers.drawn.contains($0.entity) }
-        guard let recognizer = kinds.first(where: { Recognizers.named($0.context, among: naming) || $0.keys.contains(naming.sorted().joined()) }) ?? kinds.first else { return nil }
+        guard let recognizer = kinds.first(where: { $0.name == kind }) ?? kinds.first(where: { Recognizers.named($0.context, among: naming) || $0.keys.contains(naming.sorted().joined()) }) ?? kinds.first else { return nil }
         // By its characters alone: "23332969-K" may pass two kinds' checks where "23332969K" passes one.
         return (recognizer, "IDENTIFIER\u{0}" + String(recognizer.kept(original.trimmingCharacters(in: .whitespaces))))
     }

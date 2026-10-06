@@ -18,6 +18,8 @@ struct DocumentLeaf: Sendable {
     /// The identifier its field holds, decided across every value the field writes (see
     /// `JSONDocument.Collector`): empty when decided none, nil where no reader decided.
     var column: String?
+    /// The identifier its field holds, where one was decided.
+    var decided: String? { column.flatMap { $0.isEmpty ? nil : $0 } }
     let numericEntity: String?
     /// A column header or similar label: read for patterns only, since the name
     /// model takes words like "Dob" for places.
@@ -177,7 +179,7 @@ enum DocumentPipeline {
                 let previous = values[index]
                 if previous.fullyMarked { continue }
                 let reusable = !forceFullDetection && emptyBases[index] && previous.text == leaves[index].text
-                job.enter(value: index, records: leaves[index].enclosing, part: leaves[index].datePart, object: leaves[index].objectPath, naming: leaves[index].naming)
+                job.enter(value: index, records: leaves[index].enclosing, part: leaves[index].datePart, object: leaves[index].objectPath, naming: leaves[index].naming, kind: leaves[index].decided)
                 var held = previous.held
                 let (text, marks, unresolved) = try Correction.run(previous.text, marks: previous.marks, job: job, matcher: originals, gazetteer: gazetteer, gate: gate, passes: 1, base: reusable ? [] : nil, held: &held,
                                                                    sparing: leaves[index].nonPersonal ? ["SECRET"] : [])
@@ -210,7 +212,7 @@ enum DocumentPipeline {
         for index in values.indices where !values[index].unresolved.isEmpty || !values[index].held.isEmpty {
             try Scrubber.checkCancellation()
             let value = values[index]
-            job.enter(value: index, records: leaves[index].enclosing, part: leaves[index].datePart, object: leaves[index].objectPath, naming: leaves[index].naming)
+            job.enter(value: index, records: leaves[index].enclosing, part: leaves[index].datePart, object: leaves[index].objectPath, naming: leaves[index].naming, kind: leaves[index].decided)
             var kept: [Mark] = [], proposals: [String] = []
             // A doubted person the final check also suspects is its suspect.
             var suspected = IndexSet()
@@ -336,7 +338,7 @@ enum DocumentPipeline {
         for index in order {
             try Scrubber.checkCancellation()
             let leaf = leaves[index]
-            job.enter(value: index, records: leaf.enclosing, part: leaf.datePart, object: leaf.objectPath, naming: leaf.naming)
+            job.enter(value: index, records: leaf.enclosing, part: leaf.datePart, object: leaf.objectPath, naming: leaf.naming, kind: leaf.decided)
             var found = founds[index]
             job.recordOriginals([(leaf.seen, found)])
             // Read in the text as seen, replaced in the text as written.

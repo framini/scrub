@@ -67,6 +67,7 @@ final class JSONDocument {
                     item.document.valueIDs[item.path] = items.count
                     var leaf = DocumentLeaf(item.number, key: item.key, records: item.records, numericEntity: recognizer.entity)
                     leaf.field = item.field
+                    leaf.column = recognizer.name
                     items.append(leaf)
                 }
             }
@@ -161,6 +162,8 @@ final class JSONDocument {
             }
             document.valueIDs[path] = items.count
             var leaf = DocumentLeaf(number, key: key, records: records, numericEntity: entity)
+            // Its stand-in is of the kind its record names, as a string's is ({"type":"ABA","number":111900659}).
+            leaf.namingWords = Self.naming(keys, typed)
             leaf.field = keys.joined(separator: ".")
             items.append(leaf)
         }

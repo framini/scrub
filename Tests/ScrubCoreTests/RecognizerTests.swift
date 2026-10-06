@@ -471,6 +471,44 @@ private func value(_ root: JSONValue, _ path: String...) -> JSONValue? {
     }
 }
 
+@Test func aPersonsNameAsAKeyIsReplacedThoughAKindNamesItsWord() throws {
+    // "nas" names a Canadian insurance number in French, and is also someone's name.
+    try check(#"{"full_name":"Nas","by_person":{"Nas":true}}"#, gone: ["Nas"])
+}
+
+@Test func aTemplateIsNoPlate() throws {
+    for body in [#"{"template":"ABC123DE"}"#, #"{"note":"template 34AB1234 applied"}"#] {
+        for route in Route.allCases {
+            let output = try route.scrub(body)
+            #expect(output.contains("ABC123DE") || output.contains("34AB1234"), "\(route): \(output)")
+        }
+    }
+}
+
+@Test func aRecordsKindChoosesItsNumbersStandIn() throws {
+    // 111900659 passes a routing number's check and a tax file number's: the record says which.
+    try check(#"{"type":"ABA","number":111900659}"#, gone: ["111900659"]) { route, root, output in
+        guard case .number(let made)? = value(root, "number") else { Issue.record("\(route): \(output)"); return }
+        #expect(Recognizers.candidates(made).contains { $0.name == "ABA_ROUTING" }, "\(route): \(made)")
+    }
+}
+
+@Test func oneValueNamedTwoWaysGetsAStandInOfEachKind() throws {
+    try check(#"{"pasaporte":"CLM785751","claim_number":"CLM785751"}"#, gone: ["CLM785751"]) { route, root, output in
+        guard case .string(let claim)? = value(root, "claim_number") else { Issue.record("\(route): \(output)"); return }
+        #expect(Recognizers.candidates(claim).contains { $0.name == "CLAIM_NUMBER" }, "\(route): \(claim)")
+    }
+}
+
+@Test func aNationalPhoneKeepsItsTrunkZero() throws {
+    for number in ["0820123456", "082 012 3456", "(082) 012-3456"] {
+        try check("{\"cellnumber\":\"\(number)\"}", gone: [number]) { route, root, output in
+            guard case .string(let made)? = value(root, "cellnumber") else { Issue.record("\(route): \(output)"); return }
+            #expect(Recognizers.all.first { $0.name == "ZA_PHONE_NUMBER" }!.passes(made), "\(route): \(made)")
+        }
+    }
+}
+
 @Test func genericPatternsRejectWhatNoIssuerWrites() {
     // An 18-digit ID opening with a 1 passing Luhn by chance is no card; "::" alone is no host.
     #expect(!Patterns.find("Event 1592876430123456787 logged", isCancelled: { false }).contains { $0.entity == "CREDIT_CARD" })

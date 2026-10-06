@@ -175,8 +175,10 @@ public final class Job {
     /// two people in one row each keep their own birth date's parts.
     /// `naming`: the words naming the value (its key's), so an identifier two kinds' checks pass is
     /// given a stand-in of the kind they name.
-    func enter(value: Int, records: [Int], part: KeyHints.DatePart? = nil, object: String = "", naming: Set<String> = []) {
+    /// `kind`: the identifier its field was decided to hold, which its stand-in is before any kind words name.
+    func enter(value: Int, records: [Int], part: KeyHints.DatePart? = nil, object: String = "", naming: Set<String> = [], kind: String? = nil) {
         standIns.naming = naming
+        standIns.kind = kind
         var scopes = records.map { "r\($0)" }
         if let innermost = scopes.first, !object.isEmpty {
             // "applicant.birth" sits in "applicant" too: innermost first, each a scope of the record.
