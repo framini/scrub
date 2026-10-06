@@ -336,3 +336,16 @@ private func value(_ root: JSONValue, _ path: String...) -> JSONValue? {
         }
     }
 }
+
+@Test func aDecidedFieldReachesItsFewStrings() throws {
+    // Two strings and two numbers: the field is decided across all four, and both strings follow it.
+    let values = ["731205069", "509514056", "743234884", "647392221"]
+    try check(#"{"orders":[{"order_id":"731205069"},{"order_id":509514056},{"order_id":"743234884"},{"order_id":647392221}]}"#, gone: values)
+    try check(#"{"orders":[{"order_id":731205069},{"order_id":509514056},{"order_id":"743234884"},{"order_id":647392221}]}"#, gone: values)
+}
+
+@Test func aRecordsKindReachesAnEncodedSlot() throws {
+    let encoded = Data(#"{"value":2902004001}"#.utf8).base64EncodedString()
+    try check(#"{"a":{"type":"CPR","number":"[2902004001]"},"b":{"type":"CPR","number":"{\"value\":3112994001}"},"c":{"type":"CPR","number":"\#(encoded)"}}"#,
+              gone: ["2902004001", "3112994001"])
+}

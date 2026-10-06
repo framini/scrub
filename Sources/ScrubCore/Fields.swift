@@ -20,7 +20,12 @@ enum Fields {
             guard let field = leaves[index].field, !field.isEmpty else { continue }
             groups[field, default: []].append(index)
         }
-        for members in groups.values where members.count >= 3 {
+        for members in groups.values {
+            // A field decided across its numbers too holds its identifier however few of its values are strings.
+            guard members.count >= 3 else {
+                if members.contains(where: { !(leaves[$0].column ?? "").isEmpty }) { identify(members, leaves, &founds) }
+                continue
+            }
             if categorical(members.map { leaves[$0] }) {
                 for index in members { founds[index] = [] }
                 continue

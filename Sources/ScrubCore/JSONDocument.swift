@@ -138,7 +138,8 @@ final class JSONDocument {
                 let child = JSONDocument(inner)
                 document.nested[path] = child
                 if base64 { document.encoded.insert(path) }
-                collect(child, inner.root, key: key, path: "", records: records, keys: keys, depth: depth + 1)
+                collect(child, inner.root, key: key, path: "", records: records, keys: keys, depth: depth + 1,
+                        typed: keys.last.map(Self.isSlot) ?? false ? typed : [])
                 return
             }
             document.valueIDs[path] = items.count
