@@ -169,9 +169,10 @@ enum OrderedJSON {
             while index < bytes.count {
                 let byte = bytes[index]
                 index += 1
+                if byte < 32 { throw ScrubError.unsupported("invalid_json") }
                 if byte == 34 && !escaped {
-                    let data = Data(bytes[start..<index])
-                    guard let decoded = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) as? String else { throw ScrubError.unsupported("invalid_json") }
+                    let inside = Array(String(decoding: bytes[(start + 1)..<(index - 1)], as: UTF8.self).utf16)
+                    guard let decoded = JSONSource.unescape(inside[...]) else { throw ScrubError.unsupported("invalid_json") }
                     return decoded
                 }
                 if byte == 92 && !escaped { escaped = true } else { escaped = false }

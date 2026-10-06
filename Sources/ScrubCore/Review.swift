@@ -512,7 +512,7 @@ extension Review {
         if held(text) { return [text] }
         // A value written with JSON's escapes ("Qz\\u0061x") is the value it decodes to.
         func decoded(_ written: String) -> String? {
-            guard written.contains("\\"), let value = try? JSONSerialization.jsonObject(with: Data(("\"" + written + "\"").utf8), options: [.fragmentsAllowed]) as? String else { return nil }
+            guard written.contains("\\"), let value = JSONSource.unescape(Array(written.utf16)[...]) else { return nil }
             return value
         }
         if let plain = decoded(text), held(plain) { return [plain] }

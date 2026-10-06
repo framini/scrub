@@ -192,9 +192,7 @@ struct JSONSource {
                 }
                 if unit == 34 && !escaped {
                     guard escapes else { return String(utf16CodeUnits: Array(units[(start + 1)..<(index - 1)]), count: index - 1 - start - 1) }
-                    var token = String(utf16CodeUnits: Array(units[start..<index]), count: index - start)
-                    if shell { token = token.replacingOccurrences(of: "'\\''", with: "'") }
-                    guard let decoded = try? JSONSerialization.jsonObject(with: Data(token.utf8), options: [.fragmentsAllowed]) as? String else { throw ScrubError.unsupported("invalid_json") }
+                    guard let decoded = JSONSource.unescape(units[(start + 1)..<(index - 1)], shell: shell) else { throw ScrubError.unsupported("invalid_json") }
                     return decoded
                 }
                 if unit == 92 && !escaped { escaped = true; escapes = true } else { escaped = false }
@@ -209,5 +207,50 @@ struct JSONSource {
             guard !TextRanges.matches(OrderedJSON.numberGrammar, in: raw).isEmpty else { throw ScrubError.unsupported("invalid_json") }
             return .number(raw)
         }
+    }
+}
+
+extension JSONSource {
+    /// The text a string token's inside writes, its escapes read. Half a surrogate pair,
+    /// which the grammar allows and a string cut inside an emoji is written with, reads as U+FFFD.
+    static func unescape(_ units: ArraySlice<UInt16>, shell: Bool = false) -> String? {
+        var decoded: [UInt16] = []
+        decoded.reserveCapacity(units.count)
+        var index = units.startIndex
+        func hex(_ unit: UInt16) -> UInt16? {
+            switch unit {
+            case 48...57: unit - 48
+            case 65...70: unit - 55
+            case 97...102: unit - 87
+            default: nil
+            }
+        }
+        while index < units.endIndex {
+            let unit = units[index]
+            if shell, unit == 39, units[index...].starts(with: [39, 92, 39, 39]) { decoded.append(39); index += 4; continue }
+            guard unit == 92 else { decoded.append(unit); index += 1; continue }
+            guard index + 1 < units.endIndex else { return nil }
+            switch units[index + 1] {
+            case 34, 92, 47: decoded.append(units[index + 1])
+            case 98: decoded.append(8)
+            case 102: decoded.append(12)
+            case 110: decoded.append(10)
+            case 114: decoded.append(13)
+            case 116: decoded.append(9)
+            case 117:
+                guard index + 6 <= units.endIndex else { return nil }
+                var value: UInt16 = 0
+                for digit in units[(index + 2)..<(index + 6)] {
+                    guard let digit = hex(digit) else { return nil }
+                    value = value << 4 | digit
+                }
+                decoded.append(value)
+                index += 6
+                continue
+            default: return nil
+            }
+            index += 2
+        }
+        return String(decoding: decoded, as: UTF16.self)
     }
 }

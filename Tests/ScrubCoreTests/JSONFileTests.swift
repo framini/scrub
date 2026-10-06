@@ -38,6 +38,16 @@ func orderedJSONFixtureOutput(_ name: String) throws {
     }
 }
 
+/// Half a surrogate pair is allowed by JSON's grammar, and a string cut inside an emoji
+/// is written with one: the document is read, its people replaced, the half kept where it stood.
+@Test func aHalfSurrogatePairIsRead() throws {
+    let document = #"{"email":"\ud800robert.mitchell@acme.com","n\udc00ame":"Robert Mitchell","note":"\ud83d\ude00"}"#
+    let output = String(decoding: try Scrubber.scrub(Data(document.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("robert.mitchell") && !output.contains("Robert Mitchell"))
+    #expect(output.contains(#""n\udc00ame":"#) && output.contains(#""note":"\ud83d\ude00""#))
+    #expect(OrderedJSON.render(try OrderedJSON.parse(#"["\ud800","\u00e9\t"]"#)).0 == "[\n  \"\u{FFFD}\",\n  \"é\\t\"\n]\n")
+}
+
 @Test func jsonFixtureKeepsRecordsAndAssociatesPersona() throws {
     let data = try Data(contentsOf: #require(Bundle.module.url(forResource: "francisco", withExtension: "json")))
     let result = try Scrubber.scrub(data, name: "francisco.json")

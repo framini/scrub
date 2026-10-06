@@ -56,7 +56,9 @@ struct Recognizer: Sendable {
         (folds ? value.uppercased() : value).filter { !separators.contains($0) }
     }
     /// Whether one of its forms writes `value` whole.
+    /// A kind that folds case is written by a form in small letters too ("x9613851n").
     func writes(_ value: String) -> Bool {
+        let value = folds && value.allSatisfy(\.isASCII) ? value.uppercased() : value
         let length = (value as NSString).length
         return forms.contains { form in TextRanges.matches(form.pattern, in: value).contains { $0.range.location == 0 && $0.range.length == length } }
     }
@@ -459,7 +461,7 @@ enum Recognizers {
         }),
         Recognizer("DE_DOCUMENT", keys: ["personalausweisnummer", "ausweisnummer", "reisepassnummer", "passnummer"], forms: [
             .init(#"\b[CFGHJKLMNPRTVWXYZ][CFGHJKLMNPRTVWXYZ0-9]{8}\d?\b"#, 0.3),
-        ], context: ["personalausweis", "ausweis", "ausweisnummer", "personalausweisnummer", "reisepass", "passnummer", "reisepassnummer", "dokumentennummer", "bundespersonalausweis", "ausweisdokument", "npa"], verifies: false, check: { characters in
+        ], context: ["personalausweis", "ausweis", "ausweisnummer", "personalausweisnummer", "reisepass", "passnummer", "pass nr", "reisepassnummer", "dokumentennummer", "bundespersonalausweis", "ausweisdokument", "npa"], verifies: false, check: { characters in
             guard characters.count == 9 || characters.count == 10, characters.contains(where: \.isNumber) else { return false }
             guard characters.count == 10 else { return true }
             return icaoDigit(Array(characters[0..<9])) == characters[9].wholeNumberValue
@@ -1244,8 +1246,9 @@ enum Recognizers {
         return find(value, ns: ns, units: Array(value.utf16), contextWords: words, isCancelled: { false }).first { $0.range == 0..<ns.length && $0.score >= 1 }?.entity
     }
 
-    /// Words that sit between a value and the word naming it without changing what it names ("the", "my", "de").
-    private static let stopwords: Set<String> = ["the", "a", "an", "is", "are", "was", "my", "your", "his", "her", "their", "our", "its", "of", "for", "to", "no", "nr", "de", "del", "la", "el", "le", "les", "der", "die", "das", "des", "und", "y", "e", "et", "du", "da", "do", "dos", "di", "il", "van", "het", "och", "og", "i"]
+    /// Words that sit between a value and the word naming it without changing what it names ("the", "my", "de");
+    /// not "no" or "nr", which a phrase may hold ("pass nr").
+    private static let stopwords: Set<String> = ["the", "a", "an", "is", "are", "was", "my", "your", "his", "her", "their", "our", "its", "of", "for", "to", "de", "del", "la", "el", "le", "les", "der", "die", "das", "des", "und", "y", "e", "et", "du", "da", "do", "dos", "di", "il", "van", "het", "och", "og", "i"]
     /// Whether one of `context` is among `words`: a single word as written, several in a row.
     static func names(_ context: Set<String>, in words: [String]) -> Bool {
         guard !words.isEmpty else { return false }
@@ -1289,18 +1292,34 @@ enum Recognizers {
     /// bare one keeps its form's score, and one failing its check is none.
     static func find(_ text: String, ns: NSString, units: [UInt16], contextWords: Set<String>, isCancelled: () -> Bool) -> [Span] {
         var spans: [Span] = []
+        // The text with its small letters capitalised, offsets unchanged, for kinds written in capitals
+        // that someone typed small ("my nie is x9613851n"): read so only where a word names the kind.
+        let small = units.contains { (97...122).contains($0) }
+        let upperUnits = small ? units.map { (97...122).contains($0) ? $0 - 32 : $0 } : units
+        let upper = small ? String(utf16CodeUnits: upperUnits, count: upperUnits.count) as NSString : ns
+        let lower = small ? text.lowercased() : ""
         for recognizer in all {
             if isCancelled() { return spans }
+            let keyed = Self.named(recognizer.context, among: contextWords)
+            let capitalised = small && recognizer.folds && (keyed || recognizer.context.contains { entry in entry.split(whereSeparator: { !$0.isLetter }).first.map { lower.contains($0) } ?? false })
             for form in recognizer.forms {
                 guard let regex = form.pattern.regex else { continue }
                 for match in Patterns.matches(regex, in: ns, units: units, isCancelled: isCancelled) {
                     let range = match.range.location..<NSMaxRange(match.range)
                     guard recognizer.passes(ns.substring(with: match.range)) else { continue }
                     // A key's words name it in any order ("number_nhs"); words in text, in theirs.
-                    let isNamed = Self.named(recognizer.context, among: contextWords)
-                        || names(recognizer.context, in: before(range, in: text))
+                    let isNamed = keyed || names(recognizer.context, in: before(range, in: text))
                     let score = isNamed ? 1 : form.alone ? 0.85 : form.score
                     if score >= 0.4 { spans.append(Span(range: range, entity: recognizer.entity, score: score)) }
+                }
+                guard capitalised else { continue }
+                for match in Patterns.matches(regex, in: upper, units: upperUnits, isCancelled: isCancelled) {
+                    let range = match.range.location..<NSMaxRange(match.range)
+                    let value = ns.substring(with: match.range)
+                    guard value != upper.substring(with: match.range), recognizer.passes(value),
+                          keyed || names(recognizer.context, in: before(range, in: text)),
+                          !spans.contains(where: { $0.range == range && $0.entity == recognizer.entity }) else { continue }
+                    spans.append(Span(range: range, entity: recognizer.entity, score: 1))
                 }
             }
         }

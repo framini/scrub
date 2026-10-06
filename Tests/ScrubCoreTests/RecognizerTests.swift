@@ -524,3 +524,61 @@ private func value(_ root: JSONValue, _ path: String...) -> JSONValue? {
         #expect(place.country == "GB" && place.postal.contains(String(postcode.prefix { $0 != " " })), "\(route): \(output)")
     }
 }
+
+private func scrubbedText(_ text: String, seed: UInt64 = 7) throws -> String {
+    String(decoding: try Scrubber.scrub(Data(text.utf8), name: "note.txt", forceFullDetection: false, seed: seed).output, as: UTF8.self)
+}
+
+@Test func aNumberWrittenInOneRunKeepsItsCountryAndKind() throws {
+    // The calling code is read by its length, the national number keeps the digit saying mobile or landline.
+    for seed: UInt64 in 0..<4 {
+        let output = try scrubbedText("call +27632118258 or +447911123456", seed: seed)
+        #expect(!output.contains("[") && !output.contains("27632118258") && !output.contains("447911123456"), "\(output)")
+        #expect(output.range(of: #"^call \+276\d{8} or \+447\d{9}$"#, options: .regularExpression) != nil, "\(output)")
+    }
+}
+
+@Test func aCodeInTwoShortGroupsStaysACode() throws {
+    let output = try scrubbedText("QA1 1AA")
+    #expect(output != "QA1 1AA" && output.range(of: #"^[A-Z\d]{3} [A-Z\d]{3}$"#, options: .regularExpression) != nil, "\(output)")
+}
+
+@Test func anIPAddressKeepsItsForm() throws {
+    let short = try scrubbedText("my ip: 192.168.0")
+    #expect(short.range(of: #"^my ip: \d+\.\d+\.\d+$"#, options: .regularExpression) != nil && !short.contains("192.168"), "\(short)")
+    let mapped = try scrubbedText("client ip ::ffff:192.0.2.1")
+    #expect(mapped.hasPrefix("client ip ::ffff:") && !mapped.contains("192.0.2.1"), "\(mapped)")
+    #expect(mapped.range(of: #"::ffff:\d+\.\d+\.\d+\.\d+$"#, options: .regularExpression) != nil, "\(mapped)")
+}
+
+@Test func fourDottedGroupsAreNoPhone() throws {
+    #expect(try scrubbedText("version 256.256.256.256") == "version 256.256.256.256")
+}
+
+@Test func anIdentifierTypedSmallIsReadWhereNamed() throws {
+    for text in ["my nie is x9613851n", "the dni 55555555k", "nric s2740116c", "KVNR a123456780"] {
+        let value = String(text.split(separator: " ").last!)
+        let output = try scrubbedText(text)
+        #expect(!output.contains(value), "\(output)")
+        // Small letters stay small.
+        #expect(output.split(separator: " ").last!.allSatisfy { !$0.isUppercase }, "\(output)")
+    }
+    // Unnamed, a small spelling is anyone's words.
+    #expect(try scrubbedText("nine items x9613851n") == "nine items x9613851n")
+}
+
+@Test func aPassNumberIsNamedByItsAbbreviation() throws {
+    #expect(!(try scrubbedText("Pass-Nr.: F12345671")).contains("F12345671"))
+}
+
+@Test func aZonesNumberIsThePassportsStandIn() throws {
+    // Nothing names the zone's number, so it is the kind the passport's stand-in already is, whatever letter that drew.
+    let zone = "P<USAQUISPE<<MARIA<<<<<<<<<<<<<<<<<<<<<<<<<<\\nY578525709USA5106114F2807155<<<<<<<<<<<<<<08"
+    for seed: UInt64 in 0..<24 {
+        let output = String(decoding: try Scrubber.scrub(Data("{\"passport\":{\"number\":\"Y57852570\",\"mrz\":\"\(zone)\"}}".utf8), name: "x.json", forceFullDetection: false, seed: seed).output, as: UTF8.self)
+        let root = try OrderedJSON.parse(output)
+        guard case .string(let number)? = value(root, "passport", "number"), case .string(let mrz)? = value(root, "passport", "mrz"),
+              let line = mrz.split(separator: "\n").last else { Issue.record("\(output)"); continue }
+        #expect(number != "Y57852570" && line.prefix(9) == number, "seed \(seed): \(number) / \(line)")
+    }
+}

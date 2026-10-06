@@ -990,8 +990,12 @@ final class StandIns {
             let area = place.flatMap { ["US", "CA"].contains($0.country) ? $0.areaCode : nil } ?? pick(Places.all.filter { $0.country == "US" }.map(\.areaCode)) ?? "303"
             fresh = (trunk ? "1" : "") + area + "5550" + "1" + String(format: "%02d", Int.random(in: 0...99, using: &rng))
         } else if plus, let code = original.split(whereSeparator: { !$0.isNumber && $0 != "+" }).first, code.count >= 2 {
-            let country = code.dropFirst()
-            fresh = country + (country.count..<digits.count).map { index in index == country.count ? digit(true) : digit() }.joined()
+            // The country code is the first group, or, written in one run ("+27632118258"), as long as its
+            // calling code is; the national number keeps its first digit, which says mobile or landline.
+            let country = code.count <= 4 ? String(code.dropFirst()) : String(digits.prefix(Self.callingCodeLength(digits)))
+            guard country.count < digits.count else { return "+" + country + self.digits(7) }
+            let lead = digits[digits.index(digits.startIndex, offsetBy: country.count)]
+            fresh = country + String(lead) + (country.count + 1..<digits.count).map { _ in digit() }.joined()
         } else if digits.count >= 7, digits.first == "0" {
             // A national number keeps its trunk zero and the digit after it, which says mobile or landline
             // ("082 …" in South Africa, "07…" in the UK): the rest is drawn.
@@ -1006,6 +1010,13 @@ final class StandIns {
         }
         var iterator = fresh.makeIterator()
         return String(original.map { $0.isASCII && $0.isNumber ? iterator.next() ?? $0 : $0 })
+    }
+    /// Calling codes are prefix-free: 1 and 7 stand alone, these open with two digits, and every other one has three.
+    private static let twoDigitCallingCodes: Set<Substring> = ["20", "27", "30", "31", "32", "33", "34", "36", "39", "40", "41", "43", "44", "45", "46", "47", "48", "49", "51", "52", "53", "54", "55", "56", "57", "58", "60", "61", "62", "63", "64", "65", "66", "81", "82", "84", "86", "90", "91", "92", "93", "94", "95", "98"]
+    static func callingCodeLength(_ digits: String) -> Int {
+        guard let first = digits.first else { return 0 }
+        if first == "1" || first == "7" { return 1 }
+        return twoDigitCallingCodes.contains(digits.prefix(2)) ? 2 : 3
     }
     /// A phone number's digits, the same however the number is written ("2128675309", "2128675309.0").
     private func phoneDigits(_ digits: String, _ place: Place?) -> String {
@@ -1123,9 +1134,14 @@ final class StandIns {
     private func identifier(_ original: String) -> (recognizer: Recognizer, key: String)? {
         // Of the kinds whose checks it passes, the one the words around it name ("routing_number": a bank's, not a tax file's).
         let kinds = Recognizers.candidates(original).filter { Recognizers.drawn.contains($0.entity) }
-        guard let recognizer = kinds.first(where: { $0.name == kind }) ?? kinds.first(where: { Recognizers.named($0.context, among: naming) || $0.keys.contains(naming.sorted().joined()) }) ?? kinds.first else { return nil }
+        let trimmed = original.trimmingCharacters(in: .whitespaces)
         // By its characters alone: "23332969-K" may pass two kinds' checks where "23332969K" passes one.
-        return (recognizer, "IDENTIFIER\u{0}" + String(recognizer.kept(original.trimmingCharacters(in: .whitespaces))))
+        func key(_ recognizer: Recognizer) -> String { "IDENTIFIER\u{0}" + String(recognizer.kept(trimmed)) }
+        // Named by nothing (a zone's number), it is the kind its stand-in elsewhere already is.
+        guard let recognizer = kinds.first(where: { $0.name == kind }) ?? kinds.first(where: { Recognizers.named($0.context, among: naming) || $0.keys.contains(naming.sorted().joined()) })
+                ?? kinds.first(where: { recognizer in assigned[key(recognizer)].map { Self.fits(Recognizers.write(Array($0), like: trimmed, recognizer), recognizer) } ?? false })
+                ?? kinds.first else { return nil }
+        return (recognizer, key(recognizer))
     }
     func numericLexeme(_ original: String, entity: String, address: AddressParts? = nil) -> String {
         let key = entity + "\u{0}" + original
@@ -1279,6 +1295,8 @@ final class StandIns {
             if original.range(of: #"^\d{1,5}[A-Za-z]?(?:\s*[-/]\s*\d{1,5}[A-Za-z]?)?(?:\s?(?:bis|ter))?$"#, options: .regularExpression) != nil { return addressNumbered(original) }
             // A short code on its own ("B4") keeps its shape.
             if !original.contains(" "), original.count <= 6, original.contains(where: \.isNumber) { return idLike(original) }
+            // So does a code in two short groups no place reads ("QA1 1AA", "1234 AB"), as a postcode is written: it never becomes a street.
+            if original.range(of: #"^(?=.*\d)[A-Z\d]{2,4} [A-Z\d]{2,4}$"#, options: .regularExpression) != nil { return idLike(original) }
             // A street's or a building's name with no number ("Via Garibaldi", "Hauptstraße",
             // "Kestrel House"): another of its kind, named as the same street is in any line beside it.
             if !original.contains(where: \.isNumber), !original.contains(","), original.split(separator: " ").count <= 6 {
@@ -1318,7 +1336,12 @@ final class StandIns {
             // A documentation address, never the one written nor one spelling it ("203.0.113.106" holds "203.0.113.10").
             var made = original
             for _ in 0..<16 where made.lowercased().contains(original.lowercased()) || original.lowercased().contains(made.lowercased()) {
-                made = original.contains(":") ? "2001:db8::" + String(Int.random(in: 0x100...0xffff, using: &rng), radix: 16) : "203.0.113.\(Int.random(in: 1...254, using: &rng))"
+                // In the original's form: an IPv4 address written inside an IPv6 one ("::ffff:192.0.2.1") stays so, and one of fewer parts keeps their count.
+                let groups = original.split(separator: ":", omittingEmptySubsequences: false).last.map { $0.split(separator: ".", omittingEmptySubsequences: false).count } ?? 0
+                let four = (["203", "0", "113"].prefix(max(1, groups - 1)) + ["\(Int.random(in: 1...254, using: &rng))"]).joined(separator: ".")
+                let mapped = original.lastIndex(of: ":").map { String(original[...$0]) } ?? ""
+                made = original.contains(".") ? (mapped.isEmpty ? "" : ["::", "::ffff:"].contains(mapped.lowercased()) ? mapped : "::ffff:") + four
+                    : original.contains(":") ? "2001:db8::" + String(Int.random(in: 0x100...0xffff, using: &rng), radix: 16) : four
             }
             return made
         case "US_BANK_NUMBER": return digits(10)

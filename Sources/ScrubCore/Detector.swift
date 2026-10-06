@@ -652,6 +652,8 @@ public final class Detector {
                 let value = TextRanges.substring(text, match.range.location..<NSMaxRange(match.range))
                 // A coordinate like "-122.4443" is no phone number.
                 guard TextRanges.matches(Self.decimal, in: value).isEmpty else { return nil }
+                // Four dotted groups of up to three digits are an address or a version ("256.256.256.256"), never a phone.
+                if value.range(of: #"^\d{1,3}(?:\.\d{1,3}){3}$"#, options: .regularExpression) != nil { return nil }
                 // Ten digits from 1 are a Unix time (2001 to 2033), never a North
                 // American number, whose area code starts from 2.
                 if value.count == 10 || value.count == 13, value.first == "1", value.allSatisfy({ $0.isASCII && $0.isNumber }) { return nil }
