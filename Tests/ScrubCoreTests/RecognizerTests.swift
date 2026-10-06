@@ -58,9 +58,50 @@ let recognizerSamples: [String: String] = [
     "BITCOIN": "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2",
     "ETHEREUM": "0x52908400098527886E0F7030069857D2E4169EE7",
     "MAC_ADDRESS": "00:1A:2B:3C:4D:5E",
+    // Ported kinds: specimens and synthetic values with computed checks.
+    "DE_BSNR": "721234567",
+    "DE_LANR": "123456601",
+    "DE_DRIVING_LICENCE": "B0721234581",
+    "DE_HANDELSREGISTER": "HRB 123456",
+    "DE_LICENCE_PLATE": "M AB 1234",
+    "DE_PLZ": "10115",
+    "STEUERNUMMER": "181/815/08155",
+    "DE_VAT_ID": "DE123456788",
+    "ORGANISATIONSNUMMER": "552234-5676",
+    "ES_PASSPORT": "PAA123456",
+    "GSTIN": "27ABCPK1234F1Z5",
+    "IN_VEHICLE_REGISTRATION": "MH 12 AB 1234",
+    "IT_DRIVER_LICENSE": "U1B2C3456X",
+    "IT_IDENTITY_CARD": "CA00000AA",
+    "PARTITA_IVA": "12345670017",
+    "KR_BRN": "123-45-67891",
+    "KR_DRIVER_LICENSE": "11-90-123456-01",
+    "KR_PASSPORT": "M123A4567",
+    "ZA_COMPANY_REGISTRATION": "2015/123456/07",
+    "ZA_DRIVER_LICENSE": "4021000123AB",
+    "ZA_INCOME_TAX_NUMBER": "0123456782",
+    "ZA_LICENSE_PLATE": "BC 12 DF GP",
+    "ZA_PHONE_NUMBER": "+27 82 012 3456",
+    "ZA_TRAFFIC_REGISTER_NUMBER": "1234567890123",
+    "ZA_VAT_NUMBER": "4123456789",
+    "NG_VEHICLE_REGISTRATION": "ABC-123DE",
+    "TR_LICENSE_PLATE": "34-AB-1234",
+    "PH_TIN": "123-456-782",
+    "PH_UMID": "1234-5678901-2",
+    "SG_UEN": "201912345R",
+    "ABN": "18 123 456 789",
+    "ACN": "123 456 780",
+    "ABA_ROUTING": "012345672",
+    "CA_POSTAL_CODE": "H0H 0H0",
+    "UK_POSTCODE": "AB12 3DE",
+    "UK_VEHICLE_REGISTRATION": "AB51 ABC",
+    "PRIOR_AUTHORIZATION": "PA-123456789",
+    "CLAIM_NUMBER": "CLM-1234567890",
+    "PRESCRIPTION_NUMBER": "RX-1234567",
+    "REFERRAL_NUMBER": "REF-1234567",
+    "EIN": "12-3456789",
+    "US_HEALTH_MEMBER_ID": "XYZ123456789",
 ]
-/// Kinds whose only check is their shape: one digit changed is still one of them.
-private let shapeOnly: Set<String> = ["CPR", "NINO", "PAN", "RRN", "EPIC", "MBI", "AR_DNI", "PASSPORT", "ETHEREUM", "CLAVE_ELECTOR", "UK_DRIVING_LICENCE", "MAC_ADDRESS"]
 // Shape-only kinds are drawn as any ID of their shape; a document number of a known shape keeps it.
 @Test func shapeOnlyKindsKeepTheirShape() throws {
     try check(#"{"national_id":"ZX4829137","passport":{"number":"Y83368442"}}"#, gone: ["ZX4829137", "Y83368442"]) { route, root, output in
@@ -79,9 +120,9 @@ private func recognizer(_ name: String) -> Recognizer? { Recognizers.all.first {
         let recognizer = try #require(recognizer(name))
         #expect(recognizer.passes(sample), "\(name): \(sample)")
         // One character moved by one fails every check that has one.
-        guard !shapeOnly.contains(name) else { continue }
-        // A Medicare card's last digit is the card's issue, not its check.
-        let index = try #require(name == "AU_MEDICARE" ? sample.firstIndex { $0.isNumber } : sample.lastIndex { $0.isNumber })
+        guard recognizer.verifies else { continue }
+        // A Medicare card's or a German licence's last character is its issue, a doctor's number's its specialty, not its check.
+        let index = try #require(["AU_MEDICARE", "DE_LANR", "DE_DRIVING_LICENCE"].contains(name) ? sample.firstIndex { $0.isNumber } : sample.lastIndex { $0.isNumber })
         let digit = try #require(sample[index].wholeNumberValue)
         var changed = sample
         changed.replaceSubrange(index...index, with: String((digit + 1) % 10))
@@ -348,4 +389,100 @@ private func value(_ root: JSONValue, _ path: String...) -> JSONValue? {
     let encoded = Data(#"{"value":2902004001}"#.utf8).base64EncodedString()
     try check(#"{"a":{"type":"CPR","number":"[2902004001]"},"b":{"type":"CPR","number":"{\"value\":3112994001}"},"c":{"type":"CPR","number":"\#(encoded)"}}"#,
               gone: ["2902004001", "3112994001"])
+}
+
+@Test func aNameWrittenInsideAWordStillNamesIt() throws {
+    // "nhs" before "no", "pesel" closing a compound, as written in keys and German prose.
+    try check(#"{"patient_nhsno":"9434765919","kundenpesel":"44051401359","note":"Kunden-Steuernummer 17 543 186 927"}"#, gone: ["9434765919", "44051401359", "17 543 186 927"])
+    // A short name only before a word for "number": "cprs" names nothing.
+    #expect(Recognizers.mentions("cprnummer", "cpr") && !Recognizers.mentions("cprs", "cpr") && !Recognizers.mentions("unlicensed", "license"))
+}
+
+@Test func registersReadAsTheirAuthoritiesWriteThem() throws {
+    func kinds(_ value: String) -> Set<String> { Set(Recognizers.candidates(value).map(\.name)) }
+    // A refugee's South African number, and one born on 29 February 2000.
+    #expect(kinds("8001015000284").contains("SOUTH_AFRICAN_ID") && kinds("0002295000083").contains("SOUTH_AFRICAN_ID"))
+    var rng: any RandomNumberGenerator = SeededGenerator(seed: 9)
+    // A foreigner's Korean number stays a foreigner's, a Finnish code of this century keeps its letter, a Z NIE its Z.
+    for _ in 0..<8 {
+        let korean = try #require(Recognizers.standIn(for: "900319-5123456", using: &rng))
+        #expect("5678".contains(Array(korean)[7]), "\(korean)")
+        let finnish = try #require(Recognizers.standIn(for: "010120A123K", using: &rng))
+        #expect(Array(finnish)[6] == "A", "\(finnish)")
+        let spanish = try #require(Recognizers.standIn(for: "Z1234567R", using: &rng))
+        #expect(spanish.first == "Z", "\(spanish)")
+    }
+}
+
+@Test func portedKindsAreFoundWhereTheyAreWritten() throws {
+    // A postcode alone in prose, a plate its word names, a GST number's own structure, a routing number under its key.
+    try check(#"{"note":"Mailing code K1A 0B1 for the Ottawa office","car":"registration AB51 ABC","supplier":"Supplier 27ABCPK1234F1Z5 invoiced"}"#,
+              gone: ["K1A 0B1", "AB51 ABC", "27ABCPK1234F1Z5"])
+    try check(#"{"routing_number":"021000021"}"#, gone: ["021000021"]) { route, root, output in
+        guard case .string(let made)? = value(root, "routing_number") else { Issue.record("\(route): \(output)"); return }
+        #expect(Recognizers.candidates(made).contains { $0.name == "ABA_ROUTING" }, "\(route): \(made)")
+    }
+}
+
+@Test func aPassportPrintedWithASpaceIsRead() throws {
+    try check(#"{"note":"Passport A12 34567 on file"}"#, gone: ["A12 34567"])
+}
+
+@Test func anIPAddressNeverStandsInForItself() throws {
+    // Stand-ins are documentation addresses, and a sample may be one already.
+    for seed in UInt64(1)...60 {
+        let output = String(decoding: try Scrubber.scrub(Data(#"{"ip_address":"203.0.113.10","ip6":"2001:db8::1a2"}"#.utf8), name: "x.json", forceFullDetection: false, seed: seed).output, as: UTF8.self)
+        #expect(!output.contains("203.0.113.10") && !output.contains("2001:db8::1a2"), "seed \(seed): \(output)")
+    }
+}
+
+@Test func aWordInProseNamesTheStandInsKind() throws {
+    // "nif" names Spain's number, "claim" a claim's: each stand-in is of that kind, not of another the value passes by chance.
+    for (note, kind) in [("Holder nif 23332969-K on file", "DNI"), ("Holder claim CLM785751 on file", "CLAIM_NUMBER")] {
+        let original = String(note.split(separator: " ")[2])
+        try check("{\"note\":\"\(note)\"}", gone: [original]) { route, root, output in
+            guard case .string(let written)? = value(root, "note") else { Issue.record("\(route): \(output)"); return }
+            let made = String(written.split(separator: " ")[2])
+            #expect(Recognizers.candidates(made).contains { $0.name == kind }, "\(route): \(made)")
+        }
+    }
+}
+
+@Test func namedKindsReachEveryWayAValueIsWritten() throws {
+    // A practice number as a JSON number, a plate a logbook names though it reads like a British Standard,
+    // a licence and a plate a record's type names in words with punctuation.
+    try check(#"{"bsnr":722586313}"#, gone: ["722586313"])
+    try check(#"{"note":"Holder logbook BS77BOE on file"}"#, gone: ["BS77BOE"])
+    try check(#"[{"type":"V5C","number":"LA52-VSE"},{"type":"DRIVER'S LICENSE","number":"B7353417348"},{"type":"UNIFIED MULTI-PURPOSE ID","number":"123413499657"}]"#,
+              gone: ["LA52-VSE", "B7353417348", "123413499657"])
+}
+
+@Test func aShortRegisterNumberKeepsItsRegisterAndOneStandIn() throws {
+    try check(#"{"a":{"handelsregister":"HRB 39"},"b":{"handelsregister":"HRB39"}}"#, gone: ["HRB 39", "HRB39"]) { route, root, output in
+        guard case .string(let spaced)? = value(root, "a", "handelsregister"), case .string(let bare)? = value(root, "b", "handelsregister") else { Issue.record("\(route): \(output)"); return }
+        #expect(spaced.hasPrefix("HRB ") && spaced.replacingOccurrences(of: " ", with: "") == bare, "\(route): \(output)")
+    }
+}
+
+@Test func aKeyNamingAKindIsNoOnesName() throws {
+    // "Umid" is a given name, but "umid card" is the field a Philippine ID is written under.
+    try check(#"{"umid card":"1234-9402375-0","korean brn":"766-65-89706"}"#, gone: ["1234-9402375-0", "766-65-89706"]) { route, root, output in
+        #expect(output.contains("\"umid card\"") && output.contains("\"korean brn\""), "\(route): \(output)")
+    }
+}
+
+@Test func genericPatternsRejectWhatNoIssuerWrites() {
+    // An 18-digit ID opening with a 1 passing Luhn by chance is no card; "::" alone is no host.
+    #expect(!Patterns.find("Event 1592876430123456787 logged", isCancelled: { false }).contains { $0.entity == "CREDIT_CARD" })
+    #expect(!Patterns.find("bound to :: on start", isCancelled: { false }).contains { $0.entity == "IP_ADDRESS" })
+    #expect(!Patterns.find("born 2024-99-99", isCancelled: { false }).contains { $0.entity == "DATE_OF_BIRTH" })
+}
+
+@Test func aCentralLondonPostcodeStaysInTheUK() throws {
+    // No place but central London writes "SW1A": its city and postcode become one British place, never one abroad.
+    try check(#"{"postcode":"SW1A 1AA","city":"London"}"#, gone: ["SW1A 1AA"]) { route, root, output in
+        guard case .string(let city)? = value(root, "city"), case .string(let postcode)? = value(root, "postcode"),
+              let place = Places.all.first(where: { $0.city == city }) else { Issue.record("\(route): \(output)"); return }
+        #expect(place.country == "GB" && place.postal.contains(String(postcode.prefix { $0 != " " })), "\(route): \(output)")
+    }
 }

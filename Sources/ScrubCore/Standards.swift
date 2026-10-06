@@ -23,7 +23,8 @@ enum Standards {
     /// a key names in full ("national_id": …) keeps what its key says.
     static func outside(_ spans: [Span], in text: String) -> [Span] {
         let length = (text as NSString).length
-        func judged(_ span: Span) -> Bool { numbered.contains(span.entity) && !(span.score == 1 && span.range == 0..<length) }
+        // A value its key names whole, or an identifier a word names ("logbook BS77BOE": a plate, not British Standard 77), is no standard.
+        func judged(_ span: Span) -> Bool { numbered.contains(span.entity) && !(span.score == 1 && (span.range == 0..<length || Recognizers.drawn.contains(span.entity))) }
         guard spans.contains(where: judged) else { return spans }
         let named = ranges(in: text)
         guard !named.isEmpty else { return spans }

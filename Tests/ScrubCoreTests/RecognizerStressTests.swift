@@ -483,6 +483,15 @@ private func layouts(of recognizer: Recognizer, sample: [Character]) -> [Layout]
             }
         }
     }
+    // A mark written before the first character: "+27 82 …", once more with each layout's own marks.
+    if marks.contains("+") {
+        let plain = out.isEmpty ? [Layout(cuts: [], marks: [])] : out
+        var spaced = Set(out)
+        for layout in plain + marks.filter({ $0 != "+" }).map({ Layout(cuts: [2, 4, 7], marks: [$0, $0, $0]) }) {
+            let led = Layout(cuts: [0] + layout.cuts, marks: ["+"] + layout.marks)
+            if !spaced.contains(led), writes(recognizer, led.write(sample)) { out.append(led); spaced.insert(led) }
+        }
+    }
     return out
 }
 
@@ -646,7 +655,13 @@ func identifiersAreReplacedInEverySpelling(name: String) throws {
                     if !left { counts.replaced += 1 }
                     uncovered[kind] = counts
                 }
-                guard !left, let known, let made = replacement(item, in: output, root: root) else { continue }
+                // A postcode's stand-in is its stand-in place's and a phone's its numbering's, not the registry's draw.
+                guard !left, var known, Recognizers.drawn.contains(recognizer.entity), let made = replacement(item, in: output, root: root) else { continue }
+                // A value several kinds pass takes a stand-in of the kind its word names.
+                if let word = item.variant.split(separator: "=", maxSplits: 1).dropFirst().first.map(String.init) {
+                    let kinds = Recognizers.candidates(item.spelled), words = Set(KeyHints.words(word))
+                    if let named = kinds.first(where: { $0.name == recognizer.name }) ?? kinds.first(where: { Recognizers.named($0.context, among: words) }) { known = named }
+                }
                 let checked = known.passes(made) && writes(known, made), laidOut = keepsLayout(item.spelled, made, known)
                 if item.expected {
                     if !checked { fail("stand-in fails \(known.name)'s check or forms", item.spelled + " → " + made) }
@@ -661,12 +676,14 @@ func identifiersAreReplacedInEverySpelling(name: String) throws {
         }
 
         // Two spellings of one identifier in one document, separated and bare, take one stand-in.
-        if let separated = written.first(where: { $0.contains(where: recognizer.separators.contains) }), separated != bare {
+        if Recognizers.drawn.contains(recognizer.entity), let separated = written.first(where: { $0.contains(where: recognizer.separators.contains) }), separated != bare {
             let word = context[index % context.count]
             let words = Set(KeyHints.words(word))
-            if registryFinds(separated, named: words) || registryFinds(bare, named: words) {
+            // Only where both are its spellings: "AIM2" is no German plate, "A IM 2" is.
+            let spells = { (value: String) in Recognizers.candidates(value).contains { $0.name == recognizer.name } }
+            if registryFinds(separated, named: words) || registryFinds(bare, named: words), spells(separated) && spells(bare) {
                 let body = "{\"a\":{\(quoted(word)):\(quoted(separated))},\"b\":{\(quoted(word)):\(quoted(bare))}}"
-                let owner = Recognizers.recognizing(separated) ?? recognizer
+                let owner = Recognizers.candidates(separated).contains { $0.name == recognizer.name } ? recognizer : Recognizers.recognizing(separated) ?? recognizer
                 for route in Route.allCases {
                     tried += 1
                     let output = try route.scrub(body)

@@ -173,7 +173,10 @@ public final class Job {
     /// `object`: the object a flattened header names within the innermost record
     /// ("applicant" of "applicant.dob"), a scope of its own inside that record, so
     /// two people in one row each keep their own birth date's parts.
-    func enter(value: Int, records: [Int], part: KeyHints.DatePart? = nil, object: String = "") {
+    /// `naming`: the words naming the value (its key's), so an identifier two kinds' checks pass is
+    /// given a stand-in of the kind they name.
+    func enter(value: Int, records: [Int], part: KeyHints.DatePart? = nil, object: String = "", naming: Set<String> = []) {
+        standIns.naming = naming
         var scopes = records.map { "r\($0)" }
         if let innermost = scopes.first, !object.isEmpty {
             // "applicant.birth" sits in "applicant" too: innermost first, each a scope of the record.
@@ -466,7 +469,11 @@ public final class Job {
             // A link's part is replaced as what it spells, and written back encoded the same way;
             // a value with hidden characters or markup inside, as what it reads (see `Visible`).
             let shown = Visible.plain(ordered[index].url.map { URLs.decode(written, $0) } ?? written)
+            // An identifier takes a stand-in of the kind the words before it name, as one under a key does.
+            let keyed = standIns.naming
+            if Recognizers.drawn.contains(ordered[index].entity) { standIns.naming.formUnion(Recognizers.before(ordered[index].range, in: text)) }
             let fake = replacement(for: ordered[index].entity, original: shown, persona: owners[index], address: addresses[index], local: local)
+            standIns.naming = keyed
             fakes[index] = ordered[index].url.map { URLs.encode(fake, like: written, $0) } ?? Visible.rewrite(written, with: fake)
             if lastUnclear { unclear.insert(index) }
         }

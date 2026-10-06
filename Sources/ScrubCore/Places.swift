@@ -84,7 +84,7 @@ enum Places {
     Regina|SK|S4P S4S S4T|306|50.4452,-104.6189|America/Regina
     """
     private static let gb = """
-    London|England|SE1 N1 E2 NW3 W2 SW4|20|51.5072,-0.1276|Europe/London
+    London|England|SE1 N1 E2 NW3 W2 SW4 EC1A WC2N W1T SW1P|20|51.5072,-0.1276|Europe/London
     Manchester|England|M1 M4 M14 M20|161|53.4808,-2.2426|Europe/London
     Birmingham|England|B1 B5 B15|121|52.4862,-1.8904|Europe/London
     Leeds|England|LS1 LS6 LS7|113|53.8008,-1.5491|Europe/London

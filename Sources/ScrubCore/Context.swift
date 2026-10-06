@@ -211,7 +211,7 @@ public enum KeyHints {
     /// "phone_numbers"), not one that only ends like one ("quillharbor_token").
     static func isFieldName(_ key: String) -> Bool {
         let compact = key.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
-        return hints[compact] != nil || singular(compact).map { hints[$0] != nil } == true
+        return hints[compact] != nil || singular(compact).map { hints[$0] != nil } == true || Recognizers.fieldNames.contains(compact)
     }
     /// A key written with a value in it, an email's "@" or digits, not a field's plain name.
     static func holdsData(_ key: String) -> Bool { key.contains(where: { $0.isNumber || $0 == "@" }) }

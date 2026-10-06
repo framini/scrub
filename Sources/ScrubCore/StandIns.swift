@@ -130,7 +130,7 @@ final class StandIns {
         let stableEmail = actual == "EMAIL_ADDRESS" && (persona != nil || people.find(email: original) != nil)
         if !stablePerson && !stableEmail, let found = assigned[key] { return found }
         // One identifier written two ways ("11774270-H", "11774270h") keeps one stand-in, each in its own layout.
-        let identity = Recognizers.entities.contains(actual) ? identifier(original) : nil
+        let identity = Recognizers.drawn.contains(actual) ? identifier(original) : nil
         if let identity, let written = reused(identity, original) {
             assigned[key] = written
             return written
@@ -223,6 +223,8 @@ final class StandIns {
     /// document: two people's SSNs can end alike, and two birth years can
     /// both fit an age.
     var scopes: [String] = []
+    /// The words naming the value being drawn (see `Job.enter`).
+    var naming: Set<String> = []
     /// Set by a draw read off another value when the nearest scope holding
     /// one holds several that disagree: it takes the first, and review asks.
     var unclear = false
@@ -533,10 +535,15 @@ final class StandIns {
             if let districtKey, districtPlaces[districtKey] == nil { districtPlaces[districtKey] = known }
             return known
         }
-        let candidates = Places.all.filter { place in
+        // A UK district of the original's shape other than its own will do, in any place (see `canWrite`).
+        let inCountry = Places.all.filter { place in
             place.country == country && Places.region(place.region, in: country)?.code != ownRegion && !originals.contains(place.city.lowercased())
-                && (parts.postal.map { canWrite(place, like: $0) && !place.postal.contains(Self.district($0)) } ?? true)
         }
+        let writing = inCountry.filter { place in parts.postal.map { canWrite(place, like: $0) } ?? true }
+        let elsewhere = writing.filter { place in parts.postal.map { !place.postal.contains(Self.district($0)) } ?? true }
+        // Best a place outside the original's district; a UK shape only its own place writes stays there.
+        // Never another country for want of a postcode's shape: a place of its own country, its code drawn in the shape.
+        let candidates = !elsewhere.isEmpty ? elsewhere : country == "GB" && !writing.isEmpty ? writing : inCountry
         // Best a place no other address became, in a region no one in the document is from.
         let fresh = candidates.filter { place in
             let region = Places.region(place.region, in: country)
@@ -557,8 +564,8 @@ final class StandIns {
         switch place.country {
         case "US", "AU": return !(trimmed.allSatisfy(\.isNumber) && trimmed.first != "0") || place.postal.contains { $0.first != "0" }
         case "GB":
-            let outward = trimmed.contains(" ") ? String(trimmed.prefix { $0 != " " }) : String(trimmed.dropLast(3))
-            return place.postal.contains { Self.shape($0) == Self.shape(outward.uppercased()) }
+            let outward = (trimmed.contains(" ") ? String(trimmed.prefix { $0 != " " }) : String(trimmed.dropLast(3))).uppercased()
+            return place.postal.contains { $0 != outward && Self.shape($0) == Self.shape(outward) }
         default: return true
         }
     }
@@ -595,7 +602,13 @@ final class StandIns {
             let letters = Array("ABDEFGHJLNPQRSTUWXYZ")
             let outward = trimmed.contains(" ") ? String(trimmed.prefix { $0 != " " }) : String(trimmed.dropLast(3))
             let inward = digit() + String(pick(letters) ?? "A") + String(pick(letters) ?? "B")
-            candidate = pick(place.postal.filter { Self.shape($0) == Self.shape(outward) }).map { $0 + (trimmed.contains(" ") ? " " : "") + inward }
+            // A district of the original's shape, else any of the place's own: "SW1A 1AA" in Bristol is "BS1 4XY", not a district no one has.
+            let others = place.postal.filter { $0 != outward.uppercased() }
+            let district = pick(others.filter { Self.shape($0) == Self.shape(outward.uppercased()) }) ?? pick(others)
+            candidate = district.map { $0 + (trimmed.contains(" ") ? " " : "") + inward }
+            guard var candidate, candidate.uppercased() != trimmed.uppercased() else { return nil }
+            if trimmed == trimmed.lowercased() { candidate = candidate.lowercased() }
+            return candidate
         default: candidate = nil
         }
         guard var candidate, Self.shape(candidate) == Self.shape(trimmed.uppercased()) else { return nil }
@@ -1076,7 +1089,7 @@ final class StandIns {
         let bare = real.count >= 7 && bareEndings.contains(String(real.suffix(4)))
         var made: String?
         for _ in 0..<16 {
-            made = Recognizers.standIn(for: original, using: &rng)
+            made = Recognizers.standIn(for: original, preferring: identifier(original)?.recognizer, using: &rng)
             guard bare, let drawn = made, drawn.filter({ $0.isASCII && $0.isNumber }).dropLast(3).last == "0" else { break }
         }
         return made
@@ -1095,7 +1108,9 @@ final class StandIns {
     }
     /// The kind an identifier is and its characters without separators, the same however it is written.
     private func identifier(_ original: String) -> (recognizer: Recognizer, key: String)? {
-        guard let recognizer = Recognizers.recognizing(original) else { return nil }
+        // Of the kinds whose checks it passes, the one the words around it name ("routing_number": a bank's, not a tax file's).
+        let kinds = Recognizers.candidates(original).filter { Recognizers.drawn.contains($0.entity) }
+        guard let recognizer = kinds.first(where: { Recognizers.named($0.context, among: naming) || $0.keys.contains(naming.sorted().joined()) }) ?? kinds.first else { return nil }
         // By its characters alone: "23332969-K" may pass two kinds' checks where "23332969K" passes one.
         return (recognizer, "IDENTIFIER\u{0}" + String(recognizer.kept(original.trimmingCharacters(in: .whitespaces))))
     }
@@ -1168,7 +1183,7 @@ final class StandIns {
     private static let digitsOnly: Set<String> = ["PHONE_NUMBER", "US_SSN", "ID_NUMBER", "POSTAL_CODE", "US_BANK_NUMBER", "US_PASSPORT", "US_DRIVER_LICENSE", "US_ITIN", "MEDICAL_LICENSE"]
     private func make(_ entity: String, _ original: String, _ persona: Persona?, _ place: Place? = nil) -> String {
         // An identifier the registry knows takes a fresh one passing the same check, as a form validating it would ask.
-        if Recognizers.entities.contains(entity), let made = identifierStandIn(original) { return made }
+        if Recognizers.drawn.contains(entity), let made = identifierStandIn(original) { return made }
         // An address typed all in lowercase is read and rewritten as if cased, and lowercased again.
         if entity == "ADDRESS", let cased = AddressBlock.cased(original) { return make(entity, cased, persona, place).lowercased() }
         if let masked = ["US_SSN", "CREDIT_CARD", "PHONE_NUMBER", "US_BANK_NUMBER", "ID_NUMBER", "LAST_DIGITS"].contains(entity) ? masked(original) : nil { return masked }
@@ -1287,8 +1302,12 @@ final class StandIns {
             }
             return "GB82WEST12345698765432"
         case "IP_ADDRESS":
-            if original.contains(":") { return "2001:db8::" + String(Int.random(in: 0x100...0xffff, using: &rng), radix: 16) }
-            return "203.0.113.\(Int.random(in: 1...254, using: &rng))"
+            // A documentation address, never the one written nor one spelling it ("203.0.113.106" holds "203.0.113.10").
+            var made = original
+            for _ in 0..<16 where made.lowercased().contains(original.lowercased()) || original.lowercased().contains(made.lowercased()) {
+                made = original.contains(":") ? "2001:db8::" + String(Int.random(in: 0x100...0xffff, using: &rng), radix: 16) : "203.0.113.\(Int.random(in: 1...254, using: &rng))"
+            }
+            return made
         case "US_BANK_NUMBER": return digits(10)
         case "US_DRIVER_LICENSE": return "A" + digits(7)
         case "US_PASSPORT": return digits(9)

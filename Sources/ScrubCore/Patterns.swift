@@ -180,10 +180,21 @@ enum Patterns {
         switch entity {
         case "CREDIT_CARD":
             let digits = value.compactMap(\.wholeNumberValue)
+            // No issuer's number opens with a 0, and the only cards opening with a 1 (an airline's) are 15
+            // digits: an 18- or 19-digit ID opening with a 1 ("1592876430…") passing Luhn by chance is no card.
+            guard let first = digits.first, first != 0, first != 1 || digits.count == 15 else { return false }
             return (13...19).contains(digits.count) && luhn(digits) && !Self.epochMilliseconds(digits)
         case "IBAN_CODE": return iban(value)
         case "MRZ": return MachineZone.isZone(value)
+        case "DATE_OF_BIRTH":
+            // A day of a month, written year first or last, day before or after its month.
+            let parts = value.split(whereSeparator: { "-/.".contains($0) }).compactMap { Int($0) }
+            guard parts.count == 3 else { return false }
+            let (a, b) = parts[0] > 31 ? (parts[1], parts[2]) : (parts[0], parts[1])
+            return (1...12).contains(a) && (1...31).contains(b) || (1...12).contains(b) && (1...31).contains(a)
         case "IP_ADDRESS":
+            // "::" alone is the unspecified address: no host's.
+            guard value.contains(where: \.isHexDigit) else { return false }
             var v4 = in_addr(); var v6 = in6_addr()
             return value.withCString { inet_pton(AF_INET, $0, &v4) == 1 || inet_pton(AF_INET6, $0, &v6) == 1 }
         default: return true

@@ -98,7 +98,7 @@ public enum JSONFile: FileFormat {
     }
     // Only these can be written as a bare number; a number under "last_name" is a count or a code,
     // under "address" only a house or unit number ("building_number": 12) is one.
-    private static let numericEntities: Set<String> = ["PHONE_NUMBER", "US_SSN", "ID_NUMBER", "CREDIT_CARD", "POSTAL_CODE", "DATE_OF_BIRTH", "SECRET", "USERNAME", "AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE", "ADDRESS"]
+    private static let numericEntities: Set<String> = ["PHONE_NUMBER", "US_SSN", "ID_NUMBER", "MEDICAL_LICENSE", "CREDIT_CARD", "POSTAL_CODE", "DATE_OF_BIRTH", "SECRET", "USERNAME", "AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE", "ADDRESS"]
     /// A point written as two numbers: GeoJSON puts the longitude first, a
     /// "latlng" the latitude, and a number past ±90 can only be a longitude.
     static func coordinateKeys(_ key: String?, _ values: [JSONValue]) -> [String]? {
