@@ -116,8 +116,12 @@ public enum JSONFile: FileFormat {
         // A customer or patient number names them as an ID string would.
         if KeyHints.hint(key) == nil, RecordIDs.identifying(key: key, value: number), number.allSatisfy({ $0.isASCII && $0.isNumber }) { return "RECORD_ID" }
         if let hint = KeyHints.hint(key), ["AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE"].contains(hint) { return KeyHints.fits(key, number) ? hint : nil }
-        // A secret written as a number, whole or not ("password": -12345, "pin": 12.50), is one.
-        if KeyHints.hint(key) == "SECRET" { return KeyHints.fits(key, number) ? "SECRET" : nil }
+        // A secret written as a number, whole or not ("password": -12345, "pin": 12.50), is one;
+        // a country's personal number under "pin" (6613687085361) is that identifier.
+        if KeyHints.hint(key) == "SECRET" {
+            if KeyHints.fits(key, number) { return "SECRET" }
+            return number.allSatisfy({ $0.isASCII && $0.isNumber }) ? Recognizers.named(number, by: context.union(KeyHints.words(key))) : nil
+        }
         if let hint = KeyHints.hint(key), !numericEntities.contains(hint) { return nil }
         if KeyHints.hint(key) == "ADDRESS" { return KeyHints.addressNumberKey(key) && KeyHints.fits(key, number) && number.allSatisfy({ $0.isASCII && $0.isNumber }) && number.count <= 5 ? "ADDRESS" : nil }
         guard let value = Double(number), value.isFinite else { return KeyHints.hint(key) }

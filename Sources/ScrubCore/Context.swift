@@ -341,7 +341,11 @@ public enum KeyHints {
             if let last = parts.last, credentialCollections.contains(last), trimmed.count <= 32,
                trimmed.allSatisfy({ $0.isASCII && ($0.isUppercase || $0 == "_") }) { return false }
             // A card's code and a PIN are digits; a word in their place is a check's result ("cvv": "match").
-            if cardCodes.contains(compactKey(key)) || cardCodes.contains(parts.last ?? "") { return trimmed.contains(where: \.isNumber) }
+            if cardCodes.contains(compactKey(key)) || cardCodes.contains(parts.last ?? "") {
+                // A country's personal identification number ("pin": "1 1101 00152 64 1", "A006665913Y") is an identifier, not a code.
+                if trimmed.count > 8, Recognizers.candidates(trimmed).contains(where: { Recognizers.named($0.context, among: ["pin"]) }) { return false }
+                return trimmed.contains(where: \.isNumber)
+            }
             guard parts.last == "token" || parts.last == "tokens" else { return true }
             // A bare "token" names an object when it is written as one: a type's code and an ID ("P-tZOLIOQGVxfixICuvkS0").
             guard let qualifier = parts.dropLast().last else { return TextRanges.matches(objectReference, in: trimmed).isEmpty }

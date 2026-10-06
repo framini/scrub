@@ -22,10 +22,10 @@ enum ProseLabels {
         + #"|\d{1,2}[/.\-]\d{1,2}[/.\-](?:\d{4}|\d{2})|\d{4}-\d{1,2}-\d{1,2})(?![\w/.\-]*\d)"#,
         options: [.caseInsensitive])
     private static let idLabel = TextPattern(
-        #"\b(passport(?:[ \t]+(?:number|no\.?|#))?|national[ \t]+insurance[ \t]+number|ni[ \t]+number|nino|national[ \t]+id(?:[ \t]+number)?|id[ \t]+number|identity[ \t]+number|id[ \t]+card[ \t]+number|dni|nie|cpf|curp|sin|social[ \t]+insurance[ \t]+number|(?:employee|staff)[ \t]+(?:id|number|no\.?)|badge[ \t]+(?:number|#)|mrn|medical[ \t]+record[ \t]+number|patient[ \t]+(?:id|number)|nhs[ \t]+number|health[ \t]+card[ \t]+number|member(?:ship)?[ \t]+(?:number|id|no\.?)|tax[ \t]+(?:id|number)|tin|ein|student[ \t]+(?:number|id)|policy[ \t]+(?:number|no\.?)|(?:driver'?s|drivers|driving)[ \t]+licen[cs]e(?:[ \t]+(?:number|no\.?))?|licen[cs]e[ \t]+number|account[ \t]+number|customer[ \t]+(?:number|id))\b(?:[ \t]*[:#=]|[ \t]+(?:is|was))?[ \t]*"#,
+        #"\b(passport(?:[ \t]+(?:number|no\.?|#))?|national[ \t]+insurance[ \t]+number|ni[ \t]+number|nino|national[ \t]+id(?:[ \t]+number)?|id[ \t]+number|identity[ \t]+number|id[ \t]+card[ \t]+number|dni|nie|cpf|curp|sin|ssn|social[ \t]+(?:insurance|security)[ \t]+number|(?:employee|staff)[ \t]+(?:id|number|no\.?)|badge[ \t]+(?:number|#)|mrn|medical[ \t]+record[ \t]+number|patient[ \t]+(?:id|number)|nhs[ \t]+number|health[ \t]+card[ \t]+number|member(?:ship)?[ \t]+(?:number|id|no\.?)|tax[ \t]+(?:id|number)|tin|ein|student[ \t]+(?:number|id)|policy[ \t]+(?:number|no\.?)|(?:driver'?s|drivers|driving)[ \t]+licen[cs]e(?:[ \t]+(?:number|no\.?))?|licen[cs]e[ \t]+number|account[ \t]+number|customer[ \t]+(?:number|id))\b(?:[ \t]*[:#=]|[ \t]+(?:is|was))?[ \t]*"#,
         options: [.caseInsensitive])
     private static let secretLabel = TextPattern(
-        #"\b(pass(?:word|wd|code|phrase)|pwd|pin(?:[ \t]+code)?|access[ \t]+code|(?:api|license|licence|product|access|secret|private)[ \t]+key|key|token|secret|[a-z][a-z0-9]*(?:_[a-z0-9]+)*_(?:key|token|secret|password|pass))\b((?:'s|’s)|[ \t]*[:=]|[ \t]+(?:is|was|to)\b)?[ \t]*"#,
+        #"\b(pass(?:word|wd|code|phrase)?|pwd|pw|pin(?:[ \t]+code)?|access[ \t]+code|(?:api|license|licence|product|access|secret|private)[ \t]+key|key|token|secret|[a-z][a-z0-9]*(?:_[a-z0-9]+)*_(?:key|token|secret|password|pass))\b((?:'s|’s)|[ \t]*[:=]|[ \t]+(?:is|was|to)\b)?[ \t]*"#,
         options: [.caseInsensitive])
     private static let poBox = TextPattern(
         #"\b(?:p\.?[ \t]?o\.?[ \t]?box|post[ \t]+office[ \t]+box|postfach|apartado(?:[ \t]+de[ \t]+correos)?|private[ \t]+bag)[ \t]+(\d{1,6})\b"#,
@@ -150,7 +150,9 @@ enum ProseLabels {
 
     /// An ID after its label: pieces split by single spaces, dots, dashes or
     /// slashes ("PK 93 30 50 C", "123.456.789-01", "EMP-104233"), each holding a
-    /// digit or no more than three capitals, with four digits or more in all.
+    /// digit or no more than three capitals, with four digits or more in all;
+    /// or one piece of six to twelve capitals and digits, two of them digits
+    /// or more, as a passport's are ("C26VMVVC3").
     private static func idValue(_ text: NSString, from start: Int) -> Range<Int>? {
         var at = start, end = start, digits = 0
         func isAlphanumeric(_ unit: unichar) -> Bool { (48...57).contains(unit) || (65...90).contains(unit) || (97...122).contains(unit) }
@@ -166,7 +168,9 @@ enum ProseLabels {
             guard piece + 1 < text.length, " .-/".utf16.contains(text.character(at: piece)), isAlphanumeric(text.character(at: piece + 1)) else { break }
             at = piece + 1
         }
-        return digits >= 4 && end - start >= 5 ? start..<end : nil
+        let whole = text.substring(with: NSRange(location: start, length: end - start))
+        let piece = (6...12).contains(whole.count) && digits >= 2 && whole.allSatisfy { $0.isNumber || $0.isUppercase }
+        return digits >= 4 && end - start >= 5 || piece ? start..<end : nil
     }
 
     /// One token from `start`, without the punctuation that ends a sentence.

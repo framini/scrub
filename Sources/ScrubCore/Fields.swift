@@ -50,8 +50,8 @@ enum Fields {
 
     /// A field whose values nearly all pass one identifier's check holds that
     /// identifier, though no key or word names it: four distinct values passing even a
-    /// one-in-ten check by chance is one field in ten thousand, as a
-    /// structured analysis reads a column by what its cells are.
+    /// one-in-ten check by chance is one field in ten thousand, so a column is read
+    /// by what its cells are.
     private static func identify(_ members: [Int], _ leaves: [DocumentLeaf], _ founds: inout [[Span]]) {
         let values = members.filter { !leaves[$0].seen.trimmingCharacters(in: .whitespaces).isEmpty }
         // A reader that saw the field's numbers too decided it already.

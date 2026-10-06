@@ -1320,12 +1320,18 @@ final class StandIns {
         case "DATE_OF_BIRTH": return dateLike(original)
         case "MRZ": return zone(original, persona: persona)
         case "EMPLOYER": return company(like: original)
-        case "US_SSN":
-            // In the original's grouping: "123-45-6789", "123 45 6789".
-            let separator = original.first { !$0.isNumber } ?? "-"
-            return "\(digits(3))\(separator)\(digits(2))\(separator)\(digits(4))"
+        case "US_SSN", "US_ITIN":
+            // In the original's layout ("123-45-6789", "123 45 6789", "123456789"): a number
+            // the IRS issues (an area of 9) stays one, any other a number the SSA could;
+            // a number named so that is neither keeps its own length.
+            guard original.filter(\.isNumber).count == 9 else { return Recognizers.standIn(for: original, using: &rng) ?? idLike(original) }
+            let area = original.first(where: \.isNumber) == "9" ? 900 + Int.random(in: 0...99, using: &rng) : [Int.random(in: 1...665, using: &rng), Int.random(in: 667...899, using: &rng)].randomElement(using: &rng)!
+            let group = area >= 900 ? (Array(70...88) + [90, 91, 92] + Array(94...99)).randomElement(using: &rng)! : Int.random(in: 1...99, using: &rng)
+            var drawn = (String(format: "%03d%02d", area, group) + digits(4)).makeIterator()
+            return String(original.map { $0.isNumber ? drawn.next() ?? $0 : $0 })
         case "CREDIT_CARD": return card(like: original)
         case "IBAN_CODE":
+            if let made = iban(like: original) { return made }
             let body = "GB00BARC" + digits(14)
             for check in 0...98 {
                 let candidate = "GB" + String(format: "%02d", check) + String(body.dropFirst(4))
@@ -1347,7 +1353,6 @@ final class StandIns {
         case "US_BANK_NUMBER": return digits(10)
         case "US_DRIVER_LICENSE": return "A" + digits(7)
         case "US_PASSPORT": return digits(9)
-        case "US_ITIN": return "9\(digits(2))-\(digits(2))-\(digits(4))"
         case "MEDICAL_LICENSE": return "AB" + digits(6)
         case "CRYPTO": return "bc1q" + (0..<38).map { _ in String(pick(Array("023456789acdefghjklmnpqrstuvwxyz")) ?? "a") }.joined()
         case "USERNAME":
@@ -1410,6 +1415,46 @@ final class StandIns {
         let legal = trimmed.split(separator: " ").last.map(String.init).flatMap { Self.legalForms.contains($0.lowercased()) && trimmed.contains(" ") ? $0 : nil }
         let name = [pick(Self.companyHeads) ?? "Corvane", pick(Self.companyKinds) ?? "Group", legal].compactMap { $0 }.joined(separator: " ")
         return trimmed == trimmed.uppercased() && trimmed != trimmed.lowercased() ? name.uppercased() : name
+    }
+    /// An IBAN of the original's country, length and layout: its bank's four
+    /// characters kept, the rest of its digits drawn, the checks its country adds
+    /// inside the account number written, and its own two check digits.
+    private func iban(like original: String) -> String? {
+        let raw = Array(original.uppercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) })
+        guard Patterns.iban(String(raw)) else { return nil }
+        let country = String(raw.prefix(2))
+        func number(_ text: some Sequence<Character>) -> [Int] { text.compactMap(\.wholeNumberValue) }
+        for _ in 0..<32 {
+            var account = Array(raw.dropFirst(4).prefix(4)) + raw.dropFirst(8).map { $0.isNumber ? Character(digit()) : $0 }
+            let all = number(account)
+            switch country {
+            case "BE" where all.count == 12:
+                let check = Int(String(account.prefix(10)))! % 97
+                account.replaceSubrange(10..., with: String(format: "%02d", check == 0 ? 97 : check))
+            case "ES" where all.count == 20:
+                func check(_ digits: [Int]) -> Int { let sum = digits.enumerated().reduce(0) { $0 + $1.element * (1 << $1.offset) } % 11; return sum < 2 ? sum : 11 - sum }
+                account[8] = Character(String(check([0, 0] + all.prefix(8))))
+                account[9] = Character(String(check(Array(all.suffix(10)))))
+            case "NO" where all.count == 11:
+                let check = zip([6, 7, 8, 9, 4, 5, 6, 7, 8, 9], all).reduce(0) { $0 + $1.0 * $1.1 } % 11
+                guard check < 10 else { continue }
+                account[10] = Character(String(check))
+            case "ME" where all.count == 18:
+                let rest = all.prefix(16).reduce(0) { ($0 * 10 + $1) % 97 } * 100 % 97
+                account.replaceSubrange(16..., with: String(format: "%02d", (98 - rest) % 97))
+            default: break
+            }
+            let moved = (account + Array(country) + ["0", "0"]).map { $0.isNumber ? String($0) : String(Int($0.asciiValue!) - 55) }.joined()
+            let check = 98 - moved.reduce(0) { ($0 * 10 + $1.wholeNumberValue!) % 97 }
+            let made = Array(country + String(format: "%02d", check)) + account
+            guard made != raw, Patterns.iban(String(made)) else { continue }
+            var drawn = made.makeIterator()
+            return String(original.map { written in
+                guard written.isASCII, written.isLetter || written.isNumber, let next = drawn.next() else { return written }
+                return written.isLowercase ? Character(next.lowercased()) : next
+            })
+        }
+        return nil
     }
     /// Keeps the network (the first digit, two for 3x cards like Amex), the
     /// length and the grouping, with a fresh body and a valid check digit.

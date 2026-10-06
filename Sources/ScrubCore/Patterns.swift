@@ -5,7 +5,11 @@ enum Patterns {
     private static let definitions: [(String, String, Double, Set<String>, NSRegularExpression.Options)] = [
         ("EMAIL_ADDRESS", #"\b[a-zA-Z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-zA-Z0-9!#$%&'*+/=?^_`{|}~-]+)*@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)+\b"#, 1, [], []),
         ("CREDIT_CARD", #"(?<![\w-])(?:\d[ -]?){12,18}\d(?![\w-])"#, 0.6, ["card", "credit", "visa", "mastercard", "payment"], []),
-        ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2}\d{2}(?:[ -]?[A-Z0-9]{4}){2,6}(?:[ -]?[A-Z0-9]{4})?(?:[ -]?[A-Z0-9]{1,3})?(?![A-Z0-9])"#, 0.6, ["iban", "bank", "account"], []),
+        ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2} ?\d{2}(?:[ -]?[A-Z0-9]{4}){2,6}(?:[ -]?[A-Z0-9]{4})?(?:[ -]?[A-Z0-9]{1,3})?(?![A-Z0-9])"#, 0.6, ["iban", "bank", "account"], []),
+        // Its country set apart and its check digits opening the first group ("ME 2551 0000 0000 0623 4133").
+        ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2}(?: [A-Z0-9]{4}){3,8}(?: [A-Z0-9]{1,3})?(?![A-Z0-9])"#, 0.6, ["iban", "bank", "account"], []),
+        // In its bank's own grouping ("ES10 0075 0080 11 0600658108", "ES72 2013-0692-81-0201150993").
+        ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2}\d{2}(?:[ -][A-Z0-9]{1,10}){2,8}(?![A-Z0-9])"#, 0.6, ["iban", "bank", "account"], []),
         ("IP_ADDRESS", #"(?<![\w:.]|[A-Za-z]/)(?:[0-9A-Fa-f:]+:)?(?:\d{1,3}\.){3}\d{1,3}(?![\w:.])|(?<![\w:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f:]{0,4}(?![\w:])"#, 0.6, ["ip", "address"], []),
         ("US_SSN", #"(?<![\d-])\d{3}([- ])\d{2}\1\d{4}(?![\d-])"#, 0.85, ["ssn", "social", "security"], []),
         ("US_SSN", #"\b\d{5}-\d{4}\b|\b\d{3}-\d{6}\b|\b\d{9}\b|\b\d{3}[- .]\d{2}[- .]\d{4}\b"#, 0.05, ["ssn", "ssns", "ssid", "social", "security"], []),
@@ -211,13 +215,14 @@ enum Patterns {
         }
         return sum.isMultiple(of: 10)
     }
-    /// Each country's IBAN length, from the IBAN registry.
-    private static let ibanLengths: [String: Int] = ["AL": 28, "AD": 24, "AT": 20, "AZ": 28, "BH": 22, "BY": 28, "BE": 16, "BA": 20, "BR": 29, "BG": 22, "BI": 27, "CR": 22, "HR": 21, "CY": 28, "CZ": 24, "DK": 18, "DJ": 27, "DO": 28, "TL": 23, "EG": 29, "SV": 28, "EE": 20, "FO": 18, "FI": 18, "FR": 27, "GE": 22, "DE": 22, "GI": 23, "GR": 27, "GL": 18, "GT": 28, "HU": 28, "IS": 26, "IQ": 23, "IE": 22, "IL": 23, "IT": 27, "JO": 30, "KZ": 20, "XK": 20, "KW": 30, "LV": 21, "LB": 28, "LY": 25, "LI": 21, "LT": 20, "LU": 20, "MK": 19, "MT": 31, "MR": 27, "MU": 30, "MC": 27, "MD": 24, "MN": 20, "ME": 22, "NL": 18, "NI": 28, "NO": 15, "PK": 24, "PS": 29, "PL": 28, "PT": 25, "QA": 29, "RO": 24, "RU": 33, "LC": 32, "SM": 27, "ST": 25, "SA": 24, "RS": 22, "SC": 31, "SK": 24, "SI": 19, "SO": 23, "ES": 24, "SD": 18, "SE": 24, "CH": 21, "TN": 24, "TR": 26, "UA": 29, "AE": 23, "GB": 22, "VA": 22, "VG": 24, "YE": 30, "OM": 23, "FK": 18]
+    /// Each country's IBAN length: the IBAN registry's, then the countries that write one outside it.
+    private static let ibanLengths: [String: Int] = ["AL": 28, "AD": 24, "AT": 20, "AZ": 28, "BH": 22, "BY": 28, "BE": 16, "BA": 20, "BR": 29, "BG": 22, "BI": 27, "CR": 22, "HR": 21, "CY": 28, "CZ": 24, "DK": 18, "DJ": 27, "DO": 28, "TL": 23, "EG": 29, "SV": 28, "EE": 20, "FO": 18, "FI": 18, "FR": 27, "GE": 22, "DE": 22, "GI": 23, "GR": 27, "GL": 18, "GT": 28, "HU": 28, "IS": 26, "IQ": 23, "IE": 22, "IL": 23, "IT": 27, "JO": 30, "KZ": 20, "XK": 20, "KW": 30, "LV": 21, "LB": 28, "LY": 25, "LI": 21, "LT": 20, "LU": 20, "MK": 19, "MT": 31, "MR": 27, "MU": 30, "MC": 27, "MD": 24, "MN": 20, "ME": 22, "NL": 18, "NI": 28, "NO": 15, "PK": 24, "PS": 29, "PL": 28, "PT": 25, "QA": 29, "RO": 24, "RU": 33, "LC": 32, "SM": 27, "ST": 25, "SA": 24, "RS": 22, "SC": 31, "SK": 24, "SI": 19, "SO": 23, "ES": 24, "SD": 18, "SE": 24, "CH": 21, "TN": 24, "TR": 26, "UA": 29, "AE": 23, "GB": 22, "VA": 22, "VG": 24, "YE": 30, "OM": 23, "FK": 18,
+        "AO": 25, "BF": 28, "BJ": 28, "CF": 27, "CG": 27, "CI": 28, "CM": 27, "CV": 25, "DZ": 26, "GA": 27, "GQ": 27, "HN": 28, "IR": 26, "KM": 27, "MA": 28, "MG": 27, "ML": 28, "MZ": 25, "NE": 28, "SN": 28, "TD": 27, "TG": 28]
     static func iban(_ value: String) -> Bool {
         let raw = value.uppercased().filter { !$0.isWhitespace && $0 != "-" }
         guard (15...34).contains(raw.count), raw.prefix(2).allSatisfy(\.isLetter), raw.dropFirst(2).prefix(2).allSatisfy(\.isNumber) else { return false }
-        // A country's IBANs are all one length; one of another length is none, whatever its remainder.
-        if let length = ibanLengths[String(raw.prefix(2))], raw.count != length { return false }
+        // A country's IBANs are all one length; one of another length is none, whatever its remainder, nor is one of no country's.
+        guard let length = ibanLengths[String(raw.prefix(2))], raw.count == length else { return false }
         let moved = String(raw.dropFirst(4)) + String(raw.prefix(4))
         var remainder = 0
         for char in moved {
