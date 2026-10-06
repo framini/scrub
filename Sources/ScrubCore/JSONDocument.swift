@@ -24,7 +24,12 @@ final class JSONDocument {
     /// What every document of one scrub shares: the leaves they add, the
     /// records they number, and the keys they write.
     final class Collector {
-        var leaves: [DocumentLeaf] = []
+        private var items: [DocumentLeaf] = []
+        /// Every value collected, each field's identifier decided across all its values (see `identifyColumns`).
+        var leaves: [DocumentLeaf] {
+            identifyColumns()
+            return items
+        }
         var names: [String] = []
         var nextRecord = 0
 
@@ -32,7 +37,6 @@ final class JSONDocument {
         func add(_ source: JSONSource, records: [Int] = [], key: String? = nil) -> JSONDocument {
             let document = JSONDocument(source)
             collect(document, source.root, key: key, path: "", records: records, keys: key.map { [$0] } ?? [], depth: 0)
-            identifyNumbers()
             return document
         }
         /// A number no key names, kept until its whole field is read.
@@ -45,17 +49,25 @@ final class JSONDocument {
             let field: String
         }
         private var bareNumbers: [BareNumber] = []
-        /// Numbers no key names, read by field as strings are (see `Fields.column`): a field of
-        /// them nearly all passing one identifier's check holds that identifier, written as numbers.
-        private func identifyNumbers() {
-            defer { bareNumbers = [] }
-            for column in Dictionary(grouping: bareNumbers, by: \.field).values {
-                guard let recognizer = Fields.column(column.map(\.number)) else { continue }
-                for item in column where Recognizers.candidates(item.number).contains(where: { $0.name == recognizer.name }) {
-                    item.document.valueIDs[item.path] = leaves.count
+        /// Every value each field writes, strings and numbers alike, and the strings' leaves.
+        private var population: [String: [String]] = [:]
+        private var fieldStrings: [String: [Int]] = [:]
+        /// Each field's identifier, decided once across every value it writes, strings and numbers
+        /// alike (see `Fields.column`): its strings take the decision, and its numbers no key named
+        /// that pass the identifier's check become values to replace, written as numbers.
+        private func identifyColumns() {
+            guard !population.isEmpty else { return }
+            defer { population = [:]; fieldStrings = [:]; bareNumbers = [] }
+            let numbers = Dictionary(grouping: bareNumbers, by: \.field)
+            for (field, values) in population {
+                let recognizer = Fields.column(values)
+                for index in fieldStrings[field] ?? [] { items[index].column = recognizer?.name ?? "" }
+                guard let recognizer else { continue }
+                for item in numbers[field] ?? [] where Recognizers.candidates(item.number).contains(where: { $0.name == recognizer.name }) {
+                    item.document.valueIDs[item.path] = items.count
                     var leaf = DocumentLeaf(item.number, key: item.key, records: item.records, numericEntity: recognizer.entity)
                     leaf.field = item.field
-                    leaves.append(leaf)
+                    items.append(leaf)
                 }
             }
         }
@@ -64,79 +76,112 @@ final class JSONDocument {
         private static let kindKeys: Set<String> = ["type", "kind", "idtype", "idkind", "documenttype", "doctype", "documentkind", "identifiertype", "identificationtype", "identitytype", "scheme", "idscheme", "typecode", "category", "system"]
         /// `typed`: the words a record's own kind field writes, which name its other values as a key would.
         private func collect(_ document: JSONDocument, _ value: JSONValue, key: String?, path: String, records: [Int], keys: [String], depth: Int, listed: Bool = false, typed: Set<String> = []) {
+            // Each kind of value read in its own frame: a document nested sixty levels deep recurses
+            // through these, and only an object's reading needs a large one.
             switch value {
-            case .object(let pairs):
-                names += pairs.map(\.0)
-                // A record that says what its number is ({"type": "CPR", "number": "…"}) names it there.
-                let kind = Set(pairs.flatMap { pair -> [String] in
-                    guard Self.kindKeys.contains(KeyHints.words(pair.0).joined()), let text = pair.1.stringValue, text.utf16.count <= 40 else { return [] }
-                    return KeyHints.words(text)
-                })
-                nextRecord += 1
-                let ancestry = KeyHints.isWrapper(pairs.map(\.0)) && !records.isEmpty ? records : records + [nextRecord]
-                let named = pairs.compactMap { pair in pair.1.stringValue.map { (pair.0, $0) } }
-                for (index, pair) in pairs.enumerated() {
-                    let childPath = path + "/" + String(index)
-                    // A field's plain name ("password") is read for what a pattern or a value
-                    // found elsewhere writes in it ("quillharbor_token"); any other key as a value.
-                    let fieldName = KeyHints.isFieldName(pair.0) && !KeyHints.holdsData(pair.0)
-                    document.keyIDs[childPath] = leaves.count
-                    if fieldName { document.fieldKeys.insert(childPath) }
-                    leaves.append(DocumentLeaf(pair.0, fieldName: fieldName))
-                    var inherited: String?
-                    switch pair.1 {
-                    case .object, .array: inherited = KeyHints.namedField(pair.0, siblings: named) ?? KeyHints.resolveContainer(pair.0, parent: key, listed: listed)
-                    default: inherited = KeyHints.namedField(pair.0, siblings: named) ?? KeyHints.resolve(pair.0, parent: key, listed: listed, value: pair.1.stringValue)
-                    }
-                    if KeyHints.isBareName(pair.0), case .string(let name) = pair.1,
-                       !KeyHints.bareNameIsPerson(name, siblings: pairs.map(\.0), parent: key) { inherited = nil }
-                    collect(document, pair.1, key: inherited, path: childPath, records: ancestry, keys: keys + [pair.0], depth: depth, typed: Self.kindKeys.contains(KeyHints.words(pair.0).joined()) ? [] : kind)
-                }
-            case .array(let values):
-                let pair = JSONFile.coordinateKeys(key, values)
-                for (index, child) in values.enumerated() {
-                    // Several names or emails in one list may be several people's; one is the record's own.
-                    collect(document, child, key: pair?[index] ?? key, path: path + "/" + String(index), records: values.count > 1 && KeyHints.hint(key).map({ ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "USERNAME"].contains($0) }) == true ? [] : records, keys: keys, depth: depth, listed: true)
-                }
-            case .string(let string):
-                guard !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                // A body sent as a string, or as base64: its own document, read under the key that holds it.
-                if depth < JSONDocument.deepest, let (text, base64) = Self.document(in: string), let inner = try? JSONSource.read(text), Self.holds(inner.root) {
-                    let child = JSONDocument(inner)
-                    document.nested[path] = child
-                    if base64 { document.encoded.insert(path) }
-                    collect(child, inner.root, key: key, path: "", records: records, keys: keys, depth: depth + 1)
-                    return
-                }
-                document.valueIDs[path] = leaves.count
-                var leaf = DocumentLeaf(string, key: key, records: records, contextWords: Set(keys.flatMap { KeyHints.words($0) }))
-                leaf.namingWords = Self.naming(keys, typed)
-                leaf.field = keys.joined(separator: ".")
-                leaves.append(leaf)
-            case .number(let number):
-                guard let entity = JSONFile.numericEntity(key: key, number: number, context: Self.naming(keys, typed)) else {
-                    if (7...20).contains(number.count), number.allSatisfy({ $0.isASCII && $0.isNumber }) {
-                        bareNumbers.append(BareNumber(document: document, path: path, number: number, key: key, records: records, field: keys.joined(separator: ".")))
-                    }
-                    break
-                }
-                document.valueIDs[path] = leaves.count
-                var leaf = DocumentLeaf(number, key: key, records: records, numericEntity: entity)
-                leaf.field = keys.joined(separator: ".")
-                leaves.append(leaf)
+            case .object(let pairs): collectObject(document, pairs, key: key, path: path, records: records, keys: keys, depth: depth, listed: listed, typed: typed)
+            case .array(let values): collectArray(document, values, key: key, path: path, records: records, keys: keys, depth: depth, typed: typed)
+            case .string(let string): collectString(document, string, key: key, path: path, records: records, keys: keys, depth: depth, typed: typed)
+            case .number(let number): collectNumber(document, number, key: key, path: path, records: records, keys: keys, typed: typed)
             default: break
             }
+        }
+        @inline(never)
+        private func collectObject(_ document: JSONDocument, _ pairs: [(String, JSONValue)], key: String?, path: String, records: [Int], keys: [String], depth: Int, listed: Bool, typed: Set<String>) {
+            names += pairs.map(\.0)
+            // A record that says what its number is ({"type": "CPR", "number": "…"}) names it there.
+            let kind = Set(pairs.flatMap { pair -> [String] in
+                guard Self.kindKeys.contains(KeyHints.words(pair.0).joined()), let text = pair.1.stringValue, text.utf16.count <= 40 else { return [] }
+                return KeyHints.words(text)
+            })
+            nextRecord += 1
+            let ancestry = KeyHints.isWrapper(pairs.map(\.0)) && !records.isEmpty ? records : records + [nextRecord]
+            let named = pairs.compactMap { pair in pair.1.stringValue.map { (pair.0, $0) } }
+            for (index, pair) in pairs.enumerated() {
+                let childPath = path + "/" + String(index)
+                // A field's plain name ("password") is read for what a pattern or a value
+                // found elsewhere writes in it ("quillharbor_token"); any other key as a value.
+                let fieldName = KeyHints.isFieldName(pair.0) && !KeyHints.holdsData(pair.0)
+                document.keyIDs[childPath] = items.count
+                if fieldName { document.fieldKeys.insert(childPath) }
+                items.append(DocumentLeaf(pair.0, fieldName: fieldName))
+                var inherited: String?
+                switch pair.1 {
+                case .object, .array: inherited = KeyHints.namedField(pair.0, siblings: named) ?? KeyHints.resolveContainer(pair.0, parent: key, listed: listed)
+                default: inherited = KeyHints.namedField(pair.0, siblings: named) ?? KeyHints.resolve(pair.0, parent: key, listed: listed, value: pair.1.stringValue)
+                }
+                if KeyHints.isBareName(pair.0), case .string(let name) = pair.1,
+                   !KeyHints.bareNameIsPerson(name, siblings: pairs.map(\.0), parent: key) { inherited = nil }
+                // The kind a record says reaches its own values, and through a slot ("number": {"value": …}, "number": […]) the values it wraps.
+                let reaches: Bool
+                switch pair.1 {
+                case .object, .array: reaches = Self.isSlot(pair.0)
+                default: reaches = true
+                }
+                collect(document, pair.1, key: inherited, path: childPath, records: ancestry, keys: keys + [pair.0], depth: depth,
+                        typed: Self.kindKeys.contains(KeyHints.words(pair.0).joined()) || !reaches ? [] : kind.union(typed))
+            }
+        }
+        @inline(never)
+        private func collectArray(_ document: JSONDocument, _ values: [JSONValue], key: String?, path: String, records: [Int], keys: [String], depth: Int, typed: Set<String>) {
+            let pair = JSONFile.coordinateKeys(key, values)
+            for (index, child) in values.enumerated() {
+                // Several names or emails in one list may be several people's; one is the record's own.
+                collect(document, child, key: pair?[index] ?? key, path: path + "/" + String(index), records: values.count > 1 && KeyHints.hint(key).map({ ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "USERNAME"].contains($0) }) == true ? [] : records, keys: keys, depth: depth, listed: true, typed: typed)
+            }
+        }
+        @inline(never)
+        private func collectString(_ document: JSONDocument, _ string: String, key: String?, path: String, records: [Int], keys: [String], depth: Int, typed: Set<String>) {
+            guard !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            // A body sent as a string, or as base64: its own document, read under the key that holds it.
+            if depth < JSONDocument.deepest, let (text, base64) = Self.document(in: string), let inner = try? JSONSource.read(text), Self.holds(inner.root) {
+                let child = JSONDocument(inner)
+                document.nested[path] = child
+                if base64 { document.encoded.insert(path) }
+                collect(child, inner.root, key: key, path: "", records: records, keys: keys, depth: depth + 1)
+                return
+            }
+            document.valueIDs[path] = items.count
+            var leaf = DocumentLeaf(string, key: key, records: records, contextWords: Set(keys.flatMap { KeyHints.words($0) }))
+            leaf.namingWords = Self.naming(keys, typed)
+            leaf.field = keys.joined(separator: ".")
+            population[leaf.field ?? "", default: []].append(leaf.seen)
+            fieldStrings[leaf.field ?? "", default: []].append(items.count)
+            items.append(leaf)
+        }
+        @inline(never)
+        private func collectNumber(_ document: JSONDocument, _ number: String, key: String?, path: String, records: [Int], keys: [String], typed: Set<String>) {
+            population[keys.joined(separator: "."), default: []].append(number)
+            guard let entity = JSONFile.numericEntity(key: key, number: number, context: Self.naming(keys, typed)) else {
+                if (7...20).contains(number.count), number.allSatisfy({ $0.isASCII && $0.isNumber }) {
+                    bareNumbers.append(BareNumber(document: document, path: path, number: number, key: key, records: records, field: keys.joined(separator: ".")))
+                }
+                return
+            }
+            document.valueIDs[path] = items.count
+            var leaf = DocumentLeaf(number, key: key, records: records, numericEntity: entity)
+            leaf.field = keys.joined(separator: ".")
+            items.append(leaf)
         }
         /// Keys that only hold a value, naming nothing of their own ("number", "id_value").
         private static let slots: Set<String> = ["number", "num", "no", "nr", "value", "val", "id", "identifier", "ident", "code", "digits", "text", "data", "document", "doc"]
         /// The words that may name an identifier under `keys`: the innermost key's, and where it
         /// is only a slot, those of the keys around it and of its record's kind field. A batch
         /// number under "medicare" is a batch's; "medicare": {"number": …} is the card's.
+        /// Outward from the innermost key, through slots, up to and with the nearest key that names something:
+        /// "medicare": {"batch": {"number": …}} is the batch's number.
+        /// The record's kind field names a value whose own key is a slot.
         static func naming(_ keys: [String], _ typed: Set<String>) -> Set<String> {
-            guard let own = keys.last else { return typed }
-            let words = KeyHints.words(own)
-            guard !words.isEmpty, words.allSatisfy(slots.contains) else { return Set(words) }
-            return Set(keys.flatMap { KeyHints.words($0) }).union(typed)
+            var words: Set<String> = keys.last.map(isSlot) ?? true ? typed : []
+            for key in keys.reversed() {
+                words.formUnion(KeyHints.words(key))
+                if !isSlot(key) { break }
+            }
+            return words
+        }
+        static func isSlot(_ key: String) -> Bool {
+            let words = KeyHints.words(key)
+            return !words.isEmpty && words.allSatisfy(slots.contains)
         }
         /// The document a string writes: itself when it opens as one, or what its base64 decodes to.
         private static func document(in string: String) -> (String, Bool)? {

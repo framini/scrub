@@ -13,6 +13,9 @@ struct DocumentLeaf: Sendable {
     /// only a slot ("number", "value") those of the keys around it and of its record's kind
     /// field ("type": "CPR"). Nil where every context word may. They say nothing about whose record it is.
     var namingWords: Set<String>?
+    /// The identifier its field holds, decided across every value the field writes (see
+    /// `JSONDocument.Collector`): empty when decided none, nil where no reader decided.
+    var column: String?
     let numericEntity: String?
     /// A column header or similar label: read for patterns only, since the name
     /// model takes words like "Dob" for places.

@@ -276,3 +276,63 @@ private func value(_ root: JSONValue, _ path: String...) -> JSONValue? {
         }
     }
 }
+
+@Test func aFieldIsVotedOnEveryValueItWrites() throws {
+    // Strings and numbers in one field are one column; a nested body's field is the same field.
+    let mixed = #"{"rows":[{"ref":11144477735},{"ref":"52998224725"},{"ref":39053344705},{"ref":"86288366757"}]}"#
+    try check(mixed, gone: ["11144477735", "52998224725", "39053344705", "86288366757"])
+    // Small amounts beside four large ones are values of the field too: no nine in ten pass.
+    let amounts = #"{"amounts":[11144477735,52998224725,39053344705,86288366757,1,2,3,4,5,6,7,8,9,10]}"#
+    for route in Route.allCases {
+        let output = try route.scrub(amounts)
+        #expect(output.contains("11144477735") && output.contains("86288366757"), "\(route): \(output)")
+    }
+}
+
+@Test func repeatsLendAColumnNoWeight() throws {
+    // Four references pass a check by chance and four don't; one passing written again and again is still one.
+    // Nine digits, so nothing reads them as phone numbers: only the column could make them identifiers.
+    let passing = ["731205069", "509514056", "743234884", "647392221"], failing = ["553454709", "410773681", "725264298", "814191760"]
+    let refs = passing + failing + Array(repeating: passing[0], count: 36)
+    let body = #"{"orders":["# + refs.map { #"{"order_id":"\#($0)"}"# }.joined(separator: ",") + "]}"
+    for route in Route.allCases {
+        let output = try route.scrub(body)
+        for ref in passing + failing { #expect(output.contains(ref), "\(route): \(ref) changed") }
+    }
+    // Without the failing ones, the four passing are a column of that identifier: the vote reaches this field.
+    let column = #"{"orders":["# + passing.map { #"{"order_id":"\#($0)"}"# }.joined(separator: ",") + "]}"
+    try check(column, gone: passing)
+}
+
+@Test func aRecordsKindReachesWhatItsSlotsWrap() throws {
+    let body = #"{"a":{"type":"CPR","number":[2902004001]},"b":{"type":"CPR","number":{"value":"3112994001"}},"c":{"documents":[{"type":"CPF","number":"529.982.247-25"}]}}"#
+    try check(body, gone: ["2902004001", "3112994001", "529.982.247-25"])
+    // A slot's key names nothing; the nearest key that does is the value's: the batch's, not the card's.
+    let batch = #"{"medicare":{"batch":{"number":2123456701}}}"#
+    for route in Route.allCases {
+        let output = try route.scrub(batch)
+        #expect(output.contains("2123456701"), "\(route): \(output)")
+    }
+}
+
+@Test func italianCodesForTheTwentyNinth() throws {
+    for code in ["RSSMRA85T29A562N", "RSSMRA85T69A562R"] {
+        #expect(Recognizers.candidates(code).contains { $0.name == "CODICE_FISCALE" }, "\(code)")
+    }
+    try check(#"{"note":"codice fiscale RSSMRA85T29A562N, RSSMRA85T69A562R"}"#, gone: ["RSSMRA85T29A562N", "RSSMRA85T69A562R"])
+}
+
+@Test func identifiersSharingDigitsEachKeepTheirCheck() throws {
+    for seed in UInt64(1)...12 {
+        for body in [#"{"a":{"nric":"S1234567D"},"b":{"nric":"T1234567J"}}"#, #"{"a":{"nric":"T1234567J"},"b":{"nric":"S1234567D"}}"#] {
+            for route in Route.allCases {
+                let output = try route.scrub(body, seed: seed)
+                guard let root = try? OrderedJSON.parse(String(output[output.firstIndex(of: "{")!...output.lastIndex(of: "}")!])) else { Issue.record("\(route): \(output)"); continue }
+                for side in ["a", "b"] {
+                    guard case .string(let made)? = value(root, side, "nric") else { Issue.record("\(route): \(output)"); continue }
+                    #expect(Recognizers.candidates(made).contains { $0.name == "NRIC" }, "\(route) \(seed): \(output)")
+                }
+            }
+        }
+    }
+}

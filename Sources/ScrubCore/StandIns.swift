@@ -140,7 +140,7 @@ final class StandIns {
         // A bare number that the document also writes as a phone number
         // ("4158672290" beside "(415) 867-2290") is that phone, and takes its stand-in.
         let digitKind = actual == "ID_NUMBER" && phones.contains(normalized("PHONE_NUMBER", original)) ? "PHONE_NUMBER" : actual
-        let sameDigits = digitKey(digitKind, original).flatMap { assigned[$0] }.flatMap { pour($0, into: original) }
+        let sameDigits = digitKey(digitKind, original).flatMap { assigned[$0] }.flatMap { pour($0, into: original) }.flatMap { checked($0, identity) }
         for attempt in 0..<8 {
             // A number a bare "last4" ends keeps its fourth-last digit off zero, before
             // it is judged: the ending it is judged by is the one written.
@@ -1081,6 +1081,13 @@ final class StandIns {
         }
         return made
     }
+    /// Another number's stand-in digits poured into an identifier, where they still make one of its
+    /// kind: "S1234567D" and "T1234567J" share digits, not a check letter. Digits alone sharing
+    /// digits ("536-21-7784", 536217784) are one number written two ways, whatever kind they pass by chance.
+    private func checked(_ poured: String, _ identity: (recognizer: Recognizer, key: String)?) -> String? {
+        guard let recognizer = identity?.recognizer, poured.contains(where: \.isLetter) else { return poured }
+        return recognizer.passes(poured) && recognizer.writes(poured.trimmingCharacters(in: .whitespaces)) ? poured : nil
+    }
     /// The stand-in the same identifier took written another way, in this one's layout.
     private func reused(_ identity: (recognizer: Recognizer, key: String), _ original: String) -> String? {
         guard let found = assigned[identity.key], found.count == identity.recognizer.kept(original.trimmingCharacters(in: .whitespaces)).count else { return nil }
@@ -1142,7 +1149,7 @@ final class StandIns {
         let significant = original[..<point].contains(where: { $0.isASCII && $0.isNumber }) ? point : exponent
         let whole = original[..<significant].filter { $0.isASCII && $0.isNumber }
         // A phone number keeps a real area code and a fictional 555-01xx line.
-        let shared = digitKey(entity, whole).flatMap { assigned[$0] }.flatMap { pour($0, into: whole) }
+        let shared = digitKey(entity, whole).flatMap { assigned[$0] }.flatMap { pour($0, into: whole) }.flatMap { checked($0, identifier(whole)) }
         let drawn = shared ?? (entity == "PHONE_NUMBER" && [10, 11].contains(whole.count) ? phoneDigits(whole, address.flatMap { $0.isEmpty ? nil : place(for: $0) }) : number(whole))
         var iterator = drawn.makeIterator()
         let fake = String(original[..<significant].map { character in

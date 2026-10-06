@@ -49,7 +49,10 @@ enum Fields {
     /// structured analysis reads a column by what its cells are.
     private static func identify(_ members: [Int], _ leaves: [DocumentLeaf], _ founds: inout [[Span]]) {
         let values = members.filter { !leaves[$0].seen.trimmingCharacters(in: .whitespaces).isEmpty }
-        guard let recognizer = column(values.map { leaves[$0].seen }) else { return }
+        // A reader that saw the field's numbers too decided it already.
+        let decided = members.lazy.compactMap { leaves[$0].column }.first
+        let chosen = decided.map { name in Recognizers.all.first { $0.name == name } } ?? column(values.map { leaves[$0].seen })
+        guard let recognizer = chosen else { return }
         for index in values where Recognizers.candidates(leaves[index].seen).contains(where: { $0.name == recognizer.name }) {
             let length = (leaves[index].seen as NSString).length
             if founds[index].contains(where: { $0.range.count * 5 >= length * 4 && $0.score >= 0.85 }) { continue }
@@ -60,30 +63,36 @@ enum Fields {
     /// one kind's verifying check, and four of those distinct (one order number on four line
     /// items is one chance passing, not four). Strings and JSON numbers are read alike.
     static func column(_ values: [String]) -> Recognizer? {
-        let values = values.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        guard values.count >= 4 else { return nil }
-        var passing: [String: [String]] = [:]
+        // Distinct values, each counted once: a value repeated on many rows is one chance, however often it is written.
+        var distinct: [String: String] = [:]
         for value in values {
-            for recognizer in Recognizers.candidates(value) where recognizer.verifies { passing[recognizer.name, default: []].append(value) }
+            let canonical = value.uppercased().filter { $0.isLetter || $0.isNumber }
+            if !canonical.isEmpty, distinct[canonical] == nil { distinct[canonical] = value }
         }
-        guard let (name, passed) = passing.max(by: { $0.value.count < $1.value.count }), passed.count * 10 >= values.count * 9,
-              Set(passed.map { $0.uppercased().filter { $0.isLetter || $0.isNumber } }).count >= 4 else { return nil }
+        guard distinct.count >= 4 else { return nil }
+        var passing: [String: Int] = [:]
+        for value in distinct.values {
+            for recognizer in Recognizers.candidates(value) where recognizer.verifies { passing[recognizer.name, default: 0] += 1 }
+        }
+        guard let (name, passed) = passing.max(by: { $0.value < $1.value }), passed >= 4, passed * 10 >= distinct.count * 9 else { return nil }
         return Recognizers.all.first { $0.name == name }
     }
 
     /// The kind most of a field's values were read as, given to those read as nothing that could be one too.
     private static func carry(_ members: [Int], _ leaves: [DocumentLeaf], _ founds: inout [[Span]]) {
-        var counts: [String: Int] = [:]
+        // Distinct values, each counted once: one name repeated on every row is one reading, not many.
+        var read: [String: Set<String>] = [:]
         var bare: [Int] = []
+        var unread: Set<String> = []
         for index in members {
-            let length = (leaves[index].seen as NSString).length
+            let seen = leaves[index].seen, length = (seen as NSString).length
             guard length > 0 else { continue }
-            if let whole = founds[index].first(where: { $0.range.count * 5 >= length * 4 }) { counts[whole.entity, default: 0] += 1 }
-            else if founds[index].isEmpty { bare.append(index) }
+            if let whole = founds[index].first(where: { $0.range.count * 5 >= length * 4 }) { read[whole.entity, default: []].insert(seen) }
+            else if founds[index].isEmpty { bare.append(index); unread.insert(seen) }
         }
-        let read = counts.values.reduce(0, +)
-        guard !bare.isEmpty, let (entity, count) = counts.max(by: { $0.value < $1.value }), carried.contains(entity),
-              count >= 2, count * 5 >= (read + bare.count) * 3 else { return }
+        let total = read.values.reduce(0) { $0 + $1.count }
+        guard !bare.isEmpty, let (entity, values) = read.max(by: { $0.value.count < $1.value.count }), carried.contains(entity),
+              values.count >= 2, values.count * 5 >= (total + unread.count) * 3 else { return }
         for index in bare where fits(leaves[index].seen, entity) {
             founds[index] = [Span(range: 0..<(leaves[index].seen as NSString).length, entity: entity, score: 0.8)]
         }

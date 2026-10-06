@@ -130,7 +130,7 @@ enum Recognizers {
             return c + [rfcDigit(c[...])]
         }),
         Recognizer("CODICE_FISCALE", keys: ["codicefiscale", "fiscalcode"], forms: [
-            .init(#"(?i)\b(?:[A-Z][AEIOU][AEIOUX]|[AEIOU]X{2}|[B-DF-HJ-NP-TV-Z]{2}[A-Z]){2}[\dLMNP-V]{2}[A-EHLMPR-T](?:[04LQ][1-9MNP-V]|[15MR][\dLMNP-V]|[26NS][0-8LMNP-U]|[37PT][01LM])[A-MZ][\dLMNP-V]{3}[A-Z]\b"#, 0.6, alone: true),
+            .init(#"(?i)\b(?:[A-Z][AEIOU][AEIOUX]|[AEIOU]X{2}|[B-DF-HJ-NP-TV-Z]{2}[A-Z]){2}[\dLMNP-V]{2}[A-EHLMPR-T](?:[04LQ][1-9MNP-V]|[1256MRNS][\dLMNP-V]|[37PT][01LM])[A-MZ][\dLMNP-V]{3}[A-Z]\b"#, 0.6, alone: true),
         ], context: ["codice", "fiscale", "cf"], check: { characters in
             characters.count == 16 && fiscalLetter(characters[0..<15]) == characters[15]
         }, draw: { _, rng in
