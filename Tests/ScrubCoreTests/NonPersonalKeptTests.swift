@@ -167,4 +167,34 @@ struct NonPersonalKeptTests {
         let output = try Self.scrub(profile, name: "profile.json", seed: 1)
         #expect(!output.contains(#""Bart""#) && !output.contains("bng_77"), "\(output)")
     }
+
+    @Test func aReplysTimeStaysOutOfTheNameAfterIt() throws {
+        // "07:34 AM, Kwabena Boateng <…>" was read as "Boateng"'s surname "AM" written first, and became "07:34 JENKINS, Lawrence";
+        // "4:12 PM Jasper Thornquist" lost its "PM" to the name.
+        let thread = """
+        Thanks Kwabena, I've reset the device binding. Try again and let me know.
+
+        Jasper Thornquist
+        Support, Tier 2
+
+        On Tue, Oct 6, 2026 at 07:34 AM, Kwabena Boateng <k.boateng@example.com> wrote:
+        > Still locked out after the update. Can you check?
+        >
+        > On Mon, Oct 5, 2026 at 4:12 PM Jasper Thornquist <jasper.thornquist@example.org> wrote:
+        >> Hi Kwabena, could you send the error code you see?
+
+        """
+        let ticket = #"{"ticket": {"id": 7731, "comments": [{"author": "Jasper Thornquist", "body": "On Tue, Oct 6, 2026 at 07:34 AM, Kwabena Boateng <k.boateng@example.com> wrote:\n> Still locked out."}]}}"#
+        for seed in UInt64(0)..<3 {
+            for (input, name) in [(thread, "reply.txt"), (ticket, "ticket.json")] {
+                let output = try Self.scrub(input, name: name, seed: seed)
+                #expect(output.contains("at 07:34 AM, ") && !output.contains("Boateng") && !output.contains("Thornquist"), "\(output)")
+                // The name after the time is a first name and a surname, written as before, in the same case.
+                #expect(output.range(of: #"07:34 AM, \p{Lu}\p{Ll}+ \p{Lu}\p{Ll}+ <"#, options: .regularExpression) != nil, "\(output)")
+                if name == "reply.txt" {
+                    #expect(output.range(of: #"at 4:12 PM \p{Lu}\p{Ll}+ \p{Lu}\p{Ll}+ <"#, options: .regularExpression) != nil, "\(output)")
+                }
+            }
+        }
+    }
 }

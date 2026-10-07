@@ -25,8 +25,9 @@ enum Patterns {
         ("SECRET", #"\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{10,}\b|\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,})\b|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bxox[abposr]-[A-Za-z0-9-]{10,}\b|\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}|\beyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*|(?<=[Bb]earer )[A-Za-z0-9._~+/=-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----"#, 0.9, [], [.dotMatchesLineSeparators]),
         ("SECRET", #"(?<=(?:password|passwd|pwd|passphrase|secret|api[_-]?key|access[_-]?key|private[_-]?key|account[_-]?key|token|session[_-]?id)["']?\s{0,3}[:=]\s{0,3}["']?)[^\s"',;`}\])]{4,}(?!`)"#, 0.9, [], [.caseInsensitive]),
         // The display name in "Priya Raghunathan <priya@northwind.io>" is a person
-        // even when the name model has never seen it, also quoted or as "Raghunathan, Priya".
-        ("PERSON", #"(?<![\p{L}'’.-])\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*){1,3}(?="?[ \t]*<[^<>\s@]+@[^<>\s]+>)|(?<![\p{L}'’.,-][ \t]{0,3})\p{Lu}[\p{L}'’.-]*,[ \t]*\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*)?(?="?[ \t]*<[^<>\s@]+@[^<>\s]+>)"#, 0.9, [], []),
+        // even when the name model has never seen it, also quoted or as "Raghunathan, Priya";
+        // never the time a reply's header gives before it ("at 4:12 PM Priya…", "07:34 AM, Priya…").
+        ("PERSON", #"(?<![\p{L}'’.-])(?![AaPp]\.?[Mm]\.?(?![\p{L}'’-]))\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*){1,3}(?="?[ \t]*<[^<>\s@]+@[^<>\s]+>)|(?<![\p{L}'’.,-][ \t]{0,3})(?![AaPp]\.?[Mm]\.?(?![\p{L}'’-]))\p{Lu}[\p{L}'’.-]*,[ \t]*\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*)?(?="?[ \t]*<[^<>\s@]+@[^<>\s]+>)"#, 0.9, [], []),
         // Ten digits with no separators ("Best number is 5129867535") are a phone number only near a word that says so.
         ("PHONE_NUMBER", #"(?<![\w+-])(?:\+?1)?[2-9]\d{2}[2-9]\d{6}(?![\w-])"#, 0.3, ["phone", "call", "called", "cell", "mobile", "tel", "telephone", "number", "text", "reach", "fax", "sms", "whatsapp", "dial"], []),
         // "Thandiwe Haddad (thandiwe.haddad@gmail.com) called": the name an email is given beside.
