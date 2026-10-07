@@ -1362,6 +1362,9 @@ final class StandIns {
             owner = people.lastNamed
             return name
         case "FIRST_NAME":
+            // Another of the person's given names ("middle_name": "Rose" beside "first_name":
+            // "Cordelia") is a name of its own, never the stand-in their first name takes.
+            if let persona, let other = people.otherGiven(original, of: persona) { return other }
             let person = persona ?? people.register(original, nil)
             owner = person
             return person.first

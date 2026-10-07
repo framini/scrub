@@ -66,6 +66,13 @@ enum NameShape {
         return Span(range: rest.range.lowerBound..<span.range.upperBound, entity: span.entity, score: span.score)
     }
 
+    /// Words a reader takes in with the name after them that are none of it: a speaker
+    /// introducing themself ("I'm Bartholomew Ng") and a time's half of the day ("4:12 PM Jasper Thornquist").
+    private static let openers: Set<String> = ["i'm", "i’m", "im", "i've", "i’ve", "i'd", "i’d", "i'll", "i’ll", "here", "there", "that", "who", "what"]
+    private static func opener(_ word: Word) -> Bool {
+        openers.contains(word.bare) && word.text.contains(where: { $0 == "'" || $0 == "’" }) || ["AM", "PM"].contains(word.text)
+    }
+
     static func isRole(_ word: String) -> Bool {
         let bare = word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".'’"))
         // "Private Ellery", "Major Quist": a rank that is also a word counts only with its capital.
@@ -97,7 +104,7 @@ enum NameShape {
             trailingRole = trailingRole || isRole(last.text)
             parts.removeLast()
         }
-        while let first = parts.first, isRole(first.text) || joining.contains(first.bare) || commands(first, in: text) { parts.removeFirst() }
+        while let first = parts.first, isRole(first.text) || joining.contains(first.bare) || commands(first, in: text) || parts.count > 1 && opener(first) { parts.removeFirst() }
         // "Customer Tomasz O'Sullivan": the word for whose record it is goes; "Customer Service" was never anyone.
         if let first = parts.first, parties.contains(first.bare), first.text.first?.isUppercase == true {
             let rest = parts.dropFirst().filter { !joining.contains($0.bare) }

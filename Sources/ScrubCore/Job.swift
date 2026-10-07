@@ -93,11 +93,33 @@ public final class Job {
                 if span.entity != "PHONE_NUMBER", value.filter(\.isLetter).count < 2 { continue }
                 gazetteer[span.entity, default: []].insert(value)
                 if span.entity == "PERSON" {
-                    _ = standIns.people.registerFull(value)
+                    let next = spans.lazy.filter { $0.range.lowerBound >= span.range.upperBound && Self.naming.contains($0.entity) }.map(\.range.lowerBound).min() ?? length
+                    _ = standIns.people.registerFull(value, gender: Self.pronounGender(of: value, after: span.range, before: next, in: text))
                     rememberParts(of: value, confidence: span.score)
                 }
             }
         }
+    }
+    /// The sex the first pronoun after a name in its sentence gives a person whose
+    /// first name gives none ("Dr. Benedikt Sauer, can speak to my work; he is …"),
+    /// with no other name between them. A first name of one sex keeps its own.
+    static func pronounGender(of name: String, after range: Range<Int>, before next: Int, in text: String) -> String? {
+        let words = name.split(whereSeparator: { !$0.isLetter && $0 != "'" && $0 != "’" }).map(String.init).drop { People.isTitle($0) }
+        guard words.count >= 2, let first = words.first, NameLists.gender(ofFirst: first) == nil else { return nil }
+        let ns = text as NSString
+        let end = min(next, ns.length, range.upperBound + 160)
+        guard end > range.upperBound else { return nil }
+        let rest = ns.substring(with: NSRange(location: range.upperBound, length: end - range.upperBound))
+        // The sentence ends at a full stop before a space, a question or an exclamation mark, or a line's end.
+        let sentence = rest.components(separatedBy: CharacterSet(charactersIn: "!?\n\r")).first?.components(separatedBy: ". ").first ?? rest
+        for word in sentence.lowercased().split(whereSeparator: { !$0.isLetter }) {
+            switch word {
+            case "he", "him", "his", "himself": return "male"
+            case "she", "her", "hers", "herself": return "female"
+            default: continue
+            }
+        }
+        return nil
     }
     // "Thanks, Maria" after "Maria Gonzalez" is the same person, and so are
     // "Gonzalez's", "GONZALEZ", "M. Gonzalez", "Gonzalez, Maria" and handles

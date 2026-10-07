@@ -3,8 +3,8 @@ import Foundation
 /// Names written where no sentence surrounds them, so a tagger reads them
 /// poorly: the people a mail header lists ("To: Okafor, Ama; Lind, Per"), mail
 /// addresses that start with a name ("Ama Okafor/HOU/CVN@CVN"), the sender
-/// above a timestamp, and a title before initials or a surname ("Ms E. Okafor",
-/// "Dr Lind").
+/// above a timestamp, a chat's speaker after one, and a title before initials
+/// or a surname ("Ms E. Okafor", "Dr Lind").
 enum WrittenNames {
     struct Found {
         var spans: [Span] = []
@@ -17,6 +17,8 @@ enum WrittenNames {
     private static let officePath = TextPattern(#"(?<![\p{L}\p{N}/@.])(\p{Lu}[\p{L}'’.-]*(?:(?:[ \t]+|[ \t]*\r?\n[ \t]*)\p{Lu}[\p{L}'’.-]*){1,3})(/[\p{L}\p{N}&. -]{1,40}(?:/[\p{L}\p{N}&. -]{1,40}){0,3}@[\p{L}\p{N}.-]+)"#)
     private static let listLabel = TextPattern(#"^[ \t>]*(?i:to|cc|bcc|from)[ \t]*:$"#)
     private static let header = TextPattern(#"(?m)^[ \t>]*(from|to|cc|bcc|sent by|reply-to|sender|sent|date)[ \t]*:[ \t]*(\S[^\r\n]*)$"#, options: [.caseInsensitive])
+    /// A chat's speaker, after the time a line was sent: "[09:02] Cassius Wren: morning!".
+    private static let speaker = TextPattern(#"(?m)^[ \t]*[\[(]?\d{1,2}:\d{2}(?::\d{2})?(?:[ \t]?[AaPp]\.?[Mm]\.?)?[\])]?[ \t]+(\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*){1,3})[ \t]*:"#)
     /// The sender written above the time they sent it.
     private static let sender = TextPattern(#"(?m)^[ \t]*(\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*){1,3})[ \t]*\r?\n[ \t]*\d{1,2}/\d{1,2}/\d{2,4}[ \t]+\d{1,2}:\d{2}"#)
     /// A title, then initials and a surname or a full name. A surname in
@@ -78,6 +80,14 @@ enum WrittenNames {
         }
         for match in TextRanges.matches(sender, in: text, isCancelled: isCancelled) where isName(ns.substring(with: match.range(at: 1))) {
             found.spans.append(Span(range: range(match.range(at: 1)), entity: "PERSON", score: 0.95))
+        }
+        if text.contains(":") {
+            // A speaker named with ordinary words ("[09:02] Support Bot:") is no one.
+            for match in TextRanges.matches(speaker, in: text, isCancelled: isCancelled) where isName(ns.substring(with: match.range(at: 1))) {
+                let words = ns.substring(with: match.range(at: 1)).split(whereSeparator: { !$0.isLetter }).map(String.init)
+                guard words.allSatisfy({ NameLists.isFirst($0) || NameLists.isSurname($0) || !NameLists.isWord($0) }) else { continue }
+                found.spans.append(Span(range: range(match.range(at: 1)), entity: "PERSON", score: 0.95))
+            }
         }
         for match in TextRanges.matches(titled, in: text, isCancelled: isCancelled) {
             guard let name = titledName(ns, match.range) else { continue }
