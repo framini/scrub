@@ -169,9 +169,10 @@ public final class Detector {
             if let keyed = Self.keyed(text, key: key) { return keyed }
             if KeyHints.isRole(key), let name = Self.writtenName(text) { return [Span(range: name, entity: "PERSON", score: 1)] }
             // So is a handle there ("author": "maria.gonzalez", "jdoe42"): the role's person, by another name;
-            // and under a client's key ("user": "jdoe.js"), whatever it ends in.
+            // and under a client's key ("user": "jdoe.js"), whatever it ends in. An ID a type's prefix opens
+            // ("customer": "cus_4TUvJh") is no handle: its stand-in keeps that shape.
             let bare = text.trimmingCharacters(in: .whitespaces)
-            if KeyHints.isRole(key) || Self.clientKey(key), Self.isHandle(bare, client: Self.clientKey(key)), let found = text.range(of: bare) {
+            if KeyHints.isRole(key) || Self.clientKey(key), !RecordIDs.prefixed(bare), Self.isHandle(bare, client: Self.clientKey(key)), let found = text.range(of: bare) {
                 let start = NSRange(found, in: text).location
                 return [Span(range: start..<(start + (bare as NSString).length), entity: "USERNAME", score: 1)]
             }
