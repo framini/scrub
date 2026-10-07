@@ -609,7 +609,7 @@ enum Recognizers {
             guard let d = numbers(characters), d.count == 13, thaiProvinces.contains(d[1] * 10 + d[2]) else { return false }
             return thaiDigit(Array(d[0..<12])) == d[12]
         }, draw: { _, rng in
-            let province = thaiProvinces.randomElement(using: &rng) ?? 10
+            let province = thaiProvinces.sorted().randomElement(using: &rng) ?? 10
             let d = [Int.random(in: 1...8, using: &rng), province / 10, province % 10] + randomDigits(9, &rng)
             return characters(d + [thaiDigit(d)])
         }),
@@ -1453,7 +1453,7 @@ enum Recognizers {
             return abaDigit(Array(d[0..<8])) == d[8]
         }, draw: { like, rng in
             let given = like.count >= 2 ? numbers(Array(like.prefix(2))).map(number) : nil
-            let lead = given.flatMap { abaPrefixes.contains($0) ? $0 : nil } ?? abaPrefixes.randomElement(using: &rng) ?? 1
+            let lead = given.flatMap { abaPrefixes.contains($0) ? $0 : nil } ?? abaPrefixes.sorted().randomElement(using: &rng) ?? 1
             let body = twoDigits(lead) + randomDigits(6, &rng)
             return characters(body + [abaDigit(body)])
         }),
@@ -1544,7 +1544,7 @@ enum Recognizers {
             return einPrefixes.contains(d[0] * 10 + d[1])
         }, draw: { like, rng in
             let given = like.count >= 2 ? numbers(Array(like.prefix(2))).map(number) : nil
-            let lead = given.flatMap { einPrefixes.contains($0) ? $0 : nil } ?? einPrefixes.randomElement(using: &rng) ?? 12
+            let lead = given.flatMap { einPrefixes.contains($0) ? $0 : nil } ?? einPrefixes.sorted().randomElement(using: &rng) ?? 12
             return characters(twoDigits(lead) + randomDigits(7, &rng))
         }),
         Recognizer("US_HEALTH_MEMBER_ID", keys: ["insurancememberid", "healthinsurancememberid", "healthplanmemberid", "subscriberid", "insurancesubscriberid", "insuranceid"], forms: [
