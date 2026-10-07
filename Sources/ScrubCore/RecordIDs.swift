@@ -54,7 +54,8 @@ enum RecordIDs {
         // "customer": "cus_4TUvJhQkMeNW3t", "owner": "usr_19f3", "created_by": "u_1234": a reference
         // to someone. An ID has a digit: "owner": "platform-team" is a team's slug.
         // A tool's version, a release's tag, a standard or a file is no one's: "agent": "curl8.0", "owner": "release_2026".
-        guard value.contains(where: \.isNumber), !versioned(value), !isFileName(value) else { return false }
+        // A client's handle is theirs whatever it ends in: "user": "jdoe42.js".
+        guard value.contains(where: \.isNumber), !versioned(value), !isFileName(value) || Detector.clientKey(key) else { return false }
         return words.count == 1 && people.contains(last) && !belongings.contains(last) || KeyHints.isRole(key)
     }
 

@@ -429,3 +429,27 @@ func bareNameKeyNeedsAPersonRecord(_ input: String, _ replaced: Bool) throws {
         #expect(out[key] != nil && out[key] != value, "\(key): \(output)")
     }
 }
+
+// A number whose exponent is the most negative a whole number holds is read and kept, not a stop.
+@Test func jsonFarExponentIsKept() throws {
+    let source = #"{"x":1e-9223372036854775808,"y":2e9223372036854775807}"#
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(output == source)
+}
+
+// A number written again in a shape too long to hold its stand-in takes the stand-in as written, never the original.
+@Test func jsonNumberTooLongToReshapeIsStillReplaced() throws {
+    let copy = "2128675309" + String(repeating: "0", count: 401) + "e-401"
+    let source = #"{"phone":2128675309,"copy":"# + copy + "}"
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+    let out = try #require(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: NSNumber])
+    #expect(!output.contains("2128675309"), "\(output)")
+    #expect(out["copy"]?.doubleValue == out["phone"]?.doubleValue, "\(output)")
+}
+
+// A client's handle written as a file's name is theirs under "user" too.
+@Test func jsonUserHandleWrittenAsAFileIsReplaced() throws {
+    let output = String(decoding: try Scrubber.scrub(Data(#"{"user":"jdoe42.js","main":"lib/tool.js"}"#.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("jdoe42"), "\(output)")
+    #expect(output.contains(#""main":"lib/tool.js""#))
+}

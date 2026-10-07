@@ -671,7 +671,7 @@ public final class Detector {
     /// The people a record serves, under whose key a handle is theirs whatever it ends in.
     private static let clients: Set<String> = ["patient", "customer", "client", "user", "member", "student", "applicant", "candidate", "passenger", "traveler", "traveller",
                                                "tenant", "borrower", "guest", "insured", "policyholder", "cardholder", "accountholder", "beneficiary", "visitor", "employee"]
-    private static func clientKey(_ key: String?) -> Bool {
+    static func clientKey(_ key: String?) -> Bool {
         KeyHints.words(key).last.map(clients.contains) == true
     }
     static func writtenName(_ text: String) -> Range<Int>? {

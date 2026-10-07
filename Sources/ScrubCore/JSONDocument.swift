@@ -316,19 +316,33 @@ final class JSONDocument {
             if let reference = pairs.first(where: { $0.0 == "reference" })?.1.stringValue,
                let match = TextRanges.matches(referenceType, in: reference).first {
                 let type = TextRanges.substring(reference, match.range(at: 1).location..<NSMaxRange(match.range(at: 1)))
-                return personTypes.contains(type) ? "patient" : "institution"
+                if let role = typeRole(type) { return role }
             }
             // A reference no type is read from (a contained "#p1", a "urn:uuid:…", an identifier
             // alone) says it in its own "type": "Practitioner", or the type's full address.
             if let type = pairs.first(where: { $0.0 == "type" })?.1.stringValue,
-               let name = type.split(separator: "/").last.map(String.init), name.range(of: #"^[A-Z][A-Za-z]+$"#, options: .regularExpression) != nil {
-                return personTypes.contains(name) ? "patient" : "institution"
+               let name = type.split(separator: "/").last.map(String.init), let role = typeRole(name) {
+                return role
             }
             guard let parent else { return nil }
             let word = KeyHints.words(parent).joined()
             if referringPeople.contains(word) { return KeyHints.isRole(parent) ? parent : "patient" }
             return referringNoOne.contains(word) ? "institution" : nil
         }
+        /// A person's role for a record type that names one, a business's for one known to name none
+        /// ("Organization", "Location", "Encounter"), and nil for a type no record standard lists ("Human"),
+        /// whose display the key it is under still names.
+        private static func typeRole(_ type: String) -> String? {
+            personTypes.contains(type) ? "patient" : otherTypes.contains(type) ? "institution" : nil
+        }
+        /// The record types a reference names something other than a person by.
+        private static let otherTypes: Set<String> = [
+            "Organization", "OrganizationAffiliation", "Location", "HealthcareService", "Endpoint", "InsurancePlan", "Device", "DeviceDefinition",
+            "Group", "CareTeam", "Encounter", "EpisodeOfCare", "Condition", "Observation", "Procedure", "DiagnosticReport", "ImagingStudy",
+            "Specimen", "Medication", "MedicationRequest", "MedicationStatement", "MedicationAdministration", "MedicationDispense", "Substance",
+            "Immunization", "AllergyIntolerance", "CarePlan", "Goal", "ServiceRequest", "Appointment", "Schedule", "Slot", "Coverage", "Claim",
+            "ClaimResponse", "ExplanationOfBenefit", "Account", "Invoice", "DocumentReference", "Composition", "Questionnaire",
+            "QuestionnaireResponse", "Provenance", "Consent", "Contract", "Task", "Communication", "List", "Library", "PlanDefinition", "ActivityDefinition"]
         /// The record types a reference names a person by.
         private static let personTypes: Set<String> = ["Patient", "Practitioner", "PractitionerRole", "RelatedPerson", "Person"]
         /// Keys whose reference is to a person. A "provider" may be a practice as often as a
@@ -409,7 +423,7 @@ final class JSONDocument {
         let unsigned = number.dropFirst(negative ? 1 : 0)
         let mark = unsigned.firstIndex { $0 == "e" || $0 == "E" }
         let mantissa = unsigned[..<(mark ?? unsigned.endIndex)], exponent = unsigned[(mark ?? unsigned.endIndex)...]
-        guard let power = exponent.isEmpty ? 0 : Int(exponent.dropFirst()), abs(power) < 1 << 20 else { return nil }
+        guard let power = exponent.isEmpty ? 0 : Int(exponent.dropFirst()), power > -1 << 20, power < 1 << 20 else { return nil }
         let point = mantissa.firstIndex(of: ".")
         return (negative, mantissa[..<(point ?? mantissa.endIndex)], point.map { mantissa[mantissa.index(after: $0)...] } ?? "", exponent, power)
     }
@@ -588,9 +602,11 @@ final class JSONDocument {
                 }
             case .number(let number):
                 guard let range = source.values[path] else { return }
-                // Written again in any spelling of its value ("2128675309.0"), it takes the stand-in in its own.
+                // Written again in any spelling of its value ("2128675309.0"), it takes the stand-in in its own,
+                // or as the stand-in is written where its shape can't hold it: never the original.
                 if valueIDs[path] == nil, looseNumbers.contains(path), let exact = Self.numberValue(number), let copy = numbers[exact],
-                   let text = Self.numberWritten(copy.text, like: number) {
+                   let text = Self.numberWritten(copy.text, like: number)
+                    ?? (TextRanges.matches(OrderedJSON.numberGrammar, in: copy.text).isEmpty ? nil : copy.text) {
                     edits.append((range, text, [copy.mark.moved(to: 0..<(text as NSString).length)]))
                     return
                 }

@@ -190,3 +190,11 @@ private func aHealthRecordBundleKeepsOnePatientAndEveryCode(_ name: String) thro
         #expect(written.wholeMatch(of: shape) != nil, "[\(name)] \(path) is \(written)")
     }
 }
+
+/// A type no record standard lists says nothing of whom a display names: the key it is under still does.
+@Test func anUnlistedTypeLeavesTheKeyToNameThePerson() throws {
+    let source = #"{"subject":{"type":"Human","display":"Ilse Marrow"},"location":{"type":"Location","display":"Clinic East Wing"}}"#
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("Marrow"), "\(output)")
+    #expect(output.contains("Clinic East Wing"), "\(output)")
+}
