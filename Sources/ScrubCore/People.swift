@@ -589,6 +589,18 @@ final class People {
         }
         return candidates.count == 1 ? candidates.values.first : nil
     }
+    /// Whether someone known has either word as a first name or a surname, and a
+    /// part that is not `first` `last`'s: the words name them, written another way.
+    func namesOtherwise(first: String, last: String) -> Bool {
+        let f = Self.fold(first), l = Self.fold(last)
+        return [firstBuckets[f], firstBuckets[l], lastBuckets[f], lastBuckets[l]].contains { bucket in
+            (bucket?.people ?? []).contains { ($0.realFirst ?? f) != f || ($0.realLast ?? l) != l }
+        }
+    }
+    /// Whether someone known has `first` as a first name or `last` as a surname.
+    func knowsAsWritten(first: String, last: String) -> Bool {
+        (firstBuckets[Self.fold(first)]?.count ?? 0) > 0 || (lastBuckets[Self.fold(last)]?.count ?? 0) > 0
+    }
     func associate(_ person: Persona, email: String?) {
         if let email { associatedEmails[fold(email)] = person }
     }

@@ -74,6 +74,8 @@ public final class Job {
     /// Kinds whose words are someone's name: an ID that starts with one is theirs.
     private static let naming: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME", "USERNAME"]
     func observeSpans<S: Sequence>(_ fields: S) where S.Element == (String, [Span]) {
+        var spelling: [(email: String, score: Double)] = []
+        defer { learnSpelled(spelling) }
         for (text, spans) in fields {
             let length = (text as NSString).length
             for span in spans {
@@ -97,6 +99,7 @@ public final class Job {
                     _ = standIns.people.registerFull(value, gender: Self.pronounGender(of: value, after: span.range, before: next, in: text))
                     rememberParts(of: value, confidence: span.score)
                 }
+                if span.entity == "EMAIL_ADDRESS" { spelling.append((value, span.score)) }
             }
         }
     }
@@ -120,6 +123,45 @@ public final class Job {
             }
         }
         return nil
+    }
+    /// An address that spells its owner's name ("marisol.quintero@…") names them: written
+    /// later alone or in part, they are that person, with the stand-in the address is built from.
+    /// Read after the names written beside it, so it never makes a second person of one the
+    /// document names otherwise ("fatima.binsaleh@" beside Fatima bin Saleh); written surname
+    /// first ("lombardi.ilaria@"), it is read so where only the second word is a given name, only
+    /// the first a surname, or the document names the person that way round.
+    private func learnSpelled(_ emails: [(email: String, score: Double)]) {
+        for (email, score) in emails {
+            guard let words = Self.spelledWords(email), standIns.people.find(email: email) == nil else { continue }
+            let people = standIns.people
+            let given = Self.givenFirst(words) && !people.namesOtherwise(first: words.0, last: words.1)
+            let turned = !given && (people.knowsAsWritten(first: words.1, last: words.0) || NameLists.isFirst(words.1) && !NameLists.isFirst(words.0)
+                                       || NameLists.isSurname(words.0) && !NameLists.isSurname(words.1))
+                && !people.namesOtherwise(first: words.1, last: words.0)
+            guard given || turned else { continue }
+            let (first, last) = given ? words : (words.1, words.0)
+            people.associate(first: first, last: last, email: email)
+            let confidence = min(score, ListedNames.cuedScore), full = first + " " + last
+            gazetteer["PERSON", default: []].insert(full)
+            note(full, confidence: confidence)
+            rememberParts(of: full, confidence: confidence)
+        }
+    }
+    /// The two words an email's local part spells a name with, capitalised: joined by
+    /// a dot, an underscore or a hyphen, each a name or no word ("marisol.quintero",
+    /// "cosmin.radu"). "rose.hill", "sales.team" and "jdoe" spell no one surely enough.
+    static func spelledWords(_ email: String) -> (String, String)? {
+        guard let at = email.firstIndex(of: "@"), !People.isRoleMailbox(email) else { return nil }
+        let parts = email[..<at].split(whereSeparator: { ".-_".contains($0) }).map { $0.lowercased() }
+        guard parts.count == 2, parts.allSatisfy({ $0.count >= 3 && $0.allSatisfy { $0.isLetter && $0.isASCII } && $0.contains { "aeiouy".contains($0) } }), parts[0] != parts[1],
+              parts.allSatisfy({ !NameLists.isWordlike($0) && (NameLists.isName($0) && !NameLists.isOrdinary($0) || !NameLists.isWord($0)) }) else { return nil }
+        let capitalised = parts.map { $0.prefix(1).uppercased() + $0.dropFirst() }
+        return (capitalised[0], capitalised[1])
+    }
+    /// Whether the first word reads as a given name: a listed first name, or, beside a surname
+    /// the lists hold, no word at all. Neither listed ("cosmin.radu") reads given name first, as most addresses are.
+    static func givenFirst(_ words: (String, String)) -> Bool {
+        NameLists.isFirst(words.0) || !NameLists.isFirst(words.1) && !NameLists.isSurname(words.0)
     }
     // "Thanks, Maria" after "Maria Gonzalez" is the same person, and so are
     // "Gonzalez's", "GONZALEZ", "M. Gonzalez", "Gonzalez, Maria" and handles
