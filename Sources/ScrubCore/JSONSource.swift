@@ -27,19 +27,21 @@ struct JSONSource {
         return JSONSource(text: text, root: root, shell: shell, values: reader.values, keys: reader.keys)
     }
 
-    /// JSON Lines: each line that isn't blank an object or a list of its own, as a log
-    /// or an export writes them. Each line's range (its spaces with it, its line break
-    /// not), or nil where any line is something else.
-    static func lines(in text: String) throws -> [Range<Int>]? {
+    /// JSON Lines: each line that isn't blank a document of its own, as a log or an export
+    /// writes them. Each line's range (its spaces with it, its line break not), or nil where
+    /// any line is something else. A file named so may write a string, a number, true, false
+    /// or null a line; text only says it is JSON Lines with an object or a list among them.
+    static func lines(in text: String, named: Bool = false) throws -> [Range<Int>]? {
         var ranges: [Range<Int>] = []
-        var start = 0
+        var start = 0, structured = false
         let units = Array(text.utf16)
         for at in 0...units.count where at == units.count || units[at] == 10 || units[at] == 13 {
             defer { start = at + 1 }
             guard let first = units[start..<at].first(where: { ![9, 32].contains($0) }) else { continue }
-            guard first == 123 || first == 91 else { return nil }
+            if first == 123 || first == 91 { structured = true }
             ranges.append(start..<at)
         }
+        guard named || structured else { return nil }
         for range in ranges {
             do { _ = try read(String(decoding: units[range], as: UTF16.self)) }
             catch ScrubError.unsupported("too_deep") { throw ScrubError.unsupported("too_deep") }

@@ -169,7 +169,7 @@ public final class Detector {
             if let keyed = Self.keyed(text, key: key) { return keyed }
             if KeyHints.isRole(key), let name = Self.writtenName(text) { return [Span(range: name, entity: "PERSON", score: 1)] }
             // So is a handle there ("author": "maria.gonzalez", "jdoe42"): the role's person, by another name.
-            if KeyHints.isRole(key), Self.isHandle(text) { return [Span(range: 0..<(text as NSString).length, entity: "USERNAME", score: 1)] }
+            if KeyHints.isRole(key), Self.isHandle(text, client: Self.clientKey(key)) { return [Span(range: 0..<(text as NSString).length, entity: "USERNAME", score: 1)] }
             // A time zone ("America/New_York") names a region, not where someone lives.
             if text.contains("/"), text.count < 64, !TextRanges.matches(Self.timeZone, in: text).isEmpty { return [] }
             let plainWord = text.allSatisfy { $0.isASCII && $0.isLowercase }
@@ -656,11 +656,23 @@ public final class Detector {
     /// either with a trailing note like "(Support)", or a known first name alone.
     /// One token a person signs in with: letters with a dot, an underscore or digits ("maria.gonzalez",
     /// "jdoe42"), never a file's name, a version, a link or an email.
-    static func isHandle(_ text: String) -> Bool {
+    /// `client`: whether the key names the person the record serves ("patient", "customer"), whose
+    /// handle a file's name may be ("jdoe.js"); under a worker's ("agent", "reviewer") it is a file.
+    static func isHandle(_ text: String, client: Bool = false) -> Bool {
         guard (3...40).contains(text.count), text.first?.isLetter == true, text.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }),
               text.contains(where: { $0 == "." || $0 == "_" || $0.isNumber }), text.last.map({ $0.isLetter || $0.isNumber }) == true else { return false }
-        if let dot = text.lastIndex(of: "."), ContextStage.fileExtensions.contains(text[text.index(after: dot)...].lowercased()) { return false }
+        // A version ("curl8.0"), a release's tag ("release_2026"), a standard's name ("RFC4716") or a code in capitals ("SKU4410").
+        guard !RecordIDs.versioned(text), TextRanges.matches(capitalCode, in: text).isEmpty else { return false }
+        // A file's name, but where the key names a client: there its stem is the handle ("jdoe.js").
+        if RecordIDs.isFileName(text) { return client && text[..<text.lastIndex(of: ".")!].filter(\.isLetter).count >= 3 }
         return text.filter(\.isLetter).count >= 3
+    }
+    private static let capitalCode = TextPattern(#"^[A-Z]{2,}[-_]?\d+$"#)
+    /// The people a record serves, under whose key a handle is theirs whatever it ends in.
+    private static let clients: Set<String> = ["patient", "customer", "client", "user", "member", "student", "applicant", "candidate", "passenger", "traveler", "traveller",
+                                               "tenant", "borrower", "guest", "insured", "policyholder", "cardholder", "accountholder", "beneficiary", "visitor", "employee"]
+    private static func clientKey(_ key: String?) -> Bool {
+        KeyHints.words(key).last.map(clients.contains) == true
     }
     static func writtenName(_ text: String) -> Range<Int>? {
         let match = TextRanges.matches(nameShape, in: text).first

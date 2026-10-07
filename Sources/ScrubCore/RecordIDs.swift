@@ -53,7 +53,8 @@ enum RecordIDs {
         if idWords.contains(last), words.count >= 3, people.contains(words[words.count - 3]), idQualifiers.contains(words[words.count - 2]) { return true }
         // "customer": "cus_4TUvJhQkMeNW3t", "owner": "usr_19f3", "created_by": "u_1234": a reference
         // to someone. An ID has a digit: "owner": "platform-team" is a team's slug.
-        guard value.contains(where: \.isNumber) else { return false }
+        // A tool's version, a release's tag, a standard or a file is no one's: "agent": "curl8.0", "owner": "release_2026".
+        guard value.contains(where: \.isNumber), !versioned(value), !isFileName(value) else { return false }
         return words.count == 1 && people.contains(last) && !belongings.contains(last) || KeyHints.isRole(key)
     }
 
@@ -291,6 +292,21 @@ enum RecordIDs {
     private static let thingPrefixes: Set<String> = ["card", "crd", "ord", "order", "inv", "invoice", "ch", "charge", "txn", "tx", "trx", "evt", "event", "req", "request", "pay", "pi", "pm", "py",
                                                      "sess", "session", "sk", "pk", "rk", "tok", "src", "prod", "price", "sku", "ver", "build", "job", "task", "run", "trace", "span",
                                                      "msg", "file", "doc", "vrf", "chk", "ref", "re", "dp", "po", "sub_sched", "plan", "coupon", "promo", "batch", "item", "line", "wh", "hook"]
+    /// A name and its version ("curl8.0", "name1.2"), a release's or a build's tag ("release_2026",
+    /// "build-418", "v2.3.1"), or a standard's name ("RFC4716", "ISO-8601"): the same for everyone who writes it.
+    static func versioned(_ value: String) -> Bool {
+        !TextRanges.matches(versionTag, in: value).isEmpty || Standards.ranges(in: value) == [0..<value.utf16.count]
+    }
+    private static let versionTag = TextPattern(#"^(?:[A-Za-z][A-Za-z-]*?[-_]?[vV]?\d+(?:\.\d+)+[A-Za-z]?|(?i:release|build|rc|version|ver|tag|hotfix|snapshot|nightly|beta|alpha|patch|sprint|milestone|stable|v)[-_.]?\d[\d._-]*[A-Za-z]?)$"#)
+    /// A file's name: a document's, a script's or a configuration's ("config.ini", "deploy.sh").
+    static func isFileName(_ value: String) -> Bool {
+        guard let dot = value.lastIndex(of: "."), value.index(after: dot) < value.endIndex else { return false }
+        let ext = value[value.index(after: dot)...].lowercased()
+        return ContextStage.fileExtensions.contains(ext) || configExtensions.contains(ext)
+    }
+    private static let configExtensions: Set<String> = ["ini", "cfg", "conf", "config", "env", "lock", "bak", "tmp", "dat", "db", "sql", "plist", "properties", "swift", "php",
+                                                        "pl", "lua", "jar", "war", "dll", "so", "bin", "tar", "tgz", "bz2", "xz", "7z", "rar", "svg", "webp", "ico", "bmp", "tif", "tiff",
+                                                        "ttf", "otf", "woff", "woff2", "wasm", "map", "scss", "sass", "less", "vue", "ipynb", "cs", "scala", "dart", "tf", "pem", "crt"]
     static func technical(_ value: String) -> Bool { thingPrefixes.contains(keptPrefix(value).dropLast().lowercased()) }
     private static let uuid = TextPattern(#"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"#)
     /// A UUID names whatever the system made it for; only what is around it says that was a person.

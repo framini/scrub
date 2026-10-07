@@ -43,7 +43,7 @@ public enum TextFile: FileFormat {
     static func processLines(_ data: Data, job: Job, progress: (Stage, Int, Int) -> Void, forceFullDetection: Bool) throws -> ScrubResult {
         let text = try decode(data)
         try Scrubber.checkCancellation()
-        guard let lines = try JSONSource.lines(in: text) else { throw ScrubError.unsupported("invalid_json") }
+        guard let lines = try JSONSource.lines(in: text, named: true) else { throw ScrubError.unsupported("invalid_json") }
         return try process(text, regions: lines.map { ($0, false, nil) }, format: "jsonl", job: job, progress: progress, forceFullDetection: forceFullDetection)
     }
 

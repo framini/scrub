@@ -53,7 +53,7 @@ final class JSONDocument {
             let text = Data(inner.utf8).base64EncodedString()
             return (text, marks.first.map { [$0.moved(to: 0..<(text as NSString).length)] } ?? [])
         }
-        return inner != child.source.text || !marks.isEmpty ? (inner, marks) : nil
+        return !inner.unicodeScalars.elementsEqual(child.source.text.unicodeScalars) || !marks.isEmpty ? (inner, marks) : nil
     }
 
     /// What every document of one scrub shares: the leaves they add, the
@@ -318,6 +318,12 @@ final class JSONDocument {
                 let type = TextRanges.substring(reference, match.range(at: 1).location..<NSMaxRange(match.range(at: 1)))
                 return personTypes.contains(type) ? "patient" : "institution"
             }
+            // A reference no type is read from (a contained "#p1", a "urn:uuid:…", an identifier
+            // alone) says it in its own "type": "Practitioner", or the type's full address.
+            if let type = pairs.first(where: { $0.0 == "type" })?.1.stringValue,
+               let name = type.split(separator: "/").last.map(String.init), name.range(of: #"^[A-Z][A-Za-z]+$"#, options: .regularExpression) != nil {
+                return personTypes.contains(name) ? "patient" : "institution"
+            }
             guard let parent else { return nil }
             let word = KeyHints.words(parent).joined()
             if referringPeople.contains(word) { return KeyHints.isRole(parent) ? parent : "patient" }
@@ -396,21 +402,62 @@ final class JSONDocument {
         let edits = inside.map { (range: $0.range, value: $0.original ?? "") }
         return DocumentValue(text: TextRanges.apply(edits, to: value.text).0, marks: TextRanges.shift(value.marks, by: edits), unresolved: [])
     }
-    /// Each number replaced somewhere, as written, with what a number writing it again is written as:
+    /// A JSON number's parts as written: its sign, its digits before and after the point, and its exponent's text and value.
+    private static func numberParts(_ number: String) -> (negative: Bool, whole: Substring, fraction: Substring, exponent: Substring, power: Int)? {
+        guard !TextRanges.matches(OrderedJSON.numberGrammar, in: number).isEmpty else { return nil }
+        let negative = number.hasPrefix("-")
+        let unsigned = number.dropFirst(negative ? 1 : 0)
+        let mark = unsigned.firstIndex { $0 == "e" || $0 == "E" }
+        let mantissa = unsigned[..<(mark ?? unsigned.endIndex)], exponent = unsigned[(mark ?? unsigned.endIndex)...]
+        guard let power = exponent.isEmpty ? 0 : Int(exponent.dropFirst()), abs(power) < 1 << 20 else { return nil }
+        let point = mantissa.firstIndex(of: ".")
+        return (negative, mantissa[..<(point ?? mantissa.endIndex)], point.map { mantissa[mantissa.index(after: $0)...] } ?? "", exponent, power)
+    }
+    /// A JSON number's value, exactly, whatever its spelling: "2128675309", "2128675309.0" and
+    /// "2.128675309e9" are all "2128675309e0". No rounding: its significant digits and their power of ten.
+    static func numberValue(_ number: String) -> String? {
+        guard let parts = numberParts(number) else { return nil }
+        var digits = (String(parts.whole) + parts.fraction).drop { $0 == "0" }, power = parts.power - parts.fraction.count
+        guard !digits.isEmpty else { return "0" }
+        while digits.last == "0" { digits = digits.dropLast(); power += 1 }
+        return (parts.negative ? "-" : "") + digits + "e" + String(power)
+    }
+    /// The number `value` written in `like`'s shape: its exponent as written, and at least as many
+    /// places after the point. "3475550182" like "2.128675309e9" is "3.475550182e9". Nil where it can't be.
+    static func numberWritten(_ value: String, like: String) -> String? {
+        guard let exact = numberValue(value), let shape = numberParts(like) else { return nil }
+        let negative = exact.hasPrefix("-")
+        let parts = exact.dropFirst(negative ? 1 : 0).split(separator: "e")
+        let digits = String(parts[0])
+        guard let power = parts.count == 2 ? Int(parts[1]) : 0, abs(power - shape.power) <= 400 else { return nil }
+        let shift = power - shape.power
+        var whole: String, fraction: String
+        if shift >= 0 {
+            (whole, fraction) = (digits + String(repeating: "0", count: shift), "")
+        } else if digits.count > -shift {
+            (whole, fraction) = (String(digits.dropLast(-shift)), String(digits.suffix(-shift)))
+        } else {
+            (whole, fraction) = ("0", String(repeating: "0", count: -shift - digits.count) + digits)
+        }
+        if digits == "0" { fraction = "" }
+        if fraction.count < shape.fraction.count { fraction += String(repeating: "0", count: shape.fraction.count - fraction.count) }
+        return (negative ? "-" : "") + whole + (fraction.isEmpty ? "" : "." + fraction) + shape.exponent
+    }
+    /// Each number replaced somewhere, by its value (see `numberValue`), with what a number writing it again is written as:
     /// its stand-in where that is a number, else the stand-in's digits in its shape.
     private static func numberStandIns(_ values: [DocumentValue]) -> [String: (text: String, mark: Mark)] {
         var found: [String: (text: String, mark: Mark)] = [:]
         for value in values {
             for mark in value.marks {
-                guard let original = mark.original, found[original] == nil, original.utf8.allSatisfy({ (48...57).contains($0) || [43, 45, 46, 69, 101].contains($0) }),
-                      OriginalMatcher.spreads(original, entity: mark.entity), !TextRanges.matches(OrderedJSON.numberGrammar, in: original).isEmpty else { continue }
+                guard let original = mark.original, original.utf8.allSatisfy({ (48...57).contains($0) || [43, 45, 46, 69, 101].contains($0) }),
+                      let exact = numberValue(original), found[exact] == nil, OriginalMatcher.spreads(original, entity: mark.entity) else { continue }
                 let fake = TextRanges.substring(value.text, mark.range)
                 guard fake != original else { continue }
                 let digits = fake.filter { $0.isASCII && $0.isNumber }
                 let text = !TextRanges.matches(OrderedJSON.numberGrammar, in: fake).isEmpty ? fake
                     : original.allSatisfy({ $0.isASCII && $0.isNumber }) && digits.count == original.count && (digits.first != "0" || original.count == 1) ? digits
                     : numberShaped(like: original, from: fake)
-                found[original] = (text, mark.moved(to: 0..<(text as NSString).length))
+                found[exact] = (text, mark.moved(to: 0..<(text as NSString).length))
             }
         }
         return found
@@ -431,18 +478,33 @@ final class JSONDocument {
         render(values, numbers: looseNumbers.isEmpty && nested.isEmpty ? [:] : Self.numberStandIns(values))
     }
     private func render(_ values: [DocumentValue], numbers: [String: (text: String, mark: Mark)]) -> (String, [Mark]) {
-        var edits: [(range: Range<Int>, value: String, marks: [Mark])] = []
+        applied(edits(values, numbers: numbers))
+    }
+    /// One token, or part of one, written again: where in the source, what it writes, and the marks over that.
+    private typealias Edit = (range: Range<Int>, value: String, marks: [Mark])
+    /// The source with `edits` (sorted, apart) written in, and their marks where they land.
+    private func applied(_ edits: [Edit]) -> (String, [Mark]) {
+        guard !edits.isEmpty else { return (source.text, []) }
+        let (output, placed) = TextRanges.apply(edits.map { ($0.range, $0.value) }, to: source.text)
+        let marks = zip(edits, placed).flatMap { edit, range in
+            edit.marks.map { $0.moved(to: ($0.range.lowerBound + range.lowerBound)..<($0.range.upperBound + range.lowerBound)) }
+        }
+        return (output, marks)
+    }
+    /// What changes in the source: each changed token, or the part of one a mark replaced, in order.
+    private func edits(_ values: [DocumentValue], numbers: [String: (text: String, mark: Mark)]) -> [Edit] {
+        var edits: [Edit] = []
         var units: [UInt16]?
         // A string changed in part is written again only where a mark replaced its original, so
         // every escape around that is kept as written; where the marks don't account for every
         // change, the whole token is written again.
         func write(_ text: String, _ marks: [Mark], original: String, at range: Range<Int>) {
-            guard text != original || !marks.isEmpty else { return }
+            guard !text.unicodeScalars.elementsEqual(original.unicodeScalars) || !marks.isEmpty else { return }
             if let patches = patches(text, marks, original: original, at: range) { edits += patches; return }
             let (token, placed) = OrderedJSON.quoted(text, marks: marks)
             edits.append((range, token, placed))
         }
-        func patches(_ text: String, _ marks: [Mark], original: String, at range: Range<Int>) -> [(range: Range<Int>, value: String, marks: [Mark])]? {
+        func patches(_ text: String, _ marks: [Mark], original: String, at range: Range<Int>) -> [Edit]? {
             let written = Array(text.utf16)
             var rebuilt: [UInt16] = [], spans: [(range: Range<Int>, mark: Mark)] = []
             var cursor = 0
@@ -464,16 +526,31 @@ final class JSONDocument {
                 return (offsets[span.range.lowerBound]..<offsets[span.range.upperBound], value, [span.mark.moved(to: 0..<(value as NSString).length)])
             }
         }
+        // A document written inside the string token at `range` changes where its own edits do: each
+        // escaped for the string and moved to where the part it replaces is written in this source.
+        func escaped(_ inner: [Edit], of child: JSONDocument, original: String, at range: Range<Int>) -> [Edit]? {
+            guard child.source.text.utf16.elementsEqual(original.utf16) else { return nil }
+            if units == nil { units = Array(source.text.utf16) }
+            let offsets = decodedOffsets(range, in: units ?? [])
+            guard offsets.count == original.utf16.count + 1 else { return nil }
+            return inner.map { edit in
+                let (token, placed) = OrderedJSON.quoted(edit.value, marks: edit.marks)
+                return (offsets[edit.range.lowerBound]..<offsets[edit.range.upperBound], String(token.dropFirst().dropLast()),
+                        placed.map { $0.moved(to: ($0.range.lowerBound - 1)..<($0.range.upperBound - 1)) })
+            }
+        }
         func walk(_ value: JSONValue, path: String) {
             switch value {
             case .object(let pairs):
                 // A key written again as another's is set apart; two keys the input writes alike stay alike.
-                let given = Set(pairs.map(\.0))
-                var outputs: [String] = [], chosen: [String: (key: String, marks: [Mark])] = [:]
+                // Alike in every scalar: "é" and "e" with its accent are two keys, each kept as spelled.
+                func spelling(_ key: String) -> [UInt32] { key.unicodeScalars.map(\.value) }
+                let given = Set(pairs.map { spelling($0.0) })
+                var outputs: Set<[UInt32]> = [], chosen: [[UInt32]: (key: String, marks: [Mark])] = [:]
                 for (index, pair) in pairs.enumerated() {
                     let childPath = path + "/" + String(index)
                     var key = pair.0, marks: [Mark] = []
-                    if let known = chosen[pair.0] {
+                    if let known = chosen[spelling(pair.0)] {
                         (key, marks) = known
                     } else {
                         if let id = keyIDs[childPath] {
@@ -481,9 +558,9 @@ final class JSONDocument {
                             let whole = scrubbed.marks.count == 1 && scrubbed.marks[0].range == 0..<(scrubbed.text as NSString).length
                             if !(fieldKeys.contains(childPath) && whole), let kept = Self.keyWritten(scrubbed) { key = kept.text; marks = kept.marks }
                         }
-                        if key != pair.0 { while outputs.contains(key) || given.contains(key) { key += "_"; marks = [] } }
-                        outputs.append(key)
-                        chosen[pair.0] = (key, marks)
+                        if spelling(key) != spelling(pair.0) { while outputs.contains(spelling(key)) || given.contains(spelling(key)) { key += "_"; marks = [] } }
+                        outputs.insert(spelling(key))
+                        chosen[spelling(pair.0)] = (key, marks)
                     }
                     if let range = source.keys[childPath] { write(key, marks, original: pair.0, at: range) }
                     walk(pair.1, path: childPath)
@@ -499,16 +576,22 @@ final class JSONDocument {
                             let (text, placed) = OrderedJSON.quoted(inner, marks: marks); edits.append((range, text, placed))
                         }
                     } else {
-                        let (inner, marks) = child.render(values, numbers: numbers)
-                        write(inner, marks, original: string, at: range)
+                        // Written as text: only what changed in it is written again, each escape around that as written.
+                        let inner = child.edits(values, numbers: numbers)
+                        guard !inner.isEmpty else { return }
+                        if let patches = escaped(inner, of: child, original: string, at: range) { edits += patches; return }
+                        let (text, marks) = child.applied(inner)
+                        write(text, marks, original: string, at: range)
                     }
                 } else if let id = valueIDs[path] {
                     write(values[id].text, values[id].marks, original: string, at: range)
                 }
             case .number(let number):
                 guard let range = source.values[path] else { return }
-                if valueIDs[path] == nil, looseNumbers.contains(path), let copy = numbers[number] {
-                    edits.append((range, copy.text, [copy.mark]))
+                // Written again in any spelling of its value ("2128675309.0"), it takes the stand-in in its own.
+                if valueIDs[path] == nil, looseNumbers.contains(path), let exact = Self.numberValue(number), let copy = numbers[exact],
+                   let text = Self.numberWritten(copy.text, like: number) {
+                    edits.append((range, text, [copy.mark.moved(to: 0..<(text as NSString).length)]))
                     return
                 }
                 guard let id = valueIDs[path], values[id].text != number || !values[id].marks.isEmpty else { return }
@@ -524,7 +607,7 @@ final class JSONDocument {
             }
         }
         walk(source.root, path: "")
-        guard !edits.isEmpty else { return (source.text, []) }
+        guard !edits.isEmpty else { return [] }
         // Inside a shell's quotes an apostrophe is written as the shell writes it; each mark's ends move by the apostrophes before them.
         if source.shell {
             edits = edits.map { edit in
@@ -535,12 +618,7 @@ final class JSONDocument {
                 return (edit.range, edit.value.replacingOccurrences(of: "'", with: "'\\''"), marks)
             }
         }
-        edits.sort { $0.range.lowerBound < $1.range.lowerBound }
-        let (output, placed) = TextRanges.apply(edits.map { ($0.range, $0.value) }, to: source.text)
-        let marks = zip(edits, placed).flatMap { edit, range in
-            edit.marks.map { $0.moved(to: ($0.range.lowerBound + range.lowerBound)..<($0.range.upperBound + range.lowerBound)) }
-        }
-        return (output, marks)
+        return edits.sorted { $0.range.lowerBound < $1.range.lowerBound }
     }
 }
 

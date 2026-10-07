@@ -44,6 +44,28 @@ func jsonLinesFilesAreReadAsJSON(_ name: String) throws {
     #expect(throws: ScrubError.unsupported("invalid_json")) { try Scrubber.scrub(Data("{\"email\":\"a@example.org\"}\nnot json\n".utf8), name: name) }
 }
 
+/// A JSON Lines file may write a string, a number, true, false or null a line: each is read, its line breaks kept.
+@Test(arguments: ["a.jsonl", "a.ndjson"])
+func jsonLinesFilesReadScalarLines(_ name: String) throws {
+    let input = "\"alice@example.org\"\n{\"email\":\"bob@example.org\"}\r\n42\n\ntrue\nnull\n"
+    let result = try Scrubber.scrub(Data(input.utf8), name: name, forceFullDetection: false, seed: 7)
+    let output = String(decoding: result.output, as: UTF8.self)
+    #expect(result.format == "jsonl")
+    #expect(!output.contains("alice@example.org") && !output.contains("bob@example.org"), "\(output)")
+    let lines = output.components(separatedBy: "\n")
+    #expect(lines.count == 7 && lines[1].hasSuffix("}\r") && lines[2...] == ["42", "", "true", "null", ""], "\(output)")
+    let email = try #require(try JSONSerialization.jsonObject(with: Data(lines[0].utf8), options: .fragmentsAllowed) as? String)
+    #expect(email.contains("@"), "\(output)")
+}
+
+/// Pasted lines are JSON Lines only with an object or a list among them: quoted lines alone are text.
+@Test func pastedQuotedLinesStayText() throws {
+    let input = "\"first line\"\n\"write to alice@example.org\"\n"
+    let result = try Scrubber.scrub(Data(input.utf8), name: "Pasted text", forceFullDetection: false, seed: 7)
+    #expect(result.format == "text")
+    #expect(try JSONSource.lines(in: input) == nil)
+}
+
 /// A stray NUL in text is a character like any other; a file that is mostly NULs is no text.
 @Test(arguments: ["\"test\u{0}\"@iana.org reported", "(\u{0})test@example.com", "line one\u{0}\nwrite to test@example.com\n"])
 func textWithAStrayNULIsScrubbed(_ text: String) throws {

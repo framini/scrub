@@ -51,6 +51,23 @@ func csvCellsHoldingBodiesAreScrubbedInside(_ name: String) throws {
     #expect(rows.count == 3 && rows[1][1] == rows[2][1] && !output.contains("eyJwYXNzd29yZCI6InF1aWxsaGFyYm9yIn0="), "\(output)")
 }
 
+/// A body in a row is that row's: its email follows the row's own person, never another row's.
+@Test(arguments: [7, 11, 23] as [UInt64])
+func csvCellBodiesFollowTheirOwnRow(_ seed: UInt64) throws {
+    let input = "first_name,last_name,body\nAlice,Smith,\"{\"\"email\"\":\"\"first@example.org\"\"}\"\nBob,Jones,\"{\"\"email\"\":\"\"second@example.org\"\"}\"\n"
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.csv", forceFullDetection: false, seed: seed).output, as: UTF8.self)
+    let rows = try CSVFile.parse(output, delimiter: ",")
+    #expect(rows.count == 3 && rows.allSatisfy { $0.count == 3 }, "\(output)")
+    guard rows.count == 3, rows.allSatisfy({ $0.count == 3 }) else { return }
+    let emails = try rows.dropFirst().map { row in
+        try #require((try JSONSerialization.jsonObject(with: Data(row[2].utf8)) as? [String: String])?["email"]).lowercased()
+    }
+    #expect(emails[0] != emails[1], "\(output)")
+    for (row, email) in zip(rows.dropFirst(), emails) {
+        #expect(email.contains(row[1].lowercased()), "\(output)")
+    }
+}
+
 @Test(arguments: ["\n=1+1", " =1+1", "\t=1+1", "＝1+1", "＠SUM(A1)", "＋cmd|x", "－cmd|x", "\r@SUM(A1)"])
 func csvNeutralizesFormula(_ cell: String) {
     #expect(CSVFile.neutralize(cell) == "'" + cell)

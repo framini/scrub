@@ -373,3 +373,59 @@ func bareNameKeyNeedsAPersonRecord(_ input: String, _ replaced: Bool) throws {
     #expect(output.contains(#""main":"./lib/tool.js""#))
     #expect(!output.contains("jdoe42") && !output.contains("gonzalez"))
 }
+
+// Two keys spelled apart in their scalars (a precomposed letter, a letter and its accent) stay two keys, each as spelled.
+@Test func jsonKeysSpelledApartStayApart() throws {
+    let input = "{\"password\":\"quillharbor\",\"\u{E9} quillharbor\":1,\"e\u{301} quillharbor\":2}"
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("quillharbor"), "\(output)")
+    let source = try JSONSource.read(output)
+    guard case .object(let pairs) = source.root else { Issue.record("Expected an object"); return }
+    #expect(pairs.count == 3)
+    #expect(pairs[1].0.unicodeScalars.first == "\u{E9}" && pairs[2].0.unicodeScalars.prefix(2).elementsEqual(["e", "\u{301}"]), "\(output)")
+    #expect(!pairs[1].0.unicodeScalars.elementsEqual(pairs[2].0.unicodeScalars))
+}
+
+// A number written again in another spelling of the same value (a point, an exponent) takes the stand-in too, in its own shape.
+@Test func jsonNumberSpelledAgainTakesTheSameStandIn() throws {
+    let input = #"{"phone":2128675309,"copy":2128675309.0,"copy2":2.128675309e9,"copy3":21286753090E-1,"items":[2128675309.00],"body":"{\"again\":2.128675309E+9}","ratio":2128675309.0}"#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+    let out = try #require(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+    #expect((out["ratio"] as? NSNumber)?.doubleValue == 2128675309.0)
+    #expect(!output.replacingOccurrences(of: #""ratio":2128675309.0"#, with: "").contains("128675309"), "\(output)")
+    let phone = try #require(out["phone"] as? NSNumber).doubleValue
+    for key in ["copy", "copy2", "copy3"] { #expect((out[key] as? NSNumber)?.doubleValue == phone, "\(key): \(output)") }
+    #expect(((out["items"] as? [NSNumber])?.first)?.doubleValue == phone)
+    #expect(output.range(of: #""copy":\d{10}\.0,"#, options: .regularExpression) != nil, "\(output)")
+    #expect(output.range(of: #""items":\[\d{10}\.00\]"#, options: .regularExpression) != nil, "\(output)")
+    let body = try #require(out["body"] as? String)
+    let inner = try #require(JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: NSNumber])
+    #expect(inner["again"]?.doubleValue == phone, "\(output)")
+}
+
+// A body written inside a string, changed in part, keeps the string's other escapes as written, half a surrogate pair among them.
+@Test func jsonNestedEditKeepsOuterEscapesAsWritten() throws {
+    let slash = String(UnicodeScalar(92)), quote = slash + "\""
+    let body = "{" + quote + "password" + quote + ":" + quote + slash + slash + "u0071uillharbor" + quote + "," + quote + "note" + quote + ":" + quote + slash + "ud800" + slash + slash + "/ok" + quote + "}"
+    let input = "{\"body\":\"" + body + "\"}"
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("quillharbor") && !output.contains("u0071uillharbor"), "\(output)")
+    #expect(output.hasPrefix("{\"body\":\"{" + quote + "password" + quote + ":" + quote), "\(output)")
+    #expect(output.hasSuffix("," + quote + "note" + quote + ":" + quote + slash + "ud800" + slash + slash + "/ok" + quote + "}\"}"), "\(output)")
+    #expect((try? JSONSource.read(output)) != nil)
+}
+
+/// Under a role's key, a version, a standard's name, a configuration's file name or a release's
+/// tag is no one's handle; a handle is, and a client's handle written as a file's name is too.
+@Test func jsonRoleKeysKeepTechnicalValues() throws {
+    let source = #"{"agent":"curl8.0","author":"RFC4716","reviewer":"config.ini","owner":"release_2026","approver":"name1.2","#
+        + #""assignee":"jdoe42","requester":"maria.lopez","sender":"j_smith","recipient":"m-garcia7","patient":"jdoe.js","customer":"pwhitlock.py"}"#
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+    let out = try #require(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: String])
+    for (key, value) in [("agent", "curl8.0"), ("author", "RFC4716"), ("reviewer", "config.ini"), ("owner", "release_2026"), ("approver", "name1.2")] {
+        #expect(out[key] == value, "\(key): \(output)")
+    }
+    for (key, value) in [("assignee", "jdoe42"), ("requester", "maria.lopez"), ("sender", "j_smith"), ("recipient", "m-garcia7"), ("patient", "jdoe.js"), ("customer", "pwhitlock.py")] {
+        #expect(out[key] != nil && out[key] != value, "\(key): \(output)")
+    }
+}

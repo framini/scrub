@@ -97,6 +97,24 @@ private func aReferencesDisplayNamesWhomItPointsTo(_ name: String) throws {
     }
 }
 
+/// A reference whose address names no type (a contained "#p1", a "urn:uuid:…", an identifier alone)
+/// says whom it points to in its own "type", by name or by the type's full address.
+@Test(arguments: renderings.map(\.0))
+private func aReferencesTypeNamesWhomItPointsTo(_ name: String) throws {
+    let rendering = try #require(renderings.first { $0.0 == name })
+    let json = ##"{"resourceType":"Claim","provider":{"display":"Ilse Marrow","type":"Practitioner","reference":"#p1"},"##
+        + #""referral":{"display":"Oswin Teague","type":"http://hl7.org/fhir/StructureDefinition/Practitioner","reference":"urn:uuid:3c9d2e71-5f0a-4b6c-8d13-7e2a9f4b0c58"},"#
+        + #""related":{"display":"Wren Halloway","type":"RelatedPerson","identifier":{"system":"https://records.example.org/staff","value":"st-5512"}},"#
+        + ##""payee":{"party":{"display":"Harrowgate Family Practice","type":"Organization","reference":"#o1"}},"##
+        + #""facility":{"display":"Harrowgate Clinic West","type":"Location","reference":"urn:uuid:7a1c4e90-2b3d-4f5a-8c6e-9d0f1a2b3c4d"}}"#
+    let output = try scrubbed(json, rendering)
+    #expect((try? OrderedJSON.parse(output)) != nil, "[\(name)] no longer parses: \(output)")
+    for original in ["Ilse", "Marrow", "Oswin", "Teague", "Wren", "Halloway"] { #expect(!output.contains(original), "[\(name)] \(original) left in \(output)") }
+    for text in ["Harrowgate Family Practice", "Harrowgate Clinic West", #""type":"Practitioner""#, #""type":"RelatedPerson""#, ##""reference":"#p1""##] {
+        #expect(output.contains(text), "[\(name)] \(text) changed in \(output)")
+    }
+}
+
 /// A patient, a visit and its claim, as one bundle.
 private let bundle = #"""
 {"resourceType":"Bundle","type":"collection","entry":[

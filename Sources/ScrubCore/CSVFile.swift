@@ -70,6 +70,9 @@ public enum CSVFile: FileFormat {
         // A cell holding a body (as JSON, or in base64) is read as a JSON string holding one is,
         // its values read before the cells' and written again in the body's own form.
         let collector = JSONDocument.Collector()
+        // A body's records are numbered past the rows', which number their own: each body
+        // joins its row's record, and none takes another row's.
+        collector.nextRecord = rows.count
         var embedded: [Int: (document: JSONDocument, encoded: Bool, original: String)] = [:]
         var position = -1
         for row in rows.indices {
