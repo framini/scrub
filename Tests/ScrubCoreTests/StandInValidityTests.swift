@@ -74,4 +74,17 @@ struct StandInValidityTests {
             #expect(second != "BOSTON" && second == second.uppercased(), "seed \(seed): \(second)")
         }
     }
+
+    @Test func aBirthDateWrittenWithItsTimeKeepsTheTime() throws {
+        // "1975-11-22T00:00:00Z" became "1994-12-03": a timestamp field given a bare date.
+        let check = #"{"subject": {"name": "Ottoline Wexcombe", "dob": "1975-11-22T00:00:00Z"}, "sources": [{"name": "credit header", "dob": "1975-11-22T00:00:00Z", "match": "EXACT"}], "created_at": "2026-10-02T09:14:00Z"}"#
+        for seed in UInt64(0)..<3 {
+            let out = try Self.json(check, seed: seed)
+            let dob = try #require((out["subject"] as? [String: Any])?["dob"] as? String)
+            #expect(dob.range(of: #"^\d{4}-\d{2}-\d{2}T00:00:00Z$"#, options: .regularExpression) != nil && dob != "1975-11-22T00:00:00Z", "seed \(seed): \(dob)")
+            let again = try #require((out["sources"] as? [[String: Any]])?.first?["dob"] as? String)
+            #expect(again == dob, "seed \(seed): \(again) vs \(dob)")
+            #expect(out["created_at"] as? String == "2026-10-02T09:14:00Z")
+        }
+    }
 }

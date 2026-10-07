@@ -1734,10 +1734,13 @@ final class StandIns {
             output[named] = monthWord(like: runs[named])
             return output.joined()
         }
-        guard let yearIndex = numbers.first(where: { runs[$0].count == 4 }), numbers.count == (named == nil ? 3 : 2) else {
+        // A time after the date ("1975-11-22T00:00:00Z", "03/14/1987 08:30") stays as written.
+        let dated = Array(numbers.prefix(named == nil ? 3 : 2))
+        guard let yearIndex = dated.first(where: { runs[$0].count == 4 }), dated.count == (named == nil ? 3 : 2),
+              !runs[dated[0]...dated[dated.count - 1]].contains(where: { $0.contains(":") }) else {
             return String(format: "%04d-%02d-%02d", year, month, day)
         }
-        let rest = numbers.filter { $0 != yearIndex }
+        let rest = dated.filter { $0 != yearIndex }
         var output = runs
         if let real = Int(runs[yearIndex]) { year = self.year(for: real) }
         output[yearIndex] = String(year)
