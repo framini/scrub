@@ -42,6 +42,13 @@ enum CapitalNames {
     /// A title, then a surname in capitals: "Ms BEET", "Dr. JINX".
     private static let afterTitle = TextPattern(#"(?<![\p{L}\p{N}])(?:Mr|Mrs|Ms|Miss|Mx|Dr|Prof|Sir|Dame)\.?[ \t]+(\p{Lu}{2,}(?:[-'’]\p{Lu}{2,})?)(?![\p{L}\p{N}'’@/_-])"#)
 
+    /// A label naming a person, then a name in capitals: "customer name CHOI", "Name: HOOVER", "full name is DRAKE RICE".
+    private static let afterLabel = TextPattern(#"(?<![\p{L}\p{N}_])(\p{L}+[ \t]+)?(?i:name|surname|first[ \t]+name|last[ \t]+name|given[ \t]+name|family[ \t]+name)(?:[ \t]*:|[ \t]+is)?[ \t]+(\p{Lu}{2,}(?:[-'’]\p{Lu}{2,})?(?:[ \t]+\p{Lu}{2,}(?:[-'’]\p{Lu}{2,})?){0,2})(?![\p{L}\p{N}'’@/_-])"#)
+    /// Words before "name" that make it a thing's: "brand name SONY", "file name README".
+    private static let thingNames: Set<String> = ["brand", "product", "company", "business", "trade", "file", "host", "field", "domain", "app", "application", "project", "team", "code", "model", "street", "place", "city", "town", "store", "shop", "event", "group", "server", "user", "screen", "display", "package", "module", "table", "column", "database", "bucket", "device", "account", "pet", "ship", "vessel", "species", "drug", "medication", "item", "plan", "product's"]
+    /// A surname in capitals, a comma, then a known first name: "CONNELLY, CAROLINE M", "RODRIGUEZ JR, FRANCISCO".
+    private static let surnameFirst = TextPattern(#"(?<![\p{L}\p{N}'’.@/_-])(\p{Lu}{2,}(?:[-'’]\p{Lu}{2,})?)(?:[ \t]+(?:JR|SR|II|III|IV))?,[ \t]*(\p{Lu}{2,})(?:[ \t]+\p{Lu}\.?){0,2}(?![\p{L}\p{N}'’@/_-])"#)
+
     static func scan(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
         // Only text with a run of two capitals can hold one.
         guard text.unicodeScalars.contains(where: { CharacterSet.uppercaseLetters.contains($0) }),
@@ -53,6 +60,21 @@ enum CapitalNames {
             // The first name is the cue, so it must be one and no ordinary word ("Will", "Grant").
             guard NameLists.isFirst(first), !NameLists.isWordlike(first), !NameLists.isOrdinary(first.lowercased()),
                   first != first.uppercased() || mayName(first), mayName(last) else { continue }
+            let range = match.range.location..<NSMaxRange(match.range)
+            guard !NameTagger.partOfOrganisation(range, in: text) else { continue }
+            spans.append(Span(range: range, entity: "PERSON", score: score))
+        }
+        for match in TextRanges.matches(afterLabel, in: text, isCancelled: isCancelled) {
+            if match.range(at: 1).location != NSNotFound, thingNames.contains(ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces).lowercased()) { continue }
+            let name = match.range(at: 2), words = ns.substring(with: name).split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+            guard words.allSatisfy(mayName) else { continue }
+            let range = name.location..<NSMaxRange(name)
+            guard !NameTagger.partOfOrganisation(range, in: text) else { continue }
+            spans.append(Span(range: range, entity: "PERSON", score: score))
+        }
+        for match in TextRanges.matches(surnameFirst, in: text, isCancelled: isCancelled) {
+            let last = ns.substring(with: match.range(at: 1)), first = ns.substring(with: match.range(at: 2))
+            guard mayName(last), mayName(first), NameLists.isFirst(first), !NameLists.isWordlike(first), !NameLists.isOrdinary(first.lowercased()) else { continue }
             let range = match.range.location..<NSMaxRange(match.range)
             guard !NameTagger.partOfOrganisation(range, in: text) else { continue }
             spans.append(Span(range: range, entity: "PERSON", score: score))

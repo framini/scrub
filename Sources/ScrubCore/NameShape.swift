@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 /// What a person's name can and cannot be made of, whichever detector found
 /// it. A name holds no role ("Ambassador", "Judge Advocate"), no word that
@@ -122,6 +123,22 @@ enum NameShape {
     /// A month or weekday written as part of a date: "June 22", "22 June",
     /// "June. 8", "Tuesday, June 12", "in May and June". A person called June
     /// is followed by what she did.
+    /// Whether `range` opens a sentence, a small word follows it, and the line it is on
+    /// reads as written in a language other than English.
+    static func opensForeignSentence(_ range: Range<Int>, in text: String) -> Bool {
+        let ns = text as NSString
+        var before = range.lowerBound
+        while before > 0, ns.character(at: before - 1) == 32 || ns.character(at: before - 1) == 9 { before -= 1 }
+        guard before == 0 || [10, 13, 46, 33, 63, 58].contains(ns.character(at: before - 1)) else { return false }
+        let after = ns.substring(with: NSRange(location: range.upperBound, length: min(8, ns.length - range.upperBound)))
+        guard after.first == " ", after.dropFirst().first?.isLowercase == true else { return false }
+        let line = ns.substring(with: ns.lineRange(for: NSRange(location: range.lowerBound, length: 0)))
+        guard line.split(separator: " ").count >= 3 else { return false }
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(String(line.prefix(400)))
+        guard let (language, confidence) = recognizer.languageHypotheses(withMaximum: 1).first else { return false }
+        return language != .english && confidence >= 0.6
+    }
     private static func isDate(_ parts: [Word], in text: String) -> Bool {
         guard parts.allSatisfy({ months.contains($0.bare) || weekdays.contains($0.bare) || $0.bare == "and" }) else { return false }
         let ns = text as NSString
@@ -143,6 +160,10 @@ enum NameShape {
     static func ordinaryGuess(_ span: Span, in text: String) -> Bool {
         guard span.entity == "PERSON" else { return false }
         let parts = words(span.range, in: text)
+        // A word opening a sentence in another language ("Zorg ervoor dat u …", "Hierzu zählen …") is
+        // that language's word: only the lists, or a cue, make it someone there.
+        if parts.count == 1, !NameLists.isFirst(parts[0].bare), !NameLists.isSurname(parts[0].bare), !NameCues.strong(span.range, in: text),
+           opensForeignSentence(span.range, in: text) { return true }
         guard !parts.isEmpty, parts.allSatisfy({ NameLists.isOrdinary($0.bare) || joining.contains($0.bare) || isRole($0.text) }),
               !parts.contains(where: { NameLists.isName($0.bare) }) else { return false }
         if NameCues.strong(span.range, in: text) { return false }

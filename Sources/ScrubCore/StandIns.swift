@@ -423,7 +423,11 @@ final class StandIns {
         return made
     }
     private static let maskCharacters: Set<Character> = ["*", "•", "●", "X", "x", "#"]
-    static func isMasked(_ value: String) -> Bool { value.filter { maskCharacters.contains($0) }.count >= 2 && value.contains(where: \.isNumber) }
+    static func isMasked(_ value: String) -> Bool {
+        guard value.filter({ maskCharacters.contains($0) }).count >= 2, value.contains(where: \.isNumber) else { return false }
+        // Its X's may be letters of an identifier that passes a check of its own ("549300M3SJFSFVXG6X69", an LEI): no mask.
+        return !Recognizers.candidates(value.trimmingCharacters(in: .whitespaces)).contains(where: \.verifies)
+    }
     /// "***-**-7784" stays masked; only the digits it shows change, to those
     /// of the number nearest it that ends so.
     private func masked(_ original: String) -> String? {
@@ -1167,10 +1171,17 @@ final class StandIns {
         var made: String?
         // Letters and digits where the original has them, when a draw can give that: "S5366188" stays a letter and seven digits.
         func layout(_ value: String) -> String { String(value.filter { $0.isLetter || $0.isNumber }.map { $0.isNumber ? "9" : "A" }) }
-        for _ in 0..<24 {
-            made = Recognizers.standIn(for: original, preferring: identifier(original)?.recognizer, using: &rng)
+        let preferred = identifier(original)?.recognizer
+        // Every kind its words name that it passes ("nit": a Colombian's check and a Guatemalan's alike): a stand-in passing them all where a few draws find one.
+        let named = naming.isEmpty ? [] : Recognizers.candidates(original).filter { $0.verifies && Recognizers.drawn.contains($0.entity) && Recognizers.named($0.context, among: naming) }
+        // Nine digits no word names as a kind may be a US SSN: an area the SSA issues stays one.
+        func issuable(_ digits: String) -> Bool { digits.count == 9 && Int(digits.prefix(3)).map { $0 != 0 && $0 != 666 && $0 < 900 } == true }
+        let social = named.isEmpty && original.allSatisfy({ $0.isNumber || $0 == "-" || $0 == " " }) && issuable(real)
+        for attempt in 0..<48 {
+            made = Recognizers.standIn(for: original, preferring: preferred, using: &rng)
             guard let drawn = made else { break }
             if bare, drawn.filter({ $0.isASCII && $0.isNumber }).dropLast(3).last == "0" { continue }
+            if attempt < 40, !named.allSatisfy({ Self.fits(drawn, $0) }) || social && !issuable(drawn.filter { $0.isASCII && $0.isNumber }) { continue }
             if layout(drawn) == layout(original) { break }
         }
         // Digits alone stay digits: a passport's nine digits that pass another kind's check by chance take no check letter.
@@ -1197,12 +1208,20 @@ final class StandIns {
     /// The kind an identifier is and its characters without separators, the same however it is written.
     private func identifier(_ original: String) -> (recognizer: Recognizer, key: String)? {
         // Of the kinds whose checks it passes, the one the words around it name ("routing_number": a bank's, not a tax file's).
-        let kinds = Recognizers.candidates(original).filter { Recognizers.drawn.contains($0.entity) }
         let trimmed = original.trimmingCharacters(in: .whitespaces)
+        let named = { (recognizer: Recognizer) in Recognizers.named(recognizer.context, among: self.naming) || recognizer.keys.contains(self.naming.sorted().joined()) }
+        // A kind whose check chance passes often (a Guatemalan NIT's) after every other, unless it is named or its field's.
+        let passing = Recognizers.candidates(original).filter { Recognizers.drawn.contains($0.entity) }
+        let strong = { (recognizer: Recognizer) in !recognizer.weak || recognizer.name == self.kind || named(recognizer) }
+        var kinds = passing.filter(strong) + passing.filter { !strong($0) }
+        // Too short to be any kind's alone ("7108-0"), it is the one its words name, where it is written as that kind.
+        if kinds.isEmpty, !naming.isEmpty {
+            kinds = Recognizers.all.filter { Recognizers.drawn.contains($0.entity) && named($0) && $0.writes(trimmed) && $0.passes(trimmed) }
+        }
         // By its characters alone: "23332969-K" may pass two kinds' checks where "23332969K" passes one.
         func key(_ recognizer: Recognizer) -> String { "IDENTIFIER\u{0}" + String(recognizer.kept(trimmed)) }
         // Named by nothing (a zone's number), it is the kind its stand-in elsewhere already is.
-        guard let recognizer = kinds.first(where: { $0.name == kind }) ?? kinds.first(where: { Recognizers.named($0.context, among: naming) || $0.keys.contains(naming.sorted().joined()) })
+        guard let recognizer = kinds.first(where: { $0.name == kind }) ?? kinds.first(where: named)
                 ?? kinds.first(where: { recognizer in assigned[key(recognizer)].map { Self.fits(Recognizers.write(Array($0), like: trimmed, recognizer), recognizer) } ?? false })
                 ?? kinds.first else { return nil }
         return (recognizer, key(recognizer))

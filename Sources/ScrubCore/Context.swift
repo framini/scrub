@@ -51,6 +51,12 @@ public enum KeyHints {
         ("phone phonenumber mobile cell telephone tel fax mobilenumber mobilephone cellphone cellnumber phoneno telno telephonenumber contactnumber msisdn nationalformat internationalformat e164", "PHONE_NUMBER"),
         ("ssn socialsecuritynumber socialsecurity ssnnumber", "US_SSN"),
         ("address streetaddress street addressline1 addressline2 addressline line1 line2 addr address1 street1 addr1 streetline1 street2 address2 addr2 streetline2 addressline3 line3 address3 addr3 street3 extendedaddress streetaddress2 aptsuite apartmentnumber aptnumber suitenumber unitnumber flatnumber unit apt apartment housenumber housenum houseno housename flat flatno buildingnumber buildingno streetnumber streetnum streetno civicnumber premisenumber streetname thoroughfare buildingname formattedaddress fulladdress physicaladdress mailingaddress homeaddress residentialaddress billingaddress shippingaddress addressupdates addresshistory", "ADDRESS"),
+        // The same fields as forms in other languages label them, written without their accents.
+        ("geboortedatum geburtsdatum datedenaissance fechadenacimiento fechanacimiento datadinascita fodelsedatum datadenascimento datanascimento fodselsdato", "DATE_OF_BIRTH"),
+        ("codepostal codigopostal codicepostale postnummer postnr", "POSTAL_CODE"),
+        ("passwort wachtwoord motdepasse contrasena senha losenord kennwort veiligheidscode creditcardveiligheidscode beveiligingscode sicherheitscode kartensicherheitscode kartenprufnummer prufnummer codedesecurite cryptogramme cryptogrammevisuel codigodeseguridad codicedisicurezza sakerhetskod kreditkortssakerhetskod codigodeseguranca pincode pinnummer pinkod pinkode codigopin codicepin codepin pinnumber accountpin cardpin atmpin currentpin newpin", "SECRET"),
+        ("gebruikersnaam benutzername nomdutilisateur nombredeusuario nomeutente anvandarnamn nomedeusuario", "USERNAME"),
+        ("licenceplate licenseplatenumber kenteken kennzeichen immatriculation plaquedimmatriculation matricula placa targa registreringsnummer", "ID_NUMBER"),
         ("dob dateofbirth birthdate birthday birthyear yearofbirth yob birthmonth monthofbirth dobmonth dobday dayofbirth dobyear birth birthdetails birthinfo", "DATE_OF_BIRTH"),
         // Where someone was born is theirs as their address is.
         // A card's number, whole or masked ("999911XXXXXX1234").
@@ -65,7 +71,7 @@ public enum KeyHints {
         ("initials nameinitials monogram middleinitial", "INITIALS"),
         ("latitude lat geolat", "LATITUDE"),
         ("longitude lng lon long geolng geolon", "LONGITUDE"),
-        ("coordinates coords latlng latlong latlon geolocation geopoint geocoordinates", "COORDINATES"),
+        ("coordinates coordinate coords latlng latlong latlon geolocation geopoint geocoordinates", "COORDINATES"),
         ("ip ipaddress ipaddr clientip remoteip remoteaddr xforwardedfor", "IP_ADDRESS"),
         ("city town locality municipality municipalityname cityname townname suburb district neighborhood neighbourhood village hamlet sublocality dependentlocality county", "LOCATION"),
         ("zip zipcode postcode postalcode zip5 zipplus4 postal postalzip", "POSTAL_CODE"),
@@ -80,10 +86,12 @@ public enum KeyHints {
     }).merging(Recognizers.keyNames) { listed, _ in listed }
     // Real keys qualify the field ("db_password", "webhook_secret"), so the last
     // word decides. "max_tokens" or "sort_key" name no secret and stay as they are.
-    private static let secretLast: Set<String> = ["password", "passwd", "pwd", "passphrase", "secret", "token", "credential", "credentials", "cvv", "cvc", "otp"]
+    private static let secretLast: Set<String> = ["password", "passwd", "pwd", "passphrase", "secret", "token", "credential", "credentials", "cvv", "cvc", "otp", "passwort", "wachtwoord", "senha", "losenord", "kennwort", "contrasena"]
     private static let secretPairs: Set<String> = ["apikey", "accesskey", "secretkey", "privatekey", "encryptionkey", "masterkey", "signingkey", "sshkey", "licensekey", "clientkey", "authkey", "passwordhash", "otpcode", "securitycode", "verificationcode", "recoverycode", "recoverycodes", "backupcodes", "sessionid", "sessioncookie", "authcookie"]
     public static func hint(_ key: String?) -> String? {
-        guard let key, !key.isEmpty else { return nil }
+        guard var key, !key.isEmpty else { return nil }
+        // "Código postal", "Födelsedatum": a key's accents dropped, as the names above are written.
+        if key.utf8.contains(where: { $0 >= 0x80 }) { key = key.folding(options: .diacriticInsensitive, locale: nil) }
         var compact = key.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
         if compact.hasSuffix("field"), compact.count > 5, case let inner = words(key).joined(), inner.count < compact.count { compact = inner }
         if let exact = hints[compact] { return exact }
@@ -247,7 +255,9 @@ public enum KeyHints {
         let lower = value.lowercased()
         return statusWords.contains(lower) || typeWords.contains(lower) || jsonLiterals.contains(lower)
     }
-    private static let cardCodes: Set<String> = ["cvv", "cvc", "cvv2", "cvc2", "cvn", "csc", "securitycode", "cardsecuritycode", "pin"]
+    private static let cardCodes: Set<String> = ["cvv", "cvc", "cvv2", "cvc2", "cvn", "csc", "securitycode", "cardsecuritycode", "pin", "pinnumber", "accountpin", "cardpin", "atmpin", "currentpin", "newpin",
+                                                 "veiligheidscode", "creditcardveiligheidscode", "beveiligingscode", "sicherheitscode", "kartensicherheitscode", "kartenprufnummer", "prufnummer", "codedesecurite", "cryptogramme",
+                                                 "cryptogrammevisuel", "codigodeseguridad", "codicedisicurezza", "sakerhetskod", "kreditkortssakerhetskod", "codigodeseguranca", "pincode", "pinnummer", "pinkod", "pinkode", "codigopin", "codicepin", "codepin"]
     /// What an object a "*_token" key may name instead of a credential: under any
     /// other qualifier ("access", "recovery", "invite") a token stays a secret.
     private static let referenceQualifiers: Set<String> = ["entity", "request", "evaluation", "application", "group", "account", "journey", "model", "counterparty",

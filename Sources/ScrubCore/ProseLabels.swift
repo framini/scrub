@@ -12,12 +12,15 @@ enum ProseLabels {
         var labels: [Range<Int>] = []
     }
 
-    private static let month = #"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?"#
-    private static let day = #"(?:[0-3]?\d)(?:st|nd|rd|th)?"#
+    /// A month's name in English, or in the other languages forms are filled in ("12 maart 1985", "15. März 1980").
+    private static let month = #"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|januari|februari|maart|mei|augustus|oktober|januar|februar|m[äa]rz|mai|dezember|janvier|f[ée]vrier|mars|avril|juin|juillet|ao[ûu]t|septembre|octobre|novembre|d[ée]cembre|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|gennaio|febbraio|aprile|maggio|giugno|luglio|settembre|ottobre|dicembre|janeiro|fevereiro|mar[çc]o|maio|junho|julho|setembro|outubro|dezembro|augusti)\.?"#
+    private static let day = #"(?:[0-3]?\d)(?:st|nd|rd|th|er|\.)?"#
     private static let year = #"(?:19|20)\d{2}"#
     /// A birth cue, then the date: longer forms first, so "March 5, 1971" is not cut to "March 5".
     private static let birth = TextPattern(
-        #"\b(born(?:[ \t]+on|[ \t]+in)?|dob|d\.o\.b\.?|date[ \t]+of[ \t]+birth|birth[ \t]*date|birthday(?:[ \t]+is)?)(?:[ \t]*[:\-]|[ \t]+(?:is|was))?[ \t]*("#
+        #"\b(born(?:[ \t]+on|[ \t]+in)?|dob|d\.o\.b\.?|date[ \t]+of[ \t]+birth|birth[ \t]*date|birthday(?:[ \t]+is)?"#
+        // The same cue in the other languages forms are written in: "Geboortedatum", "geboren am", "né le", "fecha de nacimiento".
+        + #"|geboortedatum|geburtsdatum|geboren(?:[ \t]+(?:am|op))?|date[ \t]+de[ \t]+naissance|n[ée]e?[ \t]+le|fecha[ \t]+de[ \t]+nacimiento|nacid[oa][ \t]+el|data[ \t]+di[ \t]+nascita|nat[oa][ \t]+il|f[öo]delsedatum|f[öo]dd(?:[ \t]+den)?|data[ \t]+de[ \t]+nascimento|nascid[oa][ \t]+em|f[øo]dselsdato)(?:[ \t\u00A0]*[:\-]|[ \t]+(?:is|was))?[ \t\u00A0]*("#
         + "\(month)[ \\t]+\(day),?[ \\t]+\(year)|\(day)[ \\t]+\(month),?[ \\t]+\(year)|\(month)[ \\t]+\(year)|\(month)[ \\t]+\(day)\\b|\(day)[ \\t]+\(month)"
         + #"|\d{1,2}[/.\-]\d{1,2}[/.\-](?:\d{4}|\d{2})|\d{4}-\d{1,2}-\d{1,2})(?![\w/.\-]*\d)"#,
         options: [.caseInsensitive])
@@ -64,8 +67,10 @@ enum ProseLabels {
 
     static func scan(_ text: String, isCancelled: () -> Bool = { false }) -> Found {
         var found = Found()
+        guard (text as NSString).length >= 6 else { return found }
+        // A label in bold ("**CVV:** 771", "| **Postcode** |") reads as the label it is; every offset stays.
+        let text = FormFields.masked(text)
         let ns = text as NSString
-        guard ns.length >= 6 else { return found }
         for match in TextRanges.matches(birth, in: text, isCancelled: isCancelled) {
             if isCancelled() { return found }
             found.labels.append(range(match.range(at: 1)))
@@ -124,6 +129,10 @@ enum ProseLabels {
         for match in TextRanges.matches(poBox, in: text, isCancelled: isCancelled) {
             found.spans.append(Span(range: range(match.range(at: 1)), entity: "ADDRESS", score: 0.9))
         }
+        // Values a form, a table or a sentence gives after their label (see `FormFields`).
+        let form = FormFields.scan(text, isCancelled: isCancelled)
+        found.spans += form.spans
+        found.labels += form.labels
         return found
     }
 
@@ -187,7 +196,7 @@ enum ProseLabels {
     /// user_path", "Preferences key: auto-fsck"), so a value starting like an
     /// option, a placeholder or a path is none, and without "is", ":" or "="
     /// only a long key or token of letters and digits counts ("the key 9f86…").
-    private static func secretLike(_ value: String, label: String, joined: Bool) -> Bool {
+    static func secretLike(_ value: String, label: String, joined: Bool) -> Bool {
         guard let first = value.first, !"-[(<{?$~/.'\"`".contains(first), !value.contains("://"), !value.contains(where: "`{}()".contains), !value.contains("/") || joined && !value.hasPrefix("~") else { return false }
         let hasDigit = value.contains(where: \.isNumber), hasLetter = value.contains(where: \.isLetter)
         if label.hasPrefix("pin") || label == "passcode" || label == "access code" {

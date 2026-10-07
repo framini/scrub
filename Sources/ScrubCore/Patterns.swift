@@ -3,7 +3,8 @@ import Darwin
 
 enum Patterns {
     private static let definitions: [(String, String, Double, Set<String>, NSRegularExpression.Options)] = [
-        ("EMAIL_ADDRESS", #"\b[a-zA-Z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-zA-Z0-9!#$%&'*+/=?^_`{|}~-]+)*@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)+\b"#, 1, [], []),
+        // In any script, as internationalised mail writes it: "ιωάννης@εεττ.gr", "jeff@臺網中心.tw".
+        ("EMAIL_ADDRESS", #"(?<![\p{L}\p{M}\p{N}])[\p{L}\p{N}!#$%&'*+/=?^_`{|}~-][\p{L}\p{M}\p{N}!#$%&'*+/=?^_`{|}~-]*(?:\.[\p{L}\p{M}\p{N}!#$%&'*+/=?^_`{|}~-]+)*@[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}-]*[\p{L}\p{M}\p{N}])?(?:\.[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}-]*[\p{L}\p{M}\p{N}])?)+(?![\p{L}\p{M}\p{N}])"#, 1, [], []),
         // Written into a link's query, its "@" escaped ("jo.pratt%40example.org").
         ("EMAIL_ADDRESS", #"(?<![\w.%+-])[a-zA-Z0-9][a-zA-Z0-9._+-]*%40[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}\b"#, 1, [], []),
         ("CREDIT_CARD", #"(?<![\w-])(?:\d[ -]?){12,18}\d(?![\w-])"#, 0.6, ["card", "credit", "visa", "mastercard", "payment"], []),
@@ -12,6 +13,9 @@ enum Patterns {
         ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2}(?: [A-Z0-9]{4}){3,8}(?: [A-Z0-9]{1,3})?(?![A-Z0-9])"#, 0.6, ["iban", "bank", "account"], []),
         // In its bank's own grouping ("ES10 0075 0080 11 0600658108", "ES72 2013-0692-81-0201150993").
         ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2}\d{2}(?:[ -][A-Z0-9]{1,10}){2,8}(?![A-Z0-9])"#, 0.6, ["iban", "bank", "account"], []),
+        // Digits grouped however their writer grouped them, by spaces, dots or dashes, its country set apart
+        // ("NO 19 4920 06 96270", "NO07.8380.08.06006", "MK072 5012 0000 0589 84", "TL 38 008 00123456789101 57").
+        ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2} ?\d{2,30}(?: ?[ .-] ?\d{1,30}){1,9}(?![A-Z0-9.-])"#, 0.6, ["iban", "bank", "account"], []),
         ("IP_ADDRESS", #"(?<![\w:.]|[A-Za-z]/)(?:[0-9A-Fa-f:]+:)?(?:\d{1,3}\.){3}\d{1,3}(?![\w:.])|(?<![\w:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f:]{0,4}(?![\w:])"#, 0.6, ["ip", "address"], []),
         // A client's address written into its host's name ("198-51-100-23.cust.example.net"), as reverse DNS writes it.
         ("IP_ADDRESS", #"(?<![\w.-])(?:\d{1,3}-){3}\d{1,3}(?=\.[A-Za-z][\w-]*\.[A-Za-z])"#, 0.85, [], []),
@@ -30,7 +34,14 @@ enum Patterns {
         // A party to a case written as a person ("NORTHWIND COLLECTIONS LLC Et Al VS NELL TORVIK"); a business there is left to others.
         ("PARTY", #"(?<=\b(?:VS|Vs|vs|V|v)\.?[ \t])\p{Lu}[\p{L}'’-]+(?:[ \t]\p{Lu}\.?)?(?:[ \t]\p{Lu}[\p{L}'’-]+){1,2}(?=[ \t]*(?:$|[,;)\]]|[ \t](?:ET|Et|et)[ \t]+(?:AL|Al|al)\b))"#, 0.9, [], []),
         ("DATE_OF_BIRTH", #"\b\d{4}([-/.])\d{1,2}\1\d{1,2}\b|\b\d{1,2}([-/.])\d{1,2}\2\d{4}\b"#, 0.1, Context.birth, []),
-        ("ADDRESS", #"\b\d{1,6}[A-Z]?\s+(?:[A-Z][a-z]+\.?\s+){1,4}(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Way|Lane|Ln|Drive|Dr|Court|Ct|Place|Pl|Terrace|Ter|Parkway|Pkwy|Highway|Hwy|Circle|Cir|Square|Sq|Trail|Trl|Alley|Row|Crescent|Close)\b\.?(?:\s+(?:N|S|E|W|NE|NW|SE|SW)\b)?(?:,?\s+(?:Apt|Apartment|Suite|Ste|Unit|Floor|Fl|#)\.?\s*[A-Za-z0-9-]+)?"#, 0.6, [], []),
+        ("ADDRESS", #"\b\d{1,6}[A-Z]?\s+(?:(?:N|S|E|W|NE|NW|SE|SW)\.?\s+)?(?:[A-Z][a-z]+\.?\s+){1,4}(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Way|Lane|Ln|Drive|Dr|Court|Ct|Place|Pl|Terrace|Ter|Parkway|Pkwy|Highway|Hwy|Circle|Cir|Square|Sq|Trail|Trl|Alley|Row|Crescent|Close)\b\.?(?:\s+(?:N|S|E|W|NE|NW|SE|SW)\b)?(?:,?\s+(?:Apt|Apartment|Suite|Ste|Unit|Floor|Fl|#)\.?\s*[A-Za-z0-9-]+)?"#, 0.6, [], []),
+        // // A street written all in capitals, as forms and mailing lists do ("6190 TURKEY RUN COURT", "111 ELMWOOD TERR"):
+        // its words no small ones ("404 ON STREET") and its type ending the line or before a comma or another capital ("3 BIG DR units" is none).
+        ("ADDRESS", #"\b\d{1,6}[A-Z]?\s+(?:(?:N|S|E|W|NE|NW|SE|SW)\.?\s+)?(?:(?!(?:ON|IN|AT|OF|THE|TO|FOR|AND|OR|IS|BY|FROM|WITH|NOT|NO|AN|A|AS|IT|BE|ARE|WAS|WE|OUR|YOUR|ALL|NEW|ITEMS?|UNITS?|PCS|QTY)\b)[A-Z][A-Z'’-]+\.?\s+){1,4}(?:STREET|ST|AVENUE|AVE|AV|ROAD|RD|BOULEVARD|BLVD|WAY|LANE|LN|DRIVE|DR|COURT|CT|PLACE|PL|TERRACE|TERR|TER|PARKWAY|PKWY|PY|HIGHWAY|HWY|CIRCLE|CIR|SQUARE|SQ|TRAIL|TRL|ALLEY|CRESCENT|CLOSE|VIEW|VW|PIKE|LOOP|PLAZA|RIDGE|COVE|CV|CROSSING|XING)\b\.?(?:\s+(?:N|S|E|W|NE|NW|SE|SW)\b)?(?:,?\s+(?:APT|APARTMENT|SUITE|STE|UNIT|FL|#)\.?\s*[A-Z0-9-]+)?(?=[ \t]*(?:$|\r?\n|[,;)]|[ \t][A-Z0-9#]))"#, 0.6, [], [.anchorsMatchLines]),
+        // A numbered road: "1234 West U.S. Hwy 50", "173 IL Rte. 2"; its short names only beside a direction or a state ("217 N. Rt. 31", "1947 CR 2700 E", not "version 2 RT 5").
+        ("ADDRESS", #"\b\d{1,6}\s+(?:(?:(?:N|S|E|W|North|South|East|West|NORTH|SOUTH|EAST|WEST)\.?\s+)?(?:(?:U\.\s?S\.|US|State|STATE|[A-Z]{2})\s+)?(?:Highway|HIGHWAY|Hwy|HWY|Route|ROUTE|Rte|RTE|County Road|COUNTY ROAD)\.?|(?:(?:N|S|E|W|North|South|East|West|NORTH|SOUTH|EAST|WEST)\.?\s+|(?:U\.\s?S\.|US|State|STATE|[A-Z]{2})\s+)(?:Rt|RT|CR|FM|SR)\.?|(?:Rt|RT|CR|FM|SR)(?=\s+\d{1,5}\s+(?:N|S|E|W)\b))\s+(?:No\.?\s+)?\d{1,5}[A-Z]?\b(?:\s+(?:N|S|E|W|North|South|East|West|NORTH|SOUTH|EAST|WEST)\b)?"#, 0.6, [], []),
+        // A rural route's or highway contract's box: "RR 1 Box 54", "HC 284 Box 27", "Highway Contract Route 56 Box 45C".
+        ("ADDRESS", #"(?i)\b(?:RR|R\.R\.|HCR?|Rural Route|Highway Contract(?: Route)?|Hwy Contract(?: Route)?)\s*#?\s*\d+[A-Z]?\s+Box\s*#?\s*[A-Z0-9]{1,6}\b"#, 0.6, [], []),
         // A passport's, ID card's or visa's machine-readable zone: all its lines, or one (see `MachineZone`).
         ("MRZ", #"(?<![A-Za-z0-9<])(?:[A-Z0-9<]{30}(?:\r?\n|\\n|\\r\\n| )[A-Z0-9<]{30}(?:\r?\n|\\n|\\r\\n| )[A-Z0-9<]{30}|[A-Z0-9<]{44}(?:\r?\n|\\n|\\r\\n| )[A-Z0-9<]{44}|[A-Z0-9<]{36}(?:\r?\n|\\n|\\r\\n| )[A-Z0-9<]{36}|[A-Z0-9<]{44}|[A-Z0-9<]{36}|[A-Z0-9<]{30})(?![A-Za-z0-9<])"#, 0.97, [], []),
         ("US_BANK_NUMBER", #"\b\d{8,17}\b"#, 0.05, ["check", "account", "acct", "bank", "save", "debit"], []),
@@ -78,6 +89,9 @@ enum Patterns {
                     if tail.range(of: #"^\.[0-9]|^:[0-9A-Fa-f]"#, options: .regularExpression) != nil { return }
                 }
                 if entity == "SECRET", let cut = URLs.queryValueEnd(ns, range) { range = range.lowerBound..<cut }
+                // A piece of a longer identifier ("O72" of "O72-2331-924-76") is that identifier: replaced
+                // alone, it would leave the rest written as it was, so the whole is read.
+                if Self.pieceKinds.contains(entity) { range = Self.whole(range, of: units) }
                 let value = TextRanges.substring(text, range)
                 if entity == "PERSON" && NameTagger.namesOrganisation(value) { return }
                 if entity == "PARTY" {
@@ -102,6 +116,29 @@ enum Patterns {
             for match in matches(regex, in: ns, units: units, isCancelled: isCancelled) { take(match) }
         }
         return spans + Recognizers.find(text, ns: ns, units: units, contextWords: naming ?? contextWords, isCancelled: isCancelled)
+    }
+    /// Kinds whose bare shapes ("A1234567", a run of digits) also fit a piece of a longer identifier.
+    private static let pieceKinds: Set<String> = ["US_DRIVER_LICENSE", "US_PASSPORT", "US_BANK_NUMBER", "US_ITIN"]
+    /// `range` with the pieces holding a digit that a dash joins to it on either side, up to 48 units
+    /// in all; a type's code of letters ("MRN-") stays, as a record's ID keeps its prefix.
+    private static func whole(_ range: Range<Int>, of units: [UInt16]) -> Range<Int> {
+        func alphanumeric(_ index: Int) -> Bool {
+            index >= 0 && index < units.count && ((48...57).contains(units[index]) || (65...90).contains(units[index]) || (97...122).contains(units[index]))
+        }
+        var lower = range.lowerBound, upper = range.upperBound
+        while lower >= 2, upper - lower < 48, units[lower - 1] == 45, alphanumeric(lower - 2) {
+            var start = lower - 1
+            while alphanumeric(start - 1) { start -= 1 }
+            guard units[start..<(lower - 1)].contains(where: { (48...57).contains($0) }) else { break }
+            lower = start
+        }
+        while upper + 1 < units.count, upper - lower < 48, units[upper] == 45, alphanumeric(upper + 1) {
+            var end = upper + 1
+            while alphanumeric(end) { end += 1 }
+            guard units[(upper + 1)..<end].contains(where: { (48...57).contains($0) }) else { break }
+            upper = end
+        }
+        return lower..<upper
     }
     /// Every match a full scan finds, in order; a pattern with known start
     /// positions is tried only there.
@@ -180,7 +217,7 @@ enum Patterns {
         let candidate = TextRanges.substring(text, range)
         for end in stride(from: candidate.utf16.count, through: 15, by: -1) {
             let prefix = TextRanges.substring(candidate, 0..<end)
-            if prefix.last == " " || prefix.last == "-" { continue }
+            if prefix.last == " " || prefix.last == "-" || prefix.last == "." { continue }
             if iban(prefix) { return range.lowerBound..<(range.lowerBound + end) }
         }
         return nil
@@ -233,7 +270,7 @@ enum Patterns {
     private static let ibanLengths: [String: Int] = ["AL": 28, "AD": 24, "AT": 20, "AZ": 28, "BH": 22, "BY": 28, "BE": 16, "BA": 20, "BR": 29, "BG": 22, "BI": 27, "CR": 22, "HR": 21, "CY": 28, "CZ": 24, "DK": 18, "DJ": 27, "DO": 28, "TL": 23, "EG": 29, "SV": 28, "EE": 20, "FO": 18, "FI": 18, "FR": 27, "GE": 22, "DE": 22, "GI": 23, "GR": 27, "GL": 18, "GT": 28, "HU": 28, "IS": 26, "IQ": 23, "IE": 22, "IL": 23, "IT": 27, "JO": 30, "KZ": 20, "XK": 20, "KW": 30, "LV": 21, "LB": 28, "LY": 25, "LI": 21, "LT": 20, "LU": 20, "MK": 19, "MT": 31, "MR": 27, "MU": 30, "MC": 27, "MD": 24, "MN": 20, "ME": 22, "NL": 18, "NI": 28, "NO": 15, "PK": 24, "PS": 29, "PL": 28, "PT": 25, "QA": 29, "RO": 24, "RU": 33, "LC": 32, "SM": 27, "ST": 25, "SA": 24, "RS": 22, "SC": 31, "SK": 24, "SI": 19, "SO": 23, "ES": 24, "SD": 18, "SE": 24, "CH": 21, "TN": 24, "TR": 26, "UA": 29, "AE": 23, "GB": 22, "VA": 22, "VG": 24, "YE": 30, "OM": 23, "FK": 18,
         "AO": 25, "BF": 28, "BJ": 28, "CF": 27, "CG": 27, "CI": 28, "CM": 27, "CV": 25, "DZ": 26, "GA": 27, "GQ": 27, "HN": 28, "IR": 26, "KM": 27, "MA": 28, "MG": 27, "ML": 28, "MZ": 25, "NE": 28, "SN": 28, "TD": 27, "TG": 28]
     static func iban(_ value: String) -> Bool {
-        let raw = value.uppercased().filter { !$0.isWhitespace && $0 != "-" }
+        let raw = value.uppercased().filter { !$0.isWhitespace && $0 != "-" && $0 != "." }
         guard (15...34).contains(raw.count), raw.prefix(2).allSatisfy(\.isLetter), raw.dropFirst(2).prefix(2).allSatisfy(\.isNumber) else { return false }
         // A country's IBANs are all one length; one of another length is none, whatever its remainder, nor is one of no country's.
         guard let length = ibanLengths[String(raw.prefix(2))], raw.count == length else { return false }

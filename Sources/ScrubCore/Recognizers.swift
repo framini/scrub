@@ -34,12 +34,15 @@ struct Recognizer: Sendable {
     let separators: Set<Character>
     /// Whether its check is more than its shape (a check digit, a checksum): only then can values passing it name a field on their own (see `Fields`).
     let verifies: Bool
+    /// Whether its check passes so many numbers by chance (one in eleven) that it tells a value's kind only where words name it:
+    /// a stand-in is drawn as another kind it passes first.
+    let weak: Bool
     /// Its check, over the value's characters other than separators, in capitals.
     let check: @Sendable ([Character]) -> Bool
     /// A fresh value passing `check`, shaped like the given one (as long, the same version) where its kind allows.
     let draw: @Sendable ([Character], inout any RandomNumberGenerator) -> [Character]
 
-    init(_ name: String, entity: String = "ID_NUMBER", keys: Set<String> = [], forms: [Form], context: Set<String>, folds: Bool = true, verifies: Bool = true, separators: String = " .-/", check: @escaping @Sendable ([Character]) -> Bool, draw: @escaping @Sendable ([Character], inout any RandomNumberGenerator) -> [Character]) {
+    init(_ name: String, entity: String = "ID_NUMBER", keys: Set<String> = [], forms: [Form], context: Set<String>, folds: Bool = true, verifies: Bool = true, weak: Bool = false, separators: String = " .-/", check: @escaping @Sendable ([Character]) -> Bool, draw: @escaping @Sendable ([Character], inout any RandomNumberGenerator) -> [Character]) {
         self.name = name
         self.entity = entity
         self.forms = forms
@@ -47,6 +50,7 @@ struct Recognizer: Sendable {
         self.keys = keys
         self.folds = folds
         self.verifies = verifies
+        self.weak = weak
         self.separators = Set(separators)
         self.check = check
         self.draw = draw
@@ -84,14 +88,18 @@ enum Recognizers {
             return characters(d)
         }),
         Recognizer("CUIL", keys: ["cuil", "cuit", "cuilnumber", "cuitnumber"], forms: [
-            .init(#"\b(?:20|23|24|27)-\d{8}-\d\b"#, 0.5, alone: true),
-            .init(#"\b(?:20|23|24|27)\d{9}\b"#, 0.05),
+            .init(#"\b(?:2[0347]|3[034]|5[015])-\d{8}-\d\b"#, 0.5, alone: true),
+            .init(#"\b(?:2[0347]|3[034]|5[015])\d{9}\b"#, 0.05),
         ], context: ["cuit", "cuil"], check: { characters in
-            guard let d = numbers(characters), d.count == 11, [20, 23, 24, 27].contains(d[0] * 10 + d[1]), let last = cuilDigit(d[0..<10]) else { return false }
+            // AFIP's types: a person's 20, 23, 24, 27, a company's 30, 33, 34, and 50, 51, 55 for others; a type whose check
+            // would be 10 is issued as 23 or 33 instead, so 10 is no check.
+            guard let d = numbers(characters), d.count == 11, cuitTypes.contains(d[0] * 10 + d[1]), let last = cuilDigit(d[0..<10]) else { return false }
             return d[10] == last
-        }, draw: { _, rng in
+        }, draw: { like, rng in
+            // Its type kept: a person's stays a person's, a company's a company's.
+            let given = numbers(like).flatMap { $0.count == 11 && cuitTypes.contains($0[0] * 10 + $0[1]) ? Array($0.prefix(2)) : nil }
             while true {
-                let d = (Int.random(in: 0...1, using: &rng) == 0 ? [2, 0] : [2, 7]) + randomDigits(8, &rng)
+                let d = (given ?? (Int.random(in: 0...1, using: &rng) == 0 ? [2, 0] : [2, 7])) + randomDigits(8, &rng)
                 if let last = cuilDigit(d[...]) { return characters(d + [last]) }
             }
         }),
@@ -120,11 +128,13 @@ enum Recognizers {
         Recognizer("CURP", keys: ["curp"], forms: [
             .init(#"\b[A-Z][AEIOUX][A-Z]{2}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[HMX](?:AS|BC|BS|CC|CL|CM|CS|CH|DF|DG|GT|GR|HG|JC|MC|MN|MS|NT|NL|OC|PL|QT|QR|SP|SL|SR|TC|TS|TL|VZ|YN|ZS|NE)[B-DF-HJ-NP-TV-Z]{3}[A-Z\d]\d\b"#, 0.6, alone: true),
         ], context: ["curp"], check: { characters in
-            guard characters.count == 18, let last = characters[17].wholeNumberValue else { return false }
+            // Never one of RENAPO's inconvenient words: its second letter is written X instead.
+            guard characters.count == 18, let last = characters[17].wholeNumberValue, !curpBlocked.contains(String(characters.prefix(4))) else { return false }
             return curpDigit(characters[0..<17]) == last
         }, draw: { _, rng in
             let date = randomDate(&rng)
             var c = [pick(consonants, &rng), pick("AEIOU", &rng), pick(letters, &rng), pick(letters, &rng)]
+            if curpBlocked.contains(String(c)) { c[1] = "X" }
             c += characters(twoDigits(date.year % 100) + twoDigits(date.month) + twoDigits(date.day))
             c += [pick("HM", &rng)] + Array(["JC", "NL", "DF", "PL", "GT", "VZ", "CH", "SR"][Int.random(in: 0..<8, using: &rng)])
             c += [pick(consonants, &rng), pick(consonants, &rng), pick(consonants, &rng), Character(String(Int.random(in: 0...9, using: &rng)))]
@@ -133,8 +143,11 @@ enum Recognizers {
         Recognizer("RFC", keys: ["rfc"], forms: [
             .init(#"(?<![\w&])[A-ZÑ&]{4}[ -]?\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[ -]?[A-Z\d]{2}[\dA](?![\w&])"#, 0.3),
             .init(#"(?<![\w&])[A-ZÑ&]{3}[ -]?\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[ -]?[A-Z\d]{2}[\dA](?![\w&])"#, 0.3),
-        ], context: ["rfc", "registro federal de contribuyentes"], separators: " -", check: { characters in
-            // Mexico's RFC: a person's four letters or a company's three, a real date, a homoclave and SAT's check character.
+            // A person's before SAT gave the homoclave.
+            .init(#"(?<![\w&])[A-ZÑ&]{4}[ -]?\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])(?![\w&-])"#, 0.3),
+        ], context: ["rfc", "registro federal de contribuyentes"], verifies: false, separators: " -", check: { characters in
+            // Mexico's RFC: a person's four letters or a company's three, a real date, a homoclave and a check character
+            // SAT computes but numbers in use don't all carry, so the kind is known by its shape.
             rfcValid(characters)
         }, draw: { like, rng in
             rfcDraw(like, &rng)
@@ -229,6 +242,7 @@ enum Recognizers {
         Recognizer("STEUER_ID", keys: ["steuerid", "steueridentifikationsnummer", "idnr"], forms: [
             .init(#"\b[1-9]\d{10}\b"#, 0.05),
             .init(#"\b[1-9]\d \d{3} \d{3} \d{3}\b"#, 0.1),
+            .init(#"\b[1-9]\d{9} \d\b"#, 0.05),
         ], context: ["steuerid", "steueridentifikationsnummer", "idnr", "identifikationsnummer"], check: { characters in
             guard let d = numbers(characters), d.count == 11, d[0] != 0 else { return false }
             // Exactly one digit written twice or three times, the three never all side by side (the BZSt's rule).
@@ -276,14 +290,19 @@ enum Recognizers {
         Recognizer("FODSELSNUMMER", keys: ["fodselsnummer", "fdselsnummer"], forms: [
             .init(#"\b(?:[0-6]\d|7[01])(?:[04][1-9]|[15][0-2])\d{7}\b"#, 0.05),
             .init(#"\b(?:[0-6]\d|7[01])(?:[04][1-9]|[15][0-2])\d{2}[- ]\d{5}\b"#, 0.1),
+            // Grouped otherwise ("10 04 87 44 732", "13-04-99-58441"): only where named.
+            .init(#"\b(?:[0-6]\d|7[01])[- ]?(?:[04][1-9]|[15][0-2])(?:[- ]?\d){7}\b"#, 0.05),
         ], context: ["fødselsnummer", "fodselsnummer", "personnummer"], check: { characters in
             guard let d = numbers(characters), d.count == 11, let first = norwayDigit(d[0..<9], [3, 7, 6, 1, 8, 9, 4, 5, 2]),
                   let second = norwayDigit(d[0..<10], [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]) else { return false }
-            return first == d[9] && second == d[10]
-        }, draw: { _, rng in
+            return first == d[9] && second == d[10] && norwayBirth(d)
+        }, draw: { like, rng in
+            // A D-number (40 added to its day) stays one.
+            let added = numbers(like).map { $0.count == 11 && $0[0] >= 4 ? 40 : 0 } ?? 0
             while true {
                 let date = randomDate(&rng)
-                var d = twoDigits(date.day) + twoDigits(date.month) + twoDigits(date.year % 100) + randomDigits(3, &rng)
+                // Born 1950–1999: an individual number from 000 to 499.
+                var d = twoDigits(date.day + added) + twoDigits(date.month) + twoDigits(date.year % 100) + digitsOf(Int.random(in: 0...499, using: &rng), 3)
                 guard let first = norwayDigit(d[...], [3, 7, 6, 1, 8, 9, 4, 5, 2]) else { continue }
                 d.append(first)
                 guard let second = norwayDigit(d[...], [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]) else { continue }
@@ -379,20 +398,21 @@ enum Recognizers {
             residentDraw(like, &rng)
         }),
         Recognizer("RRN", keys: ["rrn", "residentregistrationnumber"], forms: [
-            .init(#"(?<!\d)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])-[1-8]\d{6}(?!\d)"#, 0.3),
-            .init(#"(?<!\d)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[1-8]\d{6}(?!\d)"#, 0.05),
+            .init(#"(?<!\d)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])-\d{7}(?!\d)"#, 0.3),
+            .init(#"(?<!\d)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{7}(?!\d)"#, 0.05),
         ], context: ["rrn", "주민등록번호", "외국인등록번호", "주민번호", "외국인번호", "resident registration number", "foreigner registration number", "frn"], verifies: false, check: { characters in
             guard let d = numbers(characters), d.count == 13 else { return false }
             let century = [9: 1800, 0: 1800, 1: 1900, 2: 1900, 5: 1900, 6: 1900, 3: 2000, 4: 2000, 7: 2000, 8: 2000][d[6]] ?? 1900
             return realDate(year: century + d[0] * 10 + d[1], month: d[2] * 10 + d[3], day: d[4] * 10 + d[5])
         }, draw: { like, rng in
-            // Its seventh digit says citizen or foreigner and the century: kept, as is the foreigner's own check.
-            let kind = like.count == 13 ? like[6].wholeNumberValue.flatMap { (1...8).contains($0) ? $0 : nil } : nil
+            // Its seventh digit says citizen or foreigner and the century: kept. A place of birth from 00 to 95 follows it, and
+            // one check digit closes citizen's and foreigner's alike, as numbers in use carry it.
+            let kind = like.count == 13 ? like[6].wholeNumberValue : nil
             let date = randomDate(&rng)
             let seventh = kind ?? Int.random(in: 1...2, using: &rng)
-            var d = twoDigits(date.year % 100) + twoDigits(date.month) + twoDigits(date.day) + [seventh] + randomDigits(5, &rng)
+            var d = twoDigits(date.year % 100) + twoDigits(date.month) + twoDigits(date.day) + [seventh] + twoDigits(Int.random(in: 0...95, using: &rng)) + randomDigits(3, &rng)
             let sum = zip(d, [2, 3, 4, 5, 6, 7, 8, 9, 2, 3, 4, 5]).reduce(0) { $0 + $1.0 * $1.1 }
-            d.append(((5...8).contains(seventh) ? 13 - sum % 11 : 11 - sum % 11) % 10)
+            d.append((11 - sum % 11) % 10)
             return characters(d)
         }),
         Recognizer("SOUTH_AFRICAN_ID", keys: ["rsaid", "saidnumber", "southafricanid"], forms: [
@@ -409,7 +429,7 @@ enum Recognizers {
         }),
         Recognizer("TCKN", keys: ["tckn", "tckimlikno", "kimlikno", "tcno", "tckimlik", "kimliknumarasi"], forms: [
             .init(#"\b[1-9]\d{10}\b"#, 0.05),
-        ], context: ["tckn", "kimlik", "tc no", "nüfus cüzdanı", "turkish id", "türk kimlik"], check: { characters in
+        ], context: ["tckn", "kimlik", "tc no", "t.c.", "nüfus cüzdanı", "turkish id", "türk kimlik"], check: { characters in
             guard let d = numbers(characters), d.count == 11, d[0] != 0 else { return false }
             return d[9] == tcknTenth(d) && d[10] == d[0..<10].reduce(0, +) % 10
         }, draw: { _, rng in
@@ -581,6 +601,8 @@ enum Recognizers {
             // A person's taxpayer number written as a company's is (1-2-1-3-5-1).
             .init(#"\b[1-8]-\d{2}-\d-\d{3}-\d{5}-\d\b"#, 0.3),
             .init(#"\b[1-8]\d{12}\b"#, 0.05),
+            // Spaced however a form spaced it ("3   451  000  50     5414"): only where named.
+            .init(#"\b[1-8](?: {0,6}\d){12}\b"#, 0.05),
         ], context: ["บัตรประชาชน", "เลขประจำตัวประชาชน", "เลขบัตรประชาชน", "thai", "tnin", "thai national id", "pin", "tin", "เลขประจำตัวผู้เสียภาษี", "เลขประจำตัวผู้เสียภาษีอากร"], check: { characters in
             // Its second and third digits are a province's code (ISO 3166-2:TH).
             guard let d = numbers(characters), d.count == 13, thaiProvinces.contains(d[1] * 10 + d[2]) else { return false }
@@ -907,6 +929,7 @@ enum Recognizers {
         }),
         Recognizer("KE_PIN", keys: ["kra", "krapin", "pinnumber", "pin"], forms: [
             .init(#"\b[AP]\d{9}[A-Z]\b"#, 0.3),
+            .init(#"\b[AP] ?\d{9} ?-? ?[A-Z]\b"#, 0.1),
         ], context: ["kra", "kra pin", "pin"], verifies: false, check: { characters in
             // Kenya's tax PIN: A for a person, P for a company, nine digits, a letter.
             characters.count == 11 && "AP".contains(characters[0]) && numbers(Array(characters[1..<10])) != nil && characters[10].isLetter
@@ -997,9 +1020,13 @@ enum Recognizers {
             .init(#"(?<![0-9A-Za-z])[0-9A-Fa-f]{2}(?: [0-9A-Fa-f]{2}){5}(?![0-9A-Za-z])"#, 0.05),
         ], context: ["mac", "hardware", "ethernet", "bssid", "wifi"], verifies: false, separators: ":-. ", check: { characters in
             characters.count == 12 && characters.allSatisfy(\.isHexDigit) && Set(characters).count > 1
-        }, draw: { _, rng in
-            // Locally administered and unicast: the first octet's low bits are 10, so it is nobody's device.
-            Array(String(format: "%02X", Int.random(in: 0...63, using: &rng) << 2 | 2)) + (0..<10).map { _ in pick("0123456789ABCDEF", &rng) }
+        }, draw: { like, rng in
+            // Its maker's three octets kept (a manufacturer's registered prefix, nobody's own), the device's three drawn,
+            // each a letter or a digit where the original's was; with none to keep, locally administered and unicast.
+            guard like.count == 12, like.allSatisfy(\.isHexDigit) else {
+                return Array(String(format: "%02X", Int.random(in: 0...63, using: &rng) << 2 | 2)) + (0..<10).map { _ in pick("0123456789ABCDEF", &rng) }
+            }
+            return Array(like.prefix(6)) + like.dropFirst(6).map { $0.isNumber ? pick(digits, &rng) : pick("ABCDEF", &rng) }
         }),
         // Germany, Sweden and Spain.
         Recognizer("DE_BSNR", entity: "MEDICAL_LICENSE", keys: ["bsnr", "betriebsstaettennummer", "betriebsstattennummer", "betriebsstttennummer"], forms: [
@@ -1272,7 +1299,9 @@ enum Recognizers {
         }),
         Recognizer("ZA_INCOME_TAX_NUMBER", keys: ["sarstaxnumber", "sarsnumber", "incometaxnumber", "taxreferencenumber", "incometaxreferencenumber"], forms: [
             .init(#"\b[01239]\d{9}\b"#, 0.05),
-        ], context: ["sars", "tax reference", "tax reference number", "income tax", "income tax number", "tax number", "itr", "tax registration"], separators: " -/", check: { characters in
+            .init(#"\b[01239]\d{3}/\d{3}/\d{2}/\d\b"#, 0.3),
+            .init(#"\b[01239]\d{8}-\d\b"#, 0.1),
+        ], context: ["sars", "tin", "tax reference", "tax reference number", "income tax", "income tax number", "tax number", "itr", "tax registration"], separators: " -/", check: { characters in
             guard let d = numbers(characters), d.count == 10, [0, 1, 2, 3, 9].contains(d[0]) else { return false }
             return Patterns.luhn(d)
         }, draw: { like, rng in
@@ -1396,6 +1425,8 @@ enum Recognizers {
         Recognizer("ABN", keys: ["abn", "abnnumber", "australianbusinessnumber"], forms: [
             .init(#"\b\d{2} \d{3} \d{3} \d{3}\b"#, 0.1),
             .init(#"\b\d{11}\b"#, 0.05),
+            // Spaced otherwise ("211 082 588 59"): only where named.
+            .init(#"\b\d(?: ?\d){10}\b"#, 0.05),
         ], context: ["abn", "australian business number"], separators: " ", check: { characters in
             guard let d = numbers(characters), d.count == 11, d[0] > 0 else { return false }
             return (zip(d, [10, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19]).reduce(0) { $0 + $1.0 * $1.1 } - 10) % 89 == 0
@@ -1563,7 +1594,10 @@ enum Recognizers {
             let province = given.map { Array($0.prefix(2)) } ?? [1, 7]
             switch given?[2] {
             case 6?:
-                let establishment = given.map { Array($0.suffix(4)) } ?? [0, 0, 0, 1]
+                // The state's establishment is its last four digits, which a stand-in never keeps: another one drawn.
+                let kept = given.map { Array($0.suffix(4)) } ?? [0, 0, 0, 1]
+                var establishment = kept
+                while establishment == kept { establishment = [0, 0, 0, Int.random(in: 1...9, using: &rng)] }
                 while true {
                     let body = province + [6] + randomDigits(5, &rng)
                     let rest = zip(body, [3, 2, 7, 6, 5, 4, 3, 2]).reduce(0) { $0 + $1.0 * $1.1 } % 11
@@ -1586,7 +1620,7 @@ enum Recognizers {
             .init(#"\b\d{3,11}-[\dK](?![\w-])"#, 0.1),
             .init(#"\b\d-\d{5}-[\dK](?![\w-])"#, 0.1),
             .init(#"\b\d{4,11}[\dK]\b"#, 0.05),
-        ], context: ["nit", "número de identificación tributaria", "numero de identificacion tributaria", "nit guatemala"], separators: " -", check: { characters in
+        ], context: ["nit", "número de identificación tributaria", "numero de identificacion tributaria", "nit guatemala"], weak: true, separators: " -", check: { characters in
             // Guatemala's NIT: up to eleven digits and SAT's mod 11 check, ten written K.
             guard (2...12).contains(characters.count), let body = numbers(Array(characters.dropLast())) else { return false }
             return gtNitMark(body) == characters.last
@@ -1687,7 +1721,7 @@ enum Recognizers {
         Recognizer("PY_RUC", forms: [
             .init(#"\b\d{4,8}-\d\b"#, 0.1),
             .init(#"\b\d{6,9}\b"#, 0.05),
-        ], context: ["ruc", "registro único del contribuyente", "registro unico del contribuyente", "registro único de contribuyentes", "registro unico de contribuyentes"], separators: " -", check: { characters in
+        ], context: ["ruc", "registro único del contribuyente", "registro unico del contribuyente", "registro único de contribuyentes", "registro unico de contribuyentes"], weak: true, separators: " -", check: { characters in
             // Paraguay's RUC: a person's cédula or a company's number (from 80000000), and SET's mod 11 check.
             guard let d = numbers(characters), (5...9).contains(d.count), d[0] != 0 else { return false }
             return pyRucDigit(Array(d.dropLast())) == d.last
@@ -1715,6 +1749,8 @@ enum Recognizers {
             .init(#"\b\d{8}(?: | ?[-–] ?)\d{14}\b"#, 0.3),
             .init(#"\b\d{7}-\d-\d{13}-\d\b"#, 0.3),
             .init(#"\b\d(?: \d){21}\b"#, 0.3),
+            // Spaced however a form or a scan spaced it ("0 1400 236 – 01 5068 0262 5874"): only where named.
+            .init(#"\b\d(?:(?: {1,4}| ?[-–] ?)?\d){21}\b"#, 0.05),
             .init(#"\b\d{22}\b"#, 0.05),
         ], context: ["cbu", "clave bancaria uniforme"], separators: " -–", check: { characters in
             // Argentina's CBU: a bank and branch with their check, an account of thirteen with its own (BCRA).
@@ -1772,11 +1808,11 @@ enum Recognizers {
             return (prefixed ? ["F", "N"] : []) + characters(d) + [firmenbuchLetter(d)]
         }),
         Recognizer("AT_ABGABENKONTONUMMER", keys: ["abgabenkontonummer", "abgabenkontonr"], forms: [
-            .init(#"\b\d{2}[- ]\d{3}/\d{4}\b"#, 0.3),
+            .init(#"\b\d{2}(?:[- ]| - )\d{3}/\d{4}\b"#, 0.3),
             .init(#"\b\d{2} \d{3} \d{4}\b"#, 0.1),
             .init(#"\b\d{2} \d{7}\b"#, 0.1),
             .init(#"\b\d{9}\b"#, 0.05),
-        ], context: ["abgabenkontonummer", "abgabenkonto", "steuernummer", "finanzamt", "stnr"], separators: " -/", check: { characters in
+        ], context: ["abgabenkontonummer", "abgabenkonto", "steuernummer", "finanzamt", "stnr", "tin"], separators: " -/", check: { characters in
             // Austria's: a tax office's two digits, seven of the account, the last a Luhn check over all nine.
             guard let d = numbers(characters), d.count == 9, atTaxOffices.contains(d[0] * 10 + d[1]) else { return false }
             return Patterns.luhn(d)
@@ -1853,7 +1889,7 @@ enum Recognizers {
         Recognizer("BE_EID", keys: ["eidnumber", "eidnummer", "eidcardnumber"], forms: [
             .init(#"\b\d{3}-\d{7}-\d{2}\b"#, 0.3),
             .init(#"\b\d{12}\b"#, 0.05),
-        ], context: ["eid card", "eid number", "eid-kaart", "eid kaart", "carte eid", "kaartnummer", "identiteitskaart", "carte d'identité"], separators: " -./", check: { characters in
+        ], context: ["eid", "eid card", "eid number", "eid-kaart", "eid kaart", "carte eid", "kaartnummer", "identiteitskaart", "carte d'identité"], separators: " -./", check: { characters in
             // A Belgian identity card's number: its first ten digits mod 97, a remainder of 0 written 97.
             guard let d = numbers(characters), d.count == 12 else { return false }
             return d[10] * 10 + d[11] == eidCheck(Array(d[0..<10]))
@@ -1863,7 +1899,7 @@ enum Recognizers {
             return characters(body + twoDigits(eidCheck(body)))
         }),
         Recognizer("IL_COMPANY_NUMBER", keys: ["israelicompanynumber", "ilcompanynumber"], forms: [
-            .init(#"\b5\d{3} \d{5}\b"#, 0.1),
+            .init(#"\b5\d{3}[ -]\d{5}\b"#, 0.1),
             .init(#"\b5\d{8}\b"#, 0.05),
         ], context: ["hp", "ח.פ", "ח״פ", "מספר חברה", "israeli company", "israeli company number"], separators: " -", check: { characters in
             // An Israeli company's: nine digits, a 5 first, the last a Luhn check.
@@ -2468,6 +2504,19 @@ enum Recognizers {
                 if let last = norwayDigit(d[...], [5, 4, 3, 2, 7, 6, 5, 4]) { return prefix + characters(d + [last]) + suffix }
             }
         }),
+        Recognizer("LI_PEID", keys: ["peidnumber", "peidnr", "personenidentifikationsnummer"], forms: [
+            .init(#"\b\d{4,13}\b"#, 0.05),
+            .init(#"\b\d{1,9}(?:[ .]\d{3}){1,3}\b"#, 0.05),
+        ], context: ["peid", "pe-id", "personenidentifikationsnummer", "personen-identifikationsnummer"], verifies: false, separators: " .", check: { characters in
+            // Liechtenstein's PEID (Amt für Statistik): four to twelve digits issued in turn, zeros sometimes written before them; no check.
+            guard let d = numbers(characters), d.count <= 13 else { return false }
+            return (4...12).contains(d.drop { $0 == 0 }.count)
+        }, draw: { like, rng in
+            // Its zeros before it kept, the number drawn as long.
+            let zeros = like.prefix { $0 == "0" }.count
+            let count = max(4, min(12, like.count - zeros))
+            return Array(repeating: "0", count: like.count - zeros >= 4 ? zeros : 0) + characters([Int.random(in: 1...9, using: &rng)] + randomDigits(count - 1, &rng))
+        }),
         Recognizer("CY_VAT", forms: [
             .init(#"\bCY[ -]{0,2}\d{8} ?[A-Z]\b"#, 0.3),
             .init(#"\b\d{8}[A-Z]\b"#, 0.05),
@@ -2680,6 +2729,19 @@ enum Recognizers {
         }, draw: { like, rng in
             ["I", "S"] + characters(randomDigits(like.count == 8 ? 6 : 5, &rng))
         }),
+        // "vn" names it only beside a value passing its check, never as a key alone.
+        Recognizer("FO_VN", keys: ["vnumber", "vtal", "vinnutal", "fovn"], forms: [
+            .init(#"\bFO[ -]?\d{3}[ .-]?\d{3}\b"#, 0.3),
+            .init(#"\b\d{3}[ .-]?\d{3}\b"#, 0.05),
+            .init(#"\b\d{2} \d{2} \d{2}\b"#, 0.05),
+        ], context: ["vn", "v-tal", "vinnutal", "v-number", "v-nummar"], verifies: false, separators: " .-", check: { characters in
+            // The Faroe Islands' V-number (TAKS): six digits issued in turn, FO before them as a VAT number; no check.
+            let body = characters.starts(with: ["F", "O"]) ? Array(characters.dropFirst(2)) : characters
+            return numbers(body)?.count == 6
+        }, draw: { like, rng in
+            let prefix: [Character] = like.starts(with: ["F", "O"]) ? ["F", "O"] : []
+            return prefix + characters([Int.random(in: 1...9, using: &rng)] + randomDigits(5, &rng))
+        }),
         Recognizer("LU_TVA", keys: ["lutva", "lutvanumber"], forms: [
             .init(#"\bLU[ .:-]{0,2}\d(?:[ .]?\d){7}\b"#, 0.3),
             .init(#"\b\d{3} \d{3} \d{2}\b"#, 0.1),
@@ -2838,7 +2900,7 @@ enum Recognizers {
         // asia_africa_global
         Recognizer("CN_USCC", keys: ["uscc", "usci", "unifiedsocialcreditcode", "unifiedsocialcreditidentifier", "socialcreditcode", "tongyishehuixinyongdaima"], forms: [
             // Named only: a stray value of this shape passes both checks about once in 3,000.
-            .init(#"\b[1-9ANY][1-9] ?\d{6} ?[0-9A-HJ-NP-RTUWXY]{10}\b"#, 0.3),
+            .init(#"\b[1-9ANY] ?[1-9] ?\d{6} ?[0-9A-HJ-NP-RTUWXY]{10}\b"#, 0.3),
         ], context: ["uscc", "统一社会信用代码", "社会信用代码", "信用代码", "unified social credit code", "unified social credit identifier", "social credit code"], separators: " ", check: { characters in
             // China's (GB 32100-2015): an authority, a type, a region, a GB 11714 organisation code with its own check, and a mod-31 check over all.
             guard characters.count == 18, "123456789ANY".contains(characters[0]), let head = numbers(Array(characters[1..<8])), head[0] != 0,
@@ -2913,7 +2975,7 @@ enum Recognizers {
         Recognizer("JP_CORPORATE_NUMBER", keys: ["houjinbangou", "hojinbango", "houjinbango", "jpcorporatenumber"], forms: [
             .init(#"\b[1-9]-\d{4}-\d{4}-\d{4}\b"#, 0.3),
             .init(#"\b[1-9]\d{12}\b"#, 0.05),
-        ], context: ["法人番号", "corporate number", "houjin bangou", "hojin bango"], check: { characters in
+        ], context: ["法人番号", "corporate number", "houjin bangou", "hojin bango", "cn"], check: { characters in
             // Japan's: a check digit first, nine less the twelve after it weighted 1 and 2 from the right, modulo 9.
             guard let d = numbers(characters), d.count == 13 else { return false }
             return d[0] == corporateDigit(Array(d[1...]))
@@ -2985,6 +3047,55 @@ enum Recognizers {
             let lead = like.first == "0" ? 0 : Int.random(in: 1...9, using: &rng)
             let tail = rest.count == 6 ? Array(rest.dropFirst()) : []
             return characters([lead] + randomDigits(count - 1, &rng)) + [pick(mfControlKeys, &rng)] + tail
+        }),
+        Recognizer("MA_ICE", keys: ["icenumber", "numeroice", "identifiantcommundelentreprise"], forms: [
+            .init(#"\b\d{15}\b"#, 0.05),
+            .init(#"\b\d{1,14}(?: \d{1,14}){1,7}\b"#, 0.05),
+        ], context: ["ice", "identifiant commun de l'entreprise", "identifiant commun de l’entreprise", "المعرف الموحد للمقاولة"], separators: " ", check: { characters in
+            // Morocco's ICE: a company's nine digits, an establishment's four, and two making the whole a multiple of 97.
+            guard let d = numbers(characters), d.count == 15 else { return false }
+            return number(d) % 97 == 0
+        }, draw: { like, rng in
+            // Its zeros before the company and its establishment kept: a head office's 0000, nobody's own.
+            let d = numbers(like).flatMap { $0.count == 15 ? $0 : nil } ?? [0, 0] + Array(repeating: 0, count: 13)
+            let zeros = min(d.prefix { $0 == 0 }.count, 8)
+            let body = Array(repeating: 0, count: zeros) + [Int.random(in: 1...9, using: &rng)] + randomDigits(8 - zeros, &rng) + Array(d[9..<13])
+            return characters(body + twoDigits((97 - number(body) * 100 % 97) % 97))
+        }),
+        Recognizer("GN_NIFP", keys: ["nifpnumber", "numeronifp"], forms: [
+            .init(#"\b\d{3}[ -]\d{3}[ -]\d{3}\b"#, 0.1),
+            .init(#"\b\d{9}\b"#, 0.05),
+        ], context: ["nifp", "numéro d'identification fiscale permanent", "numero d'identification fiscale permanent"], separators: " -", check: { characters in
+            // Guinea's NIFp: nine digits, the last a Luhn check.
+            guard let d = numbers(characters), d.count == 9 else { return false }
+            return Patterns.luhn(d)
+        }, draw: { like, rng in
+            let body = [like.first == "0" ? 0 : Int.random(in: 1...9, using: &rng)] + randomDigits(7, &rng)
+            return characters(body + [luhnDigit(body)])
+        }),
+        // "nuit" names it only beside a value passing its check, never as a key alone: a booking's "nuit" counts nights.
+        Recognizer("MZ_NUIT", keys: ["nuitnumber", "numeronuit"], forms: [
+            .init(#"\b\d{3}[ .]\d{3}[ .]\d{3}\b"#, 0.1),
+            .init(#"\b\d{8}-\d\b"#, 0.1),
+            .init(#"\b\d{9}\b"#, 0.05),
+        ], context: ["nuit", "número único de identificação tributária", "numero unico de identificacao tributaria"], separators: " .-", check: { characters in
+            // Mozambique's NUIT: eight digits weighed 8, 9, 4, 5, 6, 7, 8, 9, the sum mod 11 its last (10 written 1).
+            guard let d = numbers(characters), d.count == 9 else { return false }
+            return nuitDigit(Array(d.prefix(8))) == d[8]
+        }, draw: { like, rng in
+            // Its first digit kept: the kind of taxpayer.
+            let lead = like.first?.wholeNumberValue.flatMap { like.count == 9 ? $0 : nil } ?? 1
+            let body = [lead] + randomDigits(7, &rng)
+            return characters(body + [nuitDigit(body)])
+        }),
+        Recognizer("EG_TN", keys: ["egtn"], forms: [
+            .init(#"\b\d{3}(?: ?[-–/] ?| )\d{3}(?: ?[-–/] ?| )\d{3}\b"#, 0.1),
+            .init(#"\b\d{9}\b"#, 0.05),
+        ], context: ["tn", "رقم التسجيل الضريبي", "الرقم الضريبي", "رقم التسجيل", "tax registration number egypt"], verifies: false, separators: " -–/", check: { characters in
+            // Egypt's tax registration number: nine digits, no published check; written in Arabic-Indic digits too.
+            characters.count == 9 && characters.allSatisfy { $0.wholeNumberValue != nil }
+        }, draw: { like, rng in
+            characters([like.first == "0" ? 0 : Int.random(in: 1...9, using: &rng)] + randomDigits(8, &rng))
         }),
         Recognizer("OM_VAT", keys: ["omvat", "omanvat", "omvatin"], forms: [
             .init(#"\bOM ?\d{4} ?\d{4} ?\d[\dX]\b"#, 0.3),
@@ -3076,6 +3187,7 @@ enum Recognizers {
             .init(#"\b\d{2}-\d{6}-\d{6}-\d\b"#, 0.3),
             .init(#"\b\d{2} \d{6} \d{6} \d\b"#, 0.3),
             .init(#"\b\d{8} \d{6} \d\b"#, 0.3),
+            .init(#"\b\d{6}-\d{2}-\d{6}-\d\b"#, 0.3),
             .init(#"\b\d{15}\b"#, 0.05),
         ], context: ["imei", "international mobile equipment identity"], separators: " -/", check: { characters in
             // A phone's identity (3GPP TS 23.003): a type allocation code, a serial, a Luhn digit.
@@ -3123,7 +3235,12 @@ enum Recognizers {
     static func standIn(for original: String, preferring preferred: Recognizer? = nil, using rng: inout any RandomNumberGenerator) -> String? {
         // A value two kinds write ("ZN26148285": a passport, or by chance a German card's number) takes the
         // kind its words name, else the first that can draw one.
-        let kinds = candidates(original).filter { drawn.contains($0.entity) }
+        // A weak kind after every other it passes, unless it is the one named.
+        let passing = candidates(original).filter { drawn.contains($0.entity) }
+        var kinds = passing.filter { !$0.weak || $0.name == preferred?.name } + passing.filter { $0.weak && $0.name != preferred?.name }
+        // A short one ("7108-0") is no kind's alone, but is the one its words name where it is written as that kind.
+        if let preferred, !kinds.contains(where: { $0.name == preferred.name }), drawn.contains(preferred.entity),
+           case let trimmed = original.trimmingCharacters(in: .whitespaces), preferred.writes(trimmed), preferred.passes(trimmed) { kinds.insert(preferred, at: 0) }
         for recognizer in kinds.filter({ $0.name == preferred?.name }) + kinds.filter({ $0.name != preferred?.name }) {
             if let made = standIn(for: original, as: recognizer, using: &rng) { return made }
         }
@@ -3292,6 +3409,7 @@ enum Recognizers {
         let rest = sum * 10 % 11
         return rest == 10 ? 0 : rest
     }
+    private static let cuitTypes: Set<Int> = [20, 23, 24, 27, 30, 33, 34, 50, 51, 55]
     private static func cuilDigit(_ digits: ArraySlice<Int>) -> Int? {
         let rest = 11 - zip(digits, [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]).reduce(0) { $0 + $1.0 * $1.1 } % 11
         return rest == 11 ? 0 : rest == 10 ? nil : rest
@@ -3301,6 +3419,8 @@ enum Recognizers {
         let rest = 11 - sum % 11
         return rest == 11 ? "0" : rest == 10 ? "K" : Character(String(rest))
     }
+    /// RENAPO's inconvenient words, which a CURP's first four letters never spell.
+    private static let curpBlocked: Set<String> = ["BACA", "BAKA", "BUEI", "BUEY", "CACA", "CACO", "CAGA", "CAGO", "CAKA", "CAKO", "COGE", "COGI", "COJA", "COJE", "COJI", "COJO", "COLA", "CULO", "FALO", "FETO", "GETA", "GUEI", "GUEY", "JETA", "JOTO", "KACA", "KACO", "KAGA", "KAGO", "KAKA", "KAKO", "KOGE", "KOGI", "KOJA", "KOJE", "KOJI", "KOJO", "KOLA", "KULO", "LILO", "LOCA", "LOCO", "LOKA", "LOKO", "MAME", "MAMO", "MEAR", "MEAS", "MEON", "MIAR", "MION", "MOCO", "MOKO", "MULA", "MULO", "NACA", "NACO", "PEDA", "PEDO", "PENE", "PIPI", "PITO", "POPO", "PUTA", "PUTO", "QULO", "RATA", "ROBA", "ROBE", "ROBO", "RUIN", "SENO", "TETA", "VACA", "VAGA", "VAGO", "VAKA", "VUEI", "VUEY", "WUEI", "WUEY"]
     private static let curpAlphabet = Array("0123456789ABCDEFGHIJKLMNÑOPQRSTUVWXYZ")
     private static func curpDigit(_ characters: ArraySlice<Character>) -> Int {
         let sum = characters.enumerated().reduce(0) { $0 + (curpAlphabet.firstIndex(of: $1.element) ?? 0) * (18 - $1.offset) }
@@ -3330,6 +3450,21 @@ enum Recognizers {
         }
         let check = 11 - product
         return check == 10 ? 0 : check
+    }
+    /// Skatteetaten's individual numbers by century: 000–499 born 1900–1999, 500–749 1854–1899, 500–999 2000–2039,
+    /// 900–999 1940–1999. A D-number adds 40 to the day, an H-number 40 to the month; nobody is born in the future.
+    private static let norwayCenturies: [(numbers: ClosedRange<Int>, years: ClosedRange<Int>)] = [(0...499, 1900...1999), (500...749, 1854...1899), (500...999, 2000...2039), (900...999, 1940...1999)]
+    private static func norwayBirth(_ d: [Int]) -> Bool {
+        let written = d[0] * 10 + d[1], coded = d[2] * 10 + d[3]
+        let day = written > 40 ? written - 40 : written, month = coded > 40 ? coded - 40 : coded
+        let individual = number(Array(d[6..<9]))
+        let today = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: Date())
+        let now = (today.year ?? 2026) * 10_000 + (today.month ?? 1) * 100 + (today.day ?? 1)
+        return norwayCenturies.contains { range in
+            let year = range.years.lowerBound / 100 * 100 + d[4] * 10 + d[5]
+            let full = year < range.years.lowerBound ? year + 100 : year
+            return range.numbers.contains(individual) && range.years.contains(full) && realDate(year: full, month: month, day: day) && full * 10_000 + month * 100 + day <= now
+        }
     }
     private static func norwayDigit(_ digits: ArraySlice<Int>, _ weights: [Int]) -> Int? {
         let rest = 11 - zip(digits, weights).reduce(0) { $0 + $1.0 * $1.1 } % 11
@@ -3634,11 +3769,11 @@ enum Recognizers {
     }
 
     /// ABR's ABN check: 1 off the first digit, weights 10, 1, 3, 5 … 19, the sum a multiple of 89.
-    /// The two leading check digits (10-99) for a nine-digit body: 10·c1 + c2 ≡ 10 − Σ (mod 89).
+    /// The two leading check digits (11-99, as the ABR issues them: 10 and 99 both close a sum, and 99 is the one given) for a nine-digit body: 10·c1 + c2 ≡ 10 − Σ (mod 89).
     private static func abnLead(_ body: [Int]) -> Int {
         let rest = zip(body, [3, 5, 7, 9, 11, 13, 15, 17, 19]).reduce(0) { $0 + $1.0 * $1.1 }
         let target = ((10 - rest) % 89 + 89) % 89
-        return target < 10 ? target + 89 : target
+        return target <= 10 ? target + 89 : target
     }
     /// ASIC's ACN check: weights 8 … 1 over the first eight digits, the complement of the sum mod 10.
     private static func acnDigit(_ body: [Int]) -> Int {
@@ -3802,18 +3937,19 @@ enum Recognizers {
     private static let rfcSecondMarks = "123456789ABCDEFGHIJKLMNPQRSTUVWXYZ"
     /// Words SAT never lets a person's four letters spell (its last letter is changed to X instead).
     private static let rfcBlocked: Set<String> = ["BUEI", "BUEY", "CACA", "CACO", "CAGA", "CAGO", "CAKA", "CAKO", "COGE", "COJA", "COJE", "COJI", "COJO", "CULO", "FETO", "GUEY", "JOTO", "KACA", "KACO", "KAGA", "KAGO", "KAKA", "KOGE", "KOJO", "KULO", "MAME", "MAMO", "MEAR", "MEAS", "MEON", "MION", "MOCO", "MULA", "PEDA", "PEDO", "PENE", "PUTA", "PUTO", "QULO", "RATA", "RUIN"]
-    /// A person's RFC (13) or a company's (12): letters, a real date (YYMMDD), a homoclave, and its check over the rest,
-    /// a company's read with a space before it so both weigh twelve characters.
+    /// A person's RFC (13, or 10 before its homoclave) or a company's (12): letters, a real date (YYMMDD), a homoclave,
+    /// and a check character of SAT's (a digit or A); whether it is the one SAT's check gives is left open, as some issued aren't.
     private static func rfcValid(_ c: [Character]) -> Bool {
-        guard c.count == 12 || c.count == 13 else { return false }
-        let name = c.count - 9
+        guard [10, 12, 13].contains(c.count) else { return false }
+        let name = c.count == 12 ? 3 : 4
         guard c.prefix(name).allSatisfy({ rfcLetters.contains($0) }), name == 3 || !rfcBlocked.contains(String(c.prefix(4))), let d = numbers(Array(c[name..<(name + 6)])),
-              realDate(year: 2000 + d[0] * 10 + d[1], month: d[2] * 10 + d[3], day: d[4] * 10 + d[5]),
-              c.suffix(3).allSatisfy({ $0.isASCII && ($0.isNumber || $0.isUppercase) }) else { return false }
-        return rfcDigit(ArraySlice(Array(repeating: " ", count: 13 - c.count) + c.dropLast())) == c.last
+              realDate(year: 2000 + d[0] * 10 + d[1], month: d[2] * 10 + d[3], day: d[4] * 10 + d[5]) else { return false }
+        return c.count == 10 || c.suffix(3).allSatisfy({ $0.isASCII && ($0.isNumber || $0.isUppercase) }) && c.last.map { $0.isNumber || $0 == "A" } == true
     }
-    /// A fresh RFC of the original's kind (12 a company's, else a person's), its homoclave's letters and digits where the original's were.
+    /// A fresh RFC of the original's kind (12 a company's, else a person's, 10 without its homoclave), its homoclave's letters and digits
+    /// where the original's were, and the check character SAT's check gives.
     private static func rfcDraw(_ like: [Character], _ rng: inout any RandomNumberGenerator) -> [Character] {
+        if like.count == 10 { return Array(rfcDraw(Array(like) + Array("000"), &rng).prefix(10)) }
         let company = like.count == 12
         let name = company ? 3 : 4
         let home = Array(like.dropFirst(name + 6))
@@ -4264,6 +4400,11 @@ enum Recognizers {
         return (10 - padded.enumerated().reduce(0) { $0 + $1.element * ($1.offset % 2 == 0 ? 1 : 2) } % 10) % 10
     }
     private static let mfControlKeys = "ABCDEFGHJKLMNPQRSTVWXYZ"
+    /// Mozambique's NUIT check: weights 8, 9, 4, 5, 6, 7, 8, 9, the sum mod 11, a remainder of 10 written 1.
+    private static func nuitDigit(_ body: [Int]) -> Int {
+        let rest = zip(body, [8, 9, 4, 5, 6, 7, 8, 9]).reduce(0) { $0 + $1.0 * $1.1 } % 11
+        return rest == 10 ? 1 : rest
+    }
     private static func omanMark(_ d: [Int]) -> Character {
         let rest = (1 + zip(d.dropFirst(4), [1, 6, 3, 7, 9]).reduce(0) { $0 + $1.0 * $1.1 }) % 11
         return rest == 10 ? "X" : Character(String(rest))

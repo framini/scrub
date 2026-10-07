@@ -113,3 +113,37 @@ func valuesNamingNoOneStay(_ rendering: String) throws {
     #expect(output.contains("Switzerland") && !output.contains("8302") && !output.contains("Fenwick"), "\(output)")
     #expect(output.contains("We sold 1200 units in Norway 2024.") && output.contains("Shipping to Jordan takes a week."), "\(output)")
 }
+
+/// A one-line text, scrubbed as a pasted note is.
+private func scrubbedLine(_ text: String) throws -> String {
+    String(decoding: try Scrubber.scrub(Data(text.utf8), name: "a.txt", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+}
+
+@Test func aNameInCapitalsAfterItsLabelIsReplaced() throws {
+    for (text, name) in [("customer name QUILLAN", "QUILLAN"), ("Name: VARDELL", "VARDELL"), ("full name is ORRIN TALLOWAY", "TALLOWAY"), ("DESMARAIS, CAROLINE M", "DESMARAIS")] {
+        let output = try scrubbedLine(text)
+        #expect(!output.contains(name), "\(text) → \(output)")
+    }
+    // A thing's name, a city and its state, and a team stay as written.
+    for text in ["Company name: ACME", "the brand name SONY is fine", "file name README", "PARIS, TX", "SALES, HR team"] {
+        #expect(try scrubbedLine(text) == text, "\(text)")
+    }
+}
+
+@Test func anEmailInAnotherScriptIsReplaced() throws {
+    for email in ["ιωάννης@παράδειγμα.gr", "jeff@例子網.tw", "юзер@пример.ком", "ñoño@example.org"] {
+        let output = try scrubbedLine("write to \(email) today")
+        #expect(!output.contains(email) && output.hasPrefix("write to ") && output.hasSuffix(" today"), "\(output)")
+    }
+}
+
+@Test func anAddressInCapitalsOrOnARuralRouteIsReplaced() throws {
+    for (text, part) in [("6190 TURKEY RUN COURT", "TURKEY RUN"), ("111 ELMWOOD TERR", "ELMWOOD"), ("HC 284 Box 27", "284 Box 27"), ("RR 1 Box 54", "Box 54"),
+                         ("1234 West U.S. Hwy 50", "1234"), ("217 N. Rt. 31", "217"), ("3218 W. Irving Pk. Rd.", "Irving")] {
+        let output = try scrubbedLine(text)
+        #expect(!output.contains(part), "\(text) → \(output)")
+    }
+    for text in ["Version 2 RT 5 build", "We shipped 40 NEW ITEMS ON TIME"] {
+        #expect(try scrubbedLine(text) == text, "\(text)")
+    }
+}
