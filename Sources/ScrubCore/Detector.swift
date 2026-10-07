@@ -195,6 +195,16 @@ public final class Detector {
                 span.entity == "LOCATION" && ContextStage.nations.contains(ContextStage.normalPlace(TextRanges.substring(text, span.range)))
                     && Context.words(before: span.range.lowerBound, in: text, limit: 1).first.map { Self.placeWords.contains($0.lowercased()) } == true
             }.map(\.range)
+            // A postcode after a country kept as written is still someone's ("Switzerland 82590", "Netherlands 1012 AB").
+            for span in spans where span.entity == "LOCATION" && ContextStage.nations.contains(ContextStage.normalPlace(TextRanges.substring(text, span.range))) {
+                let ns = text as NSString, rest = ns.substring(with: NSRange(location: span.range.upperBound, length: min(16, ns.length - span.range.upperBound)))
+                // Only as an address writes it: the country opening its line or after a comma, not "sold in Norway 2024".
+                let lead = ns.substring(to: span.range.lowerBound).reversed().first { $0 != " " && $0 != "\t" }
+                guard lead == nil || lead == "\n" || lead == "," else { continue }
+                guard let match = TextRanges.matches(Self.countryPostcode, in: rest).first else { continue }
+                let code = match.range(at: 1)
+                spans.append(Span(range: (span.range.upperBound + code.location)..<(span.range.upperBound + NSMaxRange(code)), entity: "POSTAL_CODE", score: 0.85))
+            }
             spans.removeAll { Self.namesNoOne($0, in: text) }
             // A place right after a title or a rank is the person it names: "Private Ellery", "Ms Paris".
             spans = spans.map { span in span.entity == "LOCATION" && Self.titled(span.range, in: text) ? Span(range: span.range, entity: "PERSON", score: span.score) : span }
@@ -398,6 +408,7 @@ public final class Detector {
             // A link's part read by its key or its collection, and a person's ID by its prefix ("cus_…").
             || span.url != nil || span.entity == "RECORD_ID"
     }
+    private static let countryPostcode = TextPattern(#"^,? {1,2}(\d{4,6}|\d{4} ?[A-Z]{2}|[A-Z]\d[A-Z] ?\d[A-Z]\d|[A-Z]{1,2}\d[A-Z\d]? ?\d[A-Z]{2})(?=\s*$|\s*\n|[.;)])"#)
     private static let placeWords: Set<String> = ["to", "in", "from", "into", "across", "via", "of", "throughout", "within", "outside"]
     private static let titles: Set<String> = ["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "madam"]
     /// A title alone ("Mr.", "Ms") or before a role ("Madam Chair", "Mr Justice") names no one,

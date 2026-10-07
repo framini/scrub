@@ -79,7 +79,9 @@ enum Fields {
         for value in distinct.values {
             for recognizer in Recognizers.candidates(value) where recognizer.verifies { passing[recognizer.name, default: 0] += 1 }
         }
-        guard let (name, passed) = passing.max(by: { $0.value < $1.value }), passed >= 4, passed * 10 >= distinct.count * 9 else { return nil }
+        // Two kinds every value passes (a CPF is a Guatemalan NIT too): the registry's earlier, longer-known one.
+        let order = Dictionary(uniqueKeysWithValues: Recognizers.all.enumerated().map { ($1.name, $0) })
+        guard let (name, passed) = passing.max(by: { ($0.value, order[$1.key] ?? 0) < ($1.value, order[$0.key] ?? 0) }), passed >= 4, passed * 10 >= distinct.count * 9 else { return nil }
         return Recognizers.all.first { $0.name == name }
     }
 

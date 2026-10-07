@@ -92,7 +92,7 @@ final class JSONDocument {
             names += pairs.map(\.0)
             // A record that says what its number is ({"type": "CPR", "number": "…"}) names it there.
             let kind = Set(pairs.flatMap { pair -> [String] in
-                guard Self.kindKeys.contains(KeyHints.words(pair.0).joined()), let text = pair.1.stringValue, text.utf16.count <= 40 else { return [] }
+                guard Self.kindKeys.contains(KeyHints.words(pair.0).joined()), let text = pair.1.stringValue, text.utf16.count <= 64 else { return [] }
                 return KeyHints.words(text)
             })
             nextRecord += 1

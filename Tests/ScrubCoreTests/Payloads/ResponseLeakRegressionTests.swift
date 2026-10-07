@@ -104,3 +104,12 @@ func valuesNamingNoOneStay(_ rendering: String) throws {
     let output = String(decoding: try Scrubber.scrub(Data(csv.utf8), name: "a.csv", forceFullDetection: false, seed: 7).output, as: UTF8.self)
     #expect(!output.contains("Эшдаун") && !output.contains("c.ashdown"), "\(output)")
 }
+
+/// A country is no one's place and stays, but the postcode an address writes after it is someone's;
+/// a year after a country and a country after a word of place stay as written.
+@Test func aCountryStaysAndItsPostcodeGoes() throws {
+    let text = "Orrin Fenwick\n\n41 Maple Lane\n Brookhaven\n\n Switzerland 8302\n\nWe sold 1200 units in Norway 2024.\nShipping to Jordan takes a week.\n"
+    let output = String(decoding: try Scrubber.scrub(Data(text.utf8), name: "a.txt", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+    #expect(output.contains("Switzerland") && !output.contains("8302") && !output.contains("Fenwick"), "\(output)")
+    #expect(output.contains("We sold 1200 units in Norway 2024.") && output.contains("Shipping to Jordan takes a week."), "\(output)")
+}

@@ -657,10 +657,12 @@ func identifiersAreReplacedInEverySpelling(name: String) throws {
                 }
                 // A postcode's stand-in is its stand-in place's and a phone's its numbering's, not the registry's draw.
                 guard !left, var known, Recognizers.drawn.contains(recognizer.entity), let made = replacement(item, in: output, root: root) else { continue }
-                // A value several kinds pass takes a stand-in of the kind its word names.
+                // A value several kinds pass takes a stand-in of the kind its word names; a word two of them share
+                // ("vat" over eight digits a Finnish, Czech and Slovenian number pass) may name either.
                 if let word = item.variant.split(separator: "=", maxSplits: 1).dropFirst().first.map(String.init) {
                     let kinds = Recognizers.candidates(item.spelled), words = Set(KeyHints.words(word))
-                    if let named = kinds.first(where: { $0.name == recognizer.name }) ?? kinds.first(where: { Recognizers.named($0.context, among: words) }) { known = named }
+                    let named = kinds.filter { $0.name == recognizer.name || Recognizers.named($0.context, among: words) }
+                    if let first = named.first(where: { $0.passes(made) && writes($0, made) }) ?? named.first(where: { $0.name == recognizer.name }) ?? named.first { known = first }
                 }
                 let checked = known.passes(made) && writes(known, made), laidOut = keepsLayout(item.spelled, made, known)
                 if item.expected {
