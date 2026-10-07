@@ -8,8 +8,11 @@ enum NameTagger {
     private static let letterWord = TextPattern(#"\p{L}[\p{L}'’-]*"#)
     private static let loneLine = TextPattern(#"(?m)^[ \t]*(\p{Lu}\p{Ll}+)[ \t]*\r?$"#)
     static let organisationWords: Set<String> = ["foundation", "inc", "llc", "ltd", "corp", "company", "group", "university", "bank", "institute", "hospital", "team", "teams", "ops", "bot", "desk", "helpdesk", "office", "region", "network", "report", "folder", "notes", "billing", "support", "platform", "data", "sales", "admin", "service", "services", "department", "dept", "engineering", "finance", "marketing", "security", "alerts", "notifications", "infra", "squad", "committee", "board", "council", "staff", "center", "centre", "labs", "systems", "solutions", "partners", "government", "administration", "agency", "bureau", "records", "utility", "telco", "carrier", "credit", "education", "probate", "usps", "holdings", "consulting", "associates", "llp", "plc", "gmbh", "industries", "enterprises"]
+    /// What a firm says it does, after the name it trades under ("Fernhill Robotics", "Halberd Capital"):
+    /// an organisation's word only written with its capital, as "shipping" or "capital" in a sentence is not.
+    static let tradeWords: Set<String> = ["robotics", "capital", "analytics", "logistics", "supply", "supplies", "bakery", "healthcare", "software", "technologies", "ventures", "pharmaceuticals", "insurance", "realty", "freight", "manufacturing", "investments", "advisors", "advisory", "studios", "aerospace", "biosciences", "therapeutics", "outfitters", "brewing", "brewery", "motors", "airlines", "shipping", "trading", "traders", "wholesale"]
     static func namesOrganisation(_ text: String) -> Bool {
-        text.split(whereSeparator: { !$0.isLetter }).contains { organisationWords.contains($0.lowercased()) }
+        text.split(whereSeparator: { !$0.isLetter }).contains { organisationWords.contains($0.lowercased()) || $0.first?.isUppercase == true && tradeWords.contains($0.lowercased()) }
     }
     /// Whether the words at `range` name an organisation: they hold an
     /// organisation word, the next word is one ("Okafor Logistics"), or the
@@ -17,9 +20,10 @@ enum NameTagger {
     static func partOfOrganisation(_ range: Range<Int>, in text: String) -> Bool {
         // Only the next few words matter; the rest of a long text would make each check cost its length.
         let following = TextRanges.substring(text, range.upperBound..<min((text as NSString).length, range.upperBound + 120))
-        let nextWord = TextRanges.matches(leadingWord, in: following).first.map {
-            TextRanges.substring(following, $0.range.location..<NSMaxRange($0.range)).trimmingCharacters(in: .whitespaces).lowercased()
+        let written = TextRanges.matches(leadingWord, in: following).first.map {
+            TextRanges.substring(following, $0.range.location..<NSMaxRange($0.range)).trimmingCharacters(in: .whitespaces)
         }
+        let nextWord = written.map { $0.first?.isUppercase == true && tradeWords.contains($0.lowercased()) ? "company" : $0.lowercased() }
         // The run stops at the line's end; "L.L.C." and "Inc." read as "llc" and "inc".
         let line = following.prefix { !$0.isNewline }
         let run = line.split(whereSeparator: \.isWhitespace).prefix(4).prefix { word in
@@ -29,7 +33,7 @@ enum NameTagger {
         // "Ms Lind, Home Office" is a person and her employer.
         let suffixed = line.range(of: #"^(?:[ \t]+[IVX]{1,3}|[ \t]+[A-Z])?,[ \t]*(?i:l\.?l\.?c|inc|ltd|corp|co|plc|gmbh|l\.?l\.?p|l\.?p|limited|incorporated)\b"#, options: .regularExpression) != nil
         return namesOrganisation(TextRanges.substring(text, range)) || nextWord.map({ organisationWords.contains($0) }) == true || suffixed
-            || run.contains(where: { organisationWords.contains($0.lowercased().filter(\.isLetter)) })
+            || run.contains(where: { organisationWords.contains($0.lowercased().filter(\.isLetter)) || $0.first?.isUppercase == true && tradeWords.contains($0.lowercased().filter(\.isLetter)) })
     }
     /// Person and place names in `text`. What the tagger reads as an
     /// organisation goes into `organisations`, so a guess made elsewhere
@@ -152,10 +156,25 @@ enum NameTagger {
             let isCity = tag == .personalName && Names.citiesFolded.contains(found.lowercased())
             // A country ("Canada", "United States") is where millions live; it names no one.
             if tag == .placeName, let country = Places.country(found), country != "other" { return true }
+            // An ordinary word opening a sentence ("Hi, I'm…", read as Hawaii) is the word, unless it is a city's name too.
+            if tag == .placeName, !found.contains(" "), opensSentence(mapped, in: original), NameLists.isWord(found.lowercased()) || found.count <= 2,
+               !Names.citiesFolded.contains(found.lowercased()) { return true }
             result.append(Span(range: mapped, entity: tag == .personalName && !isCity ? "PERSON" : "LOCATION", score: tag == .personalName && !isCity ? 0.85 : 0.6))
             return true
         }
         return result
+    }
+    /// Whether `range` opens its line or a sentence: only space, quotes or a
+    /// list's marks since the last full stop, question or exclamation mark.
+    static func opensSentence(_ range: Range<Int>, in text: String) -> Bool {
+        let ns = text as NSString
+        var at = range.lowerBound - 1
+        while at >= 0, let scalar = Unicode.Scalar(ns.character(at: at)) {
+            if CharacterSet.newlines.contains(scalar) || ".!?".unicodeScalars.contains(scalar) { return true }
+            guard CharacterSet.whitespaces.contains(scalar) || "\"'“‘>*-•".unicodeScalars.contains(scalar) else { return false }
+            at -= 1
+        }
+        return true
     }
     /// Whether a letter or digit runs straight into either end of `range`.
     static func glued(_ range: Range<Int>, in text: String) -> Bool {

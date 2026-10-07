@@ -451,7 +451,7 @@ public enum KeyHints {
         }
         if typeWords.contains(trimmed.lowercased()) { return false }
         if digestKinds.contains(entity), isDigest(trimmed) { return true }
-        if entity == "USERNAME" { return true }
+        if entity == "USERNAME" { return !describes(trimmed) }
         // A second address line is a unit ("Apt 4B", "Suite 210", "#12"), not a measure.
         if entity == "ADDRESS", unitKeys.contains(compactKey(key)) || unitKeys.contains(words(key).last ?? "") || unitKeys.contains(words(key).suffix(2).joined()) {
             let first = trimmed.split(whereSeparator: { $0 == " " || $0 == "." }).first.map { $0.lowercased() } ?? ""
@@ -549,6 +549,14 @@ public enum KeyHints {
         guard hint(key) == "REGION", !fits(key, value) else { return false }
         let trimmed = value.trimmingCharacters(in: .whitespaces)
         return (2...3).contains(trimmed.count) && trimmed.allSatisfy { $0.isASCII && $0.isUppercase }
+    }
+    /// A plan's or a product's name in words ("Team plan (monthly)", "Pro annual"):
+    /// a capitalised word, then ordinary words in small letters or a note in brackets. No one's handle.
+    static func describes(_ value: String) -> Bool {
+        let words = value.split(separator: " ").map(String.init)
+        guard words.count >= 2, words[0].first?.isUppercase == true else { return false }
+        if value.contains("(") && value.hasSuffix(")") { return true }
+        return words.dropFirst().allSatisfy { $0.first?.isLowercase == true && NameLists.isOrdinary($0) && !NameLists.isFirst($0) }
     }
     private static let placeholderOpenings = ["same as", "see ", "as above", "as per", "not ", "no ", "none", "unknown", "n/a", "tbd", "tbc", "redacted", "withheld", "remote", "various", "pending", "to be ", "on file", "same"]
     /// A key that holds a house or a unit's number, which may be written as a bare number.

@@ -138,6 +138,13 @@ enum ListedNames {
     /// (see `CapitalNames`): any after a greeting's word with `capitals`
     /// ("Hi JINX,"), and above a sign-off only one the lists hold or no
     /// ordinary word ("Thanks,⏎ODALYS").
+    /// A word run together with "am", "have", "are", "will", "would" or "not"
+    /// ("I'm", "We've", "Can't"): a greeting goes on to say who, it names no one.
+    /// "O'Neil" and "D'Souza" are names.
+    static func contraction(_ word: String) -> Bool {
+        guard let mark = word.firstIndex(where: { $0 == "'" || $0 == "’" }) else { return false }
+        return ["m", "ve", "re", "ll", "d", "t"].contains(word[word.index(after: mark)...].lowercased())
+    }
     private static func people(in range: NSRange, _ ns: NSString, greeted: Bool, capitals: Bool) -> [Span] {
         let value = ns.substring(with: range)
         var groups: [[(String, Int)]] = [[]]
@@ -155,7 +162,7 @@ enum ListedNames {
             let lower = words.allSatisfy { $0 == $0.lowercased() }
             guard words.count <= 3, words.allSatisfy({ word in
                 let bare = word.trimmingCharacters(in: CharacterSet(charactersIn: ".'’"))
-                guard !bare.isEmpty, !People.isTitle(bare), !NameShape.isRole(bare), !NameShape.joining.contains(bare.lowercased()) else { return false }
+                guard !bare.isEmpty, !People.isTitle(bare), !NameShape.isRole(bare), !NameShape.joining.contains(bare.lowercased()), !contraction(bare) else { return false }
                 // An initial ("J.") or a name-shaped word; lowercase only as a whole ("hey beatriz").
                 if bare.count == 1 { return bare.first!.isUppercase }
                 if lower { return NameLists.isFirst(bare) && !NameLists.isWordlike(bare) && !NameLists.isOrdinary(bare) }
