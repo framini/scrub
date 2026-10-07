@@ -23,7 +23,7 @@ enum Patterns {
         ("US_SSN", #"\b\d{5}-\d{4}\b|\b\d{3}-\d{6}\b|\b\d{9}\b|\b\d{3}[- .]\d{2}[- .]\d{4}\b"#, 0.05, ["ssn", "ssns", "ssid", "social", "security"], []),
         ("US_SSN", #"\b\d{3}[- .]\d{2}[- .]\d{4}\b"#, 0.5, ["ssn", "ssns", "ssid", "social", "security"], []),
         ("SECRET", #"\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{10,}\b|\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,})\b|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bxox[abposr]-[A-Za-z0-9-]{10,}\b|\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}|\beyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*|(?<=[Bb]earer )[A-Za-z0-9._~+/=-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----"#, 0.9, [], [.dotMatchesLineSeparators]),
-        ("SECRET", #"(?<=(?:password|passwd|pwd|passphrase|secret|api[_-]?key|access[_-]?key|private[_-]?key|token|session[_-]?id)["']?\s{0,3}[:=]\s{0,3}["']?)[^\s"',;`}\])]{4,}(?!`)"#, 0.9, [], [.caseInsensitive]),
+        ("SECRET", #"(?<=(?:password|passwd|pwd|passphrase|secret|api[_-]?key|access[_-]?key|private[_-]?key|account[_-]?key|token|session[_-]?id)["']?\s{0,3}[:=]\s{0,3}["']?)[^\s"',;`}\])]{4,}(?!`)"#, 0.9, [], [.caseInsensitive]),
         // The display name in "Priya Raghunathan <priya@northwind.io>" is a person
         // even when the name model has never seen it, also quoted or as "Raghunathan, Priya".
         ("PERSON", #"(?<![\p{L}'’.-])\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*){1,3}(?="?[ \t]*<[^<>\s@]+@[^<>\s]+>)|(?<![\p{L}'’.,-][ \t]{0,3})\p{Lu}[\p{L}'’.-]*,[ \t]*\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*)?(?="?[ \t]*<[^<>\s@]+@[^<>\s]+>)"#, 0.9, [], []),

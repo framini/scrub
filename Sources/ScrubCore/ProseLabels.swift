@@ -49,9 +49,10 @@ enum ProseLabels {
     private static let phoneExtension = TextPattern(#"(?<![\p{L}\p{N}_./\-])((?i:ext)\.?[ \t]*|(?i:extension)[ \t]+|[xX]-?)(\d(?:-?\d){3,5})(?![\p{L}\p{N}-])"#)
     private static let someone: Set<String> = ["i", "he", "she", "they", "we", "who", "whom", "her", "his", "my", "our", "their", "both", "each", "applicant", "applicants", "patient", "patients", "client", "clients", "claimant", "claimants", "defendant", "defendants", "plaintiff", "appellant", "petitioner", "victim", "victims", "son", "daughter", "child", "children", "wife", "husband", "mother", "father", "brother", "sister", "baby", "twins", "man", "woman", "boy", "girl", "author", "member", "employee", "resident", "citizen", "national", "nationals", "mr", "mrs", "ms", "miss", "dr"]
     private static let something: Set<String> = ["idea", "ideas", "company", "firm", "project", "band", "movement", "concept", "brand", "product", "business", "organisation", "organization", "festival", "tradition", "it", "this", "that", "app", "startup", "team", "club", "series", "show", "genre"]
-    /// The password in a URL: "postgres://admin:hunter2@db.internal/app". A
-    /// capture, not a lookbehind, which ICU would try at every character of a long text.
-    private static let urlPassword = TextPattern(#"\b[A-Za-z][A-Za-z0-9+.\-]{0,15}://[^\s/@:]{1,64}:([^\s/@]{1,128})@(?=[A-Za-z0-9])"#)
+    /// The password in a URL: "postgres://admin:hunter2@db.internal/app", or with no user
+    /// ("redis://:hunter2@cache.internal"). A capture, not a lookbehind, which ICU would
+    /// try at every character of a long text.
+    private static let urlPassword = TextPattern(#"\b[A-Za-z][A-Za-z0-9+.\-]{0,15}://[^\s/@:]{0,64}:([^\s/@]{1,128})@(?=[A-Za-z0-9])"#)
     private static let trailing = CharacterSet(charactersIn: ".,;:!?)]}\"'")
 
     /// From `start` to the end of its sentence, at most 80 units on.

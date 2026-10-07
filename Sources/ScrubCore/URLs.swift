@@ -202,6 +202,12 @@ enum URLs {
         var start = range.lowerBound - 1
         while start > 0, let scalar = Unicode.Scalar(ns.character(at: start - 1)), keyCharacters.contains(scalar) { start -= 1 }
         guard start > 0, [63, 38, 59, 35].contains(ns.character(at: start - 1)) else { return nil }
+        // After a ";" only in a link's query: a connection string's pairs end at theirs, an "&" inside a password ("Password=Tr0ub4dor&3x!").
+        if ns.character(at: start - 1) == 59 {
+            var at = start - 1
+            while at > 0, let scalar = Unicode.Scalar(ns.character(at: at - 1)), !CharacterSet.whitespacesAndNewlines.contains(scalar), ![63, 35].contains(ns.character(at: at - 1)) { at -= 1 }
+            guard at > 0, [63, 35].contains(ns.character(at: at - 1)) else { return nil }
+        }
         for index in range where [38, 35].contains(ns.character(at: index)) { return index > range.lowerBound ? index : nil }
         return nil
     }

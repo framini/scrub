@@ -180,6 +180,29 @@ final class StandIns {
         }
         return fake
     }
+    /// A username built from an address's local part the document holds, as "obrandvold" (a home
+    /// folder's name) is from "ofelia.brandvold@…": built the same way from that address's stand-in,
+    /// so one account keeps one name. Nil when no local part, or more than one, builds it.
+    private func handle(builtFrom original: String) -> String? {
+        let letters = original.lowercased().filter(\.isLetter)
+        guard letters.count >= 4 else { return nil }
+        func words(_ local: String) -> [String]? {
+            let parts = local.lowercased().split(whereSeparator: { "._-".contains($0) }).map(String.init)
+            return parts.count == 2 && parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isLetter) }) ? parts : nil
+        }
+        var built: Set<String> = []
+        for (local, made) in handles {
+            guard let real = words(local), let fake = words(made) else { continue }
+            let forms = [(real[0] + real[1], fake[0] + fake[1]), (String(real[0].prefix(1)) + real[1], String(fake[0].prefix(1)) + fake[1]),
+                         (real[1] + real[0], fake[1] + fake[0]), (real[1] + String(real[0].prefix(1)), fake[1] + String(fake[0].prefix(1))),
+                         (real[0] + String(real[1].prefix(1)), fake[0] + String(fake[1].prefix(1)))]
+            if let form = forms.first(where: { $0.0 == letters }) { built.insert(form.1) }
+        }
+        guard built.count == 1, let body = built.first else { return nil }
+        let count = original.reversed().prefix(while: \.isNumber).count
+        let handle = body + (count > 0 ? digits(count) : "")
+        return original.first?.isUppercase == true ? handle.prefix(1).uppercased() + handle.dropFirst() : handle
+    }
     /// A handle worth matching between a username and an email: four letters
     /// or digits or more, and at least one letter.
     private func handleKey(_ value: String) -> String? {
@@ -1464,10 +1487,17 @@ final class StandIns {
                 return handle
             }
             if let key = handleKey(original), let handle = handles[key] { return handle }
+            if let handle = handle(builtFrom: original) { return handle }
             return people.unrelatedName(first: true).lowercased() + digits(3)
         case "SECRET":
             // A CVV, PIN or one-time code stays a short number.
             if (1...8).contains(original.count), original.allSatisfy({ $0.isASCII && $0.isNumber }) { return (0..<original.count).map { _ in digit() }.joined() }
+            // A key written in hex ("9c41d0e2a7b3…", a machine's or a session's) stays hex of its length and case.
+            if original.count >= 16, original.count <= 128, original.allSatisfy(\.isHexDigit), original.contains(where: \.isNumber) {
+                let upper = original.contains(where: \.isUppercase) && !original.contains(where: \.isLowercase)
+                let hex = Array(upper ? "0123456789ABCDEF" : "0123456789abcdef")
+                return String(original.map { _ in pick(hex) ?? "0" })
+            }
             let prefix = TextRanges.matches(Self.secretPrefix, in: original).first.map { TextRanges.substring(original, $0.range.location..<NSMaxRange($0.range)) } ?? ""
             let kept = prefix.utf16.count < original.utf16.count ? prefix : ""
             return kept + (0..<24).map { _ in String(pick(alphabet) ?? "a") }.joined()

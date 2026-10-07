@@ -45,6 +45,8 @@ enum Links {
         guard spans.contains(where: judged) else { return spans }
         let links = known ?? ranges(in: text)
         guard !links.isEmpty else { return spans }
-        return spans.filter { span in !(judged(span) && links.contains { $0.overlaps(span.range) }) }
+        // A home folder's account name in a file's link ("file:///Users/odalys/…") is its owner's handle (see `HomeFolders`).
+        let homes = text.contains("file:") ? HomeFolders.scan(text).map(\.range) : []
+        return spans.filter { span in !(judged(span) && links.contains { $0.overlaps(span.range) }) || homes.contains(span.range) }
     }
 }

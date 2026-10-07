@@ -106,6 +106,58 @@ enum KeyedValues {
         }
         return born + expiring + parts
     }
+    /// Whether a key holds a cookie header's pairs, not one cookie's value ("session_cookie").
+    static func cookieKey(_ key: String?) -> Bool {
+        ["cookie", "cookies", "setcookie", "cookieheader"].contains(KeyHints.words(key).joined())
+    }
+    /// What a set cookie says of itself, never a value to replace: "Path=/; Secure; SameSite=Lax".
+    private static let cookieAttributes: Set<String> = ["path", "domain", "expires", "maxage", "samesite", "secure", "httponly", "priority", "partitioned", "version", "comment"]
+    /// Parts of a cookie's name that say it holds a session or a credential, whatever its value looks like.
+    private static let sessionParts = ["sess", "sid", "token", "auth", "jwt", "csrf", "xsrf", "remember", "login", "secret", "key", "saml", "oauth"]
+    /// The values in a cookie header ("session=7f6e…; uid=u_55120; theme=dark") that are a secret or
+    /// someone's: a session's or a credential's, a person's ID or what its name says it is, or any
+    /// long generated token. Names, separators, settings ("theme=dark") and a set cookie's attributes
+    /// stay. Nil when the text is not written as pairs, so it is read whole.
+    static func cookies(_ text: String) -> [Span]? {
+        let ns = text as NSString
+        var spans: [Span] = [], pairs = 0, start = 0
+        for end in 0...ns.length where end == ns.length || ns.character(at: end) == semicolon {
+            defer { start = end + 1 }
+            let piece = NSRange(location: start, length: end - start)
+            let equal = ns.range(of: "=", range: piece)
+            guard equal.location != NSNotFound else {
+                // A flag ("Secure", "HttpOnly"), or nothing after a last separator.
+                let word = ns.substring(with: piece).trimmingCharacters(in: .whitespaces)
+                if word.isEmpty || cookieAttributes.contains(word.lowercased()) { continue }
+                return nil
+            }
+            let name = ns.substring(with: NSRange(location: start, length: equal.location - start)).trimmingCharacters(in: .whitespaces)
+            var lower = NSMaxRange(equal), upper = end
+            while lower < upper, [space, tab, doubleQuote].contains(ns.character(at: lower)) { lower += 1 }
+            while upper > lower, [space, tab, doubleQuote].contains(ns.character(at: upper - 1)) { upper -= 1 }
+            // A name is one token, and a value never opens with "=": "dGVzdA==" is a bare value, not a pair.
+            guard !name.isEmpty, name.unicodeScalars.allSatisfy({ $0.isASCII && $0.value > 32 && !"\"(),/:<>?@[]{}".unicodeScalars.contains($0) }),
+                  lower == upper || ns.character(at: lower) != equals else { return nil }
+            pairs += 1
+            guard lower < upper else { continue }
+            let value = ns.substring(with: NSRange(location: lower, length: upper - lower))
+            let compact = name.lowercased().filter { $0.isLetter || $0.isNumber }
+            let entity: String?
+            if cookieAttributes.contains(compact) { entity = nil }
+            else if RecordIDs.identifying(key: name, value: value) { entity = "RECORD_ID" }
+            else if let hint = KeyHints.hint(name), hint != "SECRET", KeyHints.fits(name, value) { entity = hint }
+            else if value.count >= 4, sessionParts.contains(where: compact.contains) { entity = "SECRET" }
+            else { entity = generatedToken(value) ? "SECRET" : nil }
+            if let entity { spans.append(Span(range: lower..<upper, entity: entity, score: 1)) }
+        }
+        return pairs > 0 ? spans : nil
+    }
+    /// A value a system made rather than a word or a setting: twelve characters or more of a token's
+    /// alphabet, with a digit ("GA1.2.1144832913.1696338125", "7f6e5d4c3b2a1908").
+    private static func generatedToken(_ value: String) -> Bool {
+        value.count >= 12 && value.contains(where: \.isNumber) && value.contains(where: { $0.isLetter }) || value.count >= 16 && value.allSatisfy(\.isNumber)
+            ? value.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "-_.+/=%~".contains($0)) }) : false
+    }
     static func find(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
         scan(text, isCancelled: isCancelled).spans
     }
@@ -241,6 +293,11 @@ enum KeyedValues {
             if unquoted, !trimmed.allSatisfy({ $0.isASCII && $0.isNumber }), trimmed.first.map({ $0.isNumber || $0 == "-" }) == true,
                case .number? = try? OrderedJSON.parse(trimmed),
                trimmed.lowercased().contains("e") || !["LATITUDE", "LONGITUDE", "COORDINATES"].contains(KeyHints.hint(key) ?? "") { return }
+            // A cookie header's pairs ("Cookie: session=7f6e…; theme=dark"): each value read by its own name.
+            if decoded == nil, cookieKey(own ?? key), let pairs = cookies(string(content)) {
+                found.spans += pairs.map { Span(range: (content.lowerBound + $0.range.lowerBound)..<(content.lowerBound + $0.range.upperBound), entity: $0.entity, score: 1) }
+                return
+            }
             var content = content
             // An unquoted secret is one token, after its scheme: "Authorization: Bearer 9f8e… rejected".
             if unquoted, KeyHints.hint(key) == "SECRET" {

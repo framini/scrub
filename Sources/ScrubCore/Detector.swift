@@ -78,7 +78,8 @@ public final class Detector {
                 guard span.entity == "SECRET", span.url == nil, let end = URLs.queryValueEnd(ns, span.range) else { return span }
                 return Span(range: span.range.lowerBound..<end, entity: span.entity, score: span.score)
             }
-            var kept = Standards.outside(Links.outside(cut, in: text, links: foundLinks), in: text)
+            var kept = HomeFolders.over(Standards.outside(Links.outside(cut, in: text, links: foundLinks), in: text), in: text)
+            kept.removeAll { Self.machineAccount($0, in: ns) }
             if !doubts.isEmpty { doubts = Self.doubted(doubts, besides: kept, in: text, links: foundLinks) }
             if !doubts.isEmpty { (kept, doubts) = Self.joined(doubts, onto: kept, in: text) }
             return Self.wholeName(kept, in: text)
@@ -105,6 +106,20 @@ public final class Detector {
         }
         guard whole || particled else { return spans }
         return [Span(range: name, entity: "PERSON", score: spans.map(\.score).max() ?? 1)]
+    }
+    private static let crashHeader = TextPattern(#"(?m)^(?:Process|Code Type|Exception Type|Crashed Thread|Report Version|Incident Identifier|Hardware Model|Parent Process|Responsible):[ \t]"#)
+    private static let accountLabel = TextPattern(#"(?i)(?:^|[\s,;(])(?:user[ _]?id|uid)[ \t]*[:=][ \t]*$"#)
+    /// A crash report's "User ID: 501": the account's number on that machine, which the first account
+    /// on every one of them shares, so no one's. A report says it is one by three of its headers or more.
+    private static func machineAccount(_ span: Span, in ns: NSString) -> Bool {
+        guard span.entity == "RECORD_ID", (1...5).contains(span.range.count) else { return false }
+        let value = ns.substring(with: NSRange(location: span.range.lowerBound, length: span.range.count))
+        guard value.allSatisfy({ $0.isASCII && $0.isNumber }), let number = Int(value), number <= 65_535 else { return false }
+        let line = ns.lineRange(for: NSRange(location: span.range.lowerBound, length: 0))
+        let before = ns.substring(with: NSRange(location: line.location, length: span.range.lowerBound - line.location))
+        guard !TextRanges.matches(accountLabel, in: before).isEmpty else { return false }
+        let head = ns.substring(to: min(ns.length, 4096))
+        return Set(TextRanges.matches(crashHeader, in: head).map { (head as NSString).substring(with: $0.range) }).count >= 3
     }
     /// What `base` finds, and the people it doubts.
     func read(_ text: String, key: String? = nil, contextWords: Set<String> = [], naming: Set<String>? = nil, context: ContextStage.Reading? = nil) -> (spans: [Span], doubts: [Span]) {
@@ -150,6 +165,8 @@ public final class Detector {
     /// key names is that identifier, though the key names another kind elsewhere ("pan": a card's
     /// number, or India's tax number). Nil when the key names nothing.
     static func keyed(_ text: String, key: String?) -> [Span]? {
+        // A cookie header's pairs keep their names and settings (see `KeyedValues.cookies`).
+        if KeyedValues.cookieKey(key), let pairs = KeyedValues.cookies(text) { return pairs }
         guard let entity = KeyHints.hint(key), !text.isEmpty else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         // Someone's value hashed: a stand-in digest of its shape, never an email or a name in its place.
@@ -188,6 +205,7 @@ public final class Detector {
             spans.append(contentsOf: Self.spelledByEmail(spans, in: text, isCancelled: isCancelled))
             if text.contains(".") { spans.append(contentsOf: Self.namedFiles(in: text)) }
             spans.append(contentsOf: RecordIDs.spans(in: text))
+            spans.append(contentsOf: ConnectionStrings.scan(text))
             spans.append(contentsOf: system(text))
             var organisations: [Range<Int>] = []
             spans.append(contentsOf: NameTagger.find(text, using: tagger, organisations: &organisations, isCancelled: isCancelled))
@@ -362,8 +380,9 @@ public final class Detector {
     /// in order, written as words; one of them must be a name or no ordinary
     /// word, so "support.team" spells no one.
     private static let letters = CharacterSet.letters
-    static func spelledByEmail(_ spans: [Span], in text: String, isCancelled: () -> Bool = { false }) -> [Span] {
-        let emails = spans.filter { $0.entity == "EMAIL_ADDRESS" }
+    /// `handles`: read a username's whole value as a local part ("/Users/genevieve.oduya/…").
+    static func spelledByEmail(_ spans: [Span], in text: String, handles: Bool = false, isCancelled: () -> Bool = { false }) -> [Span] {
+        let emails = spans.filter { $0.entity == (handles ? "USERNAME" : "EMAIL_ADDRESS") }
         guard !emails.isEmpty else { return [] }
         var spelled: [[String]] = []
         var seen: Set<String> = []
@@ -402,7 +421,10 @@ public final class Detector {
                 let between = zip(run, run.dropFirst()).allSatisfy { a, b in ns.substring(with: NSRange(location: a.range.upperBound, length: b.range.lowerBound - a.range.upperBound)).allSatisfy { $0 == " " || $0 == "\t" } }
                 let range = run.first!.range.lowerBound..<run.last!.range.upperBound
                 let edge = { (index: Int) in index >= 0 && index < ns.length && "@._".utf16.contains(ns.character(at: index)) }
-                guard between, !edge(range.lowerBound - 1), !edge(range.upperBound), !emails.contains(where: { $0.range.overlaps(range) }) else { continue }
+                // A file's name is the name and its extension: "2025 return - Genevieve Oduya.ledger".
+                let extended = range.upperBound < ns.length && ns.character(at: range.upperBound) == 46
+                    && ns.substring(from: range.upperBound).range(of: #"^\.[A-Za-z0-9]{1,8}(?![\p{L}\p{N}@._-])"#, options: .regularExpression) != nil
+                guard between, !edge(range.lowerBound - 1), !edge(range.upperBound) || extended, !emails.contains(where: { $0.range.overlaps(range) }) else { continue }
                 found.append(Span(range: range, entity: "PERSON", score: 0.9))
             }
         }
