@@ -198,3 +198,10 @@ private func aHealthRecordBundleKeepsOnePatientAndEveryCode(_ name: String) thro
     #expect(!output.contains("Marrow"), "\(output)")
     #expect(output.contains("Clinic East Wing"), "\(output)")
 }
+
+/// A reference to a product the standard lists keeps its display, under a person's key too.
+@Test func aProductsDisplayStaysUnderASubject() throws {
+    let source = #"{"subject":{"reference":"NutritionProduct/42","display":"Infant Formula"},"focus":{"type":"BiologicallyDerivedProduct","display":"Packed Red Cells"}}"#
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(output == source, "\(output)")
+}

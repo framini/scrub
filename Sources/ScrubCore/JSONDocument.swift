@@ -335,14 +335,36 @@ final class JSONDocument {
         private static func typeRole(_ type: String) -> String? {
             personTypes.contains(type) ? "patient" : otherTypes.contains(type) ? "institution" : nil
         }
-        /// The record types a reference names something other than a person by.
+        /// The record types a reference names something other than a person by: every resource the
+        /// health record standard's fourth and fifth releases list, but its people's.
         private static let otherTypes: Set<String> = [
-            "Organization", "OrganizationAffiliation", "Location", "HealthcareService", "Endpoint", "InsurancePlan", "Device", "DeviceDefinition",
-            "Group", "CareTeam", "Encounter", "EpisodeOfCare", "Condition", "Observation", "Procedure", "DiagnosticReport", "ImagingStudy",
-            "Specimen", "Medication", "MedicationRequest", "MedicationStatement", "MedicationAdministration", "MedicationDispense", "Substance",
-            "Immunization", "AllergyIntolerance", "CarePlan", "Goal", "ServiceRequest", "Appointment", "Schedule", "Slot", "Coverage", "Claim",
-            "ClaimResponse", "ExplanationOfBenefit", "Account", "Invoice", "DocumentReference", "Composition", "Questionnaire",
-            "QuestionnaireResponse", "Provenance", "Consent", "Contract", "Task", "Communication", "List", "Library", "PlanDefinition", "ActivityDefinition"]
+            "Account", "ActivityDefinition", "ActorDefinition", "AdministrableProductDefinition", "AdverseEvent", "AllergyIntolerance",
+            "Appointment", "AppointmentResponse", "ArtifactAssessment", "AuditEvent", "Basic", "Binary", "BiologicallyDerivedProduct",
+            "BiologicallyDerivedProductDispense", "BodyStructure", "Bundle", "CanonicalResource", "CapabilityStatement", "CarePlan", "CareTeam",
+            "CatalogEntry", "ChargeItem", "ChargeItemDefinition", "Citation", "Claim", "ClaimResponse", "ClinicalImpression",
+            "ClinicalUseDefinition", "CodeSystem", "Communication", "CommunicationRequest", "CompartmentDefinition", "Composition", "ConceptMap",
+            "Condition", "ConditionDefinition", "Consent", "Contract", "Coverage", "CoverageEligibilityRequest", "CoverageEligibilityResponse",
+            "DetectedIssue", "Device", "DeviceAssociation", "DeviceDefinition", "DeviceDispense", "DeviceMetric", "DeviceRequest", "DeviceUsage",
+            "DeviceUseStatement", "DiagnosticReport", "DocumentManifest", "DocumentReference", "DomainResource", "EffectEvidenceSynthesis",
+            "Encounter", "EncounterHistory", "Endpoint", "EnrollmentRequest", "EnrollmentResponse", "EpisodeOfCare", "EventDefinition", "Evidence",
+            "EvidenceReport", "EvidenceVariable", "ExampleScenario", "ExplanationOfBenefit", "FamilyMemberHistory", "Flag", "FormularyItem",
+            "GenomicStudy", "Goal", "GraphDefinition", "Group", "GuidanceResponse", "HealthcareService", "ImagingSelection", "ImagingStudy",
+            "Immunization", "ImmunizationEvaluation", "ImmunizationRecommendation", "ImplementationGuide", "Ingredient", "InsurancePlan",
+            "InventoryItem", "InventoryReport", "Invoice", "Library", "Linkage", "List", "Location", "ManufacturedItemDefinition", "Measure",
+            "MeasureReport", "Media", "Medication", "MedicationAdministration", "MedicationDispense", "MedicationKnowledge", "MedicationRequest",
+            "MedicationStatement", "MedicinalProduct", "MedicinalProductAuthorization", "MedicinalProductContraindication",
+            "MedicinalProductDefinition", "MedicinalProductIndication", "MedicinalProductIngredient", "MedicinalProductInteraction",
+            "MedicinalProductManufactured", "MedicinalProductPackaged", "MedicinalProductPharmaceutical", "MedicinalProductUndesirableEffect",
+            "MessageDefinition", "MessageHeader", "MetadataResource", "MolecularDefinition", "MolecularSequence", "NamingSystem", "NutritionIntake",
+            "NutritionOrder", "NutritionProduct", "Observation", "ObservationDefinition", "OperationDefinition", "OperationOutcome", "Organization",
+            "OrganizationAffiliation", "PackagedProductDefinition", "Parameters", "PaymentNotice", "PaymentReconciliation", "Permission",
+            "PlanDefinition", "Procedure", "Provenance", "Questionnaire", "QuestionnaireResponse", "RegulatedAuthorization", "RequestGroup",
+            "RequestOrchestration", "Requirements", "ResearchDefinition", "ResearchElementDefinition", "ResearchStudy", "ResearchSubject",
+            "Resource", "RiskAssessment", "RiskEvidenceSynthesis", "Schedule", "SearchParameter", "ServiceRequest", "Slot", "Specimen",
+            "SpecimenDefinition", "StructureDefinition", "StructureMap", "Subscription", "SubscriptionStatus", "SubscriptionTopic", "Substance",
+            "SubstanceDefinition", "SubstanceNucleicAcid", "SubstancePolymer", "SubstanceProtein", "SubstanceReferenceInformation",
+            "SubstanceSourceMaterial", "SubstanceSpecification", "SupplyDelivery", "SupplyRequest", "Task", "TerminologyCapabilities", "TestPlan",
+            "TestReport", "TestScript", "Transport", "ValueSet", "VerificationResult", "VisionPrescription"]
         /// The record types a reference names a person by.
         private static let personTypes: Set<String> = ["Patient", "Practitioner", "PractitionerRole", "RelatedPerson", "Person"]
         /// Keys whose reference is to a person. A "provider" may be a practice as often as a
@@ -423,7 +445,7 @@ final class JSONDocument {
         let unsigned = number.dropFirst(negative ? 1 : 0)
         let mark = unsigned.firstIndex { $0 == "e" || $0 == "E" }
         let mantissa = unsigned[..<(mark ?? unsigned.endIndex)], exponent = unsigned[(mark ?? unsigned.endIndex)...]
-        guard let power = exponent.isEmpty ? 0 : Int(exponent.dropFirst()), power > -1 << 20, power < 1 << 20 else { return nil }
+        guard let power = exponent.isEmpty ? 0 : Int(exponent.dropFirst()) else { return nil }
         let point = mantissa.firstIndex(of: ".")
         return (negative, mantissa[..<(point ?? mantissa.endIndex)], point.map { mantissa[mantissa.index(after: $0)...] } ?? "", exponent, power)
     }
@@ -431,9 +453,14 @@ final class JSONDocument {
     /// "2.128675309e9" are all "2128675309e0". No rounding: its significant digits and their power of ten.
     static func numberValue(_ number: String) -> String? {
         guard let parts = numberParts(number) else { return nil }
-        var digits = (String(parts.whole) + parts.fraction).drop { $0 == "0" }, power = parts.power - parts.fraction.count
+        // The exponent as checked arithmetic: one written past a whole number's range is no number to match.
+        var digits = (String(parts.whole) + parts.fraction).drop { $0 == "0" }
         guard !digits.isEmpty else { return "0" }
-        while digits.last == "0" { digits = digits.dropLast(); power += 1 }
+        let zeros = digits.reversed().prefix { $0 == "0" }.count
+        digits = digits.dropLast(zeros)
+        let (shifted, under) = parts.power.subtractingReportingOverflow(parts.fraction.count)
+        let (power, over) = shifted.addingReportingOverflow(zeros)
+        guard !under, !over else { return nil }
         return (parts.negative ? "-" : "") + digits + "e" + String(power)
     }
     /// The number `value` written in `like`'s shape: its exponent as written, and at least as many
@@ -443,8 +470,9 @@ final class JSONDocument {
         let negative = exact.hasPrefix("-")
         let parts = exact.dropFirst(negative ? 1 : 0).split(separator: "e")
         let digits = String(parts[0])
-        guard let power = parts.count == 2 ? Int(parts[1]) : 0, abs(power - shape.power) <= 400 else { return nil }
-        let shift = power - shape.power
+        guard let power = parts.count == 2 ? Int(parts[1]) : 0 else { return nil }
+        let (shift, overflow) = power.subtractingReportingOverflow(shape.power)
+        guard !overflow, shift.magnitude <= 400 else { return nil }
         var whole: String, fraction: String
         if shift >= 0 {
             (whole, fraction) = (digits + String(repeating: "0", count: shift), "")

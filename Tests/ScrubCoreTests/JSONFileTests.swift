@@ -453,3 +453,19 @@ func bareNameKeyNeedsAPersonRecord(_ input: String, _ replaced: Bool) throws {
     #expect(!output.contains("jdoe42"), "\(output)")
     #expect(output.contains(#""main":"lib/tool.js""#))
 }
+
+// Under a client's key a handle with no digit, written as a file's name, is theirs too.
+@Test func jsonClientHandleWithoutDigitsIsReplaced() throws {
+    let output = String(decoding: try Scrubber.scrub(Data(#"{"user":"jdoe.js","reviewer":"config.ini"}"#.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("jdoe"), "\(output)")
+    #expect(output.contains(#""reviewer":"config.ini""#))
+}
+
+// A number written again with an exponent past any reshaping, its value the same, takes the stand-in.
+@Test func jsonNumberWithAFarExponentStillMatches() throws {
+    let copy = "2128675309" + String(repeating: "0", count: 1 << 20) + "e-" + String(1 << 20)
+    let source = #"{"phone":2128675309,"copy":"# + copy + "}"
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+    #expect(!output.contains("2128675309"), "\(output.prefix(200))")
+    #expect((try? JSONSource.read(output)) != nil)
+}
