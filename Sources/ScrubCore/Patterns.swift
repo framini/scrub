@@ -89,6 +89,7 @@ enum Patterns {
                     if tail.range(of: #"^\.[0-9]|^:[0-9A-Fa-f]"#, options: .regularExpression) != nil { return }
                 }
                 if entity == "SECRET", let cut = URLs.queryValueEnd(ns, range) { range = range.lowerBound..<cut }
+                if entity == "EMAIL_ADDRESS", let start = addressStart(ns, range) { range = start..<range.upperBound }
                 // A piece of a longer identifier ("O72" of "O72-2331-924-76") is that identifier: replaced
                 // alone, it would leave the rest written as it was, so the whole is read.
                 if Self.pieceKinds.contains(entity) { range = Self.whole(range, of: units) }
@@ -203,6 +204,16 @@ enum Patterns {
         let before = ns.substring(with: NSRange(location: from, length: start - from))
         guard let match = TextRanges.matches(keyTail, in: before).last else { return nil }
         return (before as NSString).substring(with: match.range(at: 1))
+    }
+    /// Before a key's or a query's value: "user=", "/reset?email=", "uid=7|", "/users/".
+    private static let joinedKey = TextPattern(#"^(?:/[^@\s]*[/?&=]|[A-Za-z_][A-Za-z0-9_.-]{0,31}[=|](?:[^@\s]*[=|&])?)(?=[^@/?&=|]+@)"#)
+    /// Where an address read with a key, a path or a query before it starts: the marks
+    /// that join them are allowed in an address's local part, but a local part written
+    /// so is a key and its value ("user=ofelia@…"), not one address. Nil when it starts where read.
+    private static func addressStart(_ ns: NSString, _ range: Range<Int>) -> Int? {
+        let value = ns.substring(with: NSRange(location: range.lowerBound, length: range.count))
+        guard value.contains(where: { "=/?&|".contains($0) }), let match = TextRanges.matches(joinedKey, in: value).first else { return nil }
+        return range.lowerBound + NSMaxRange(match.range)
     }
     private static let credentials = TextPattern(#"[A-Za-z][A-Za-z0-9+.\-]*://[^\s/@]*:$"#)
     /// Whether `start` follows a URL's scheme and user name ("https://deploy:").

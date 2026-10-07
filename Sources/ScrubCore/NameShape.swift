@@ -105,6 +105,8 @@ enum NameShape {
             parts.removeLast()
         }
         while let first = parts.first, isRole(first.text) || joining.contains(first.bare) || commands(first, in: text) || parts.count > 1 && opener(first) { parts.removeFirst() }
+        // "at 4:12 PM Jasper Thornquist": the time's half of the day and its zone go with the time.
+        while parts.count > 1, clock.contains(parts[0].bare), afterTime(parts[0].range.lowerBound, in: text) { parts.removeFirst() }
         // "Customer Tomasz O'Sullivan": the word for whose record it is goes; "Customer Service" was never anyone.
         if let first = parts.first, parties.contains(first.bare), first.text.first?.isUppercase == true {
             let rest = parts.dropFirst().filter { !joining.contains($0.bare) }
@@ -125,6 +127,14 @@ enum NameShape {
         // Only cut, never grown.
         guard range.lowerBound >= span.range.lowerBound, range.upperBound <= span.range.upperBound, !range.isEmpty else { return nil }
         return Span(range: range, entity: span.entity, score: span.score)
+    }
+
+    /// The words a clock time writes after its digits: its half of the day and its zone.
+    private static let clock: Set<String> = ["am", "pm", "utc", "gmt", "est", "edt", "cst", "cdt", "mst", "mdt", "pst", "pdt", "bst", "cet", "cest", "ist"]
+    /// Whether `start` follows a clock time ("4:12", "16:05", "9"), across spaces and the clock's words before it.
+    private static func afterTime(_ start: Int, in text: String) -> Bool {
+        let before = (text as NSString).substring(to: start)
+        return before.range(of: #"\d(?:[ \t]*(?i:a\.?m\.?|p\.?m\.?|utc|gmt|[a-z]{1,2}[sd]t|bst|cet|cest|ist))*[ \t]*$"#, options: .regularExpression) != nil
     }
 
     /// A month or weekday written as part of a date: "June 22", "22 June",
