@@ -215,6 +215,8 @@ enum NameCues {
         guard at > 0, let mark = Unicode.Scalar(ns.character(at: at - 1)), !".!?:;\"“(\n\r-–—•*>".unicodeScalars.contains(mark) else { return false }
         let previous = Context.words(before: range.lowerBound, in: text, limit: 1, pattern: letters).first
         let next = Context.words(after: range.upperBound, in: text, limit: 1, pattern: letters).first
+        // A name learned elsewhere must not turn "a Rod" or "an Amber" into that person.
+        if previous.map({ ["a", "an"].contains($0.lowercased()) }) == true { return false }
         return previous?.first?.isLowercase == true || next?.first?.isLowercase == true
     }
 

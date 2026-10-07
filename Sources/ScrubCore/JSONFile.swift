@@ -129,8 +129,9 @@ public enum JSONFile: FileFormat {
         // A score like 0.99 under "dob" or "city" rates the field; it holds no value of it.
         // So is a small one written with a decimal point ("1.00"); 2128675309.0 is still a phone number.
         if let hint = KeyHints.hint(key) { return value.rounded() == value && (abs(value) >= 1000 || !number.contains(".") && !number.lowercased().contains("e")) ? hint : nil }
+        guard !number.hasPrefix("-") else { return nil }
         let floating = number.contains(".") || number.contains("e") || number.contains("E")
-        let integer = floating ? String(format: "%.0f", abs(value)) : (number.hasPrefix("-") ? String(number.dropFirst()) : number)
+        let integer = floating ? String(format: "%.0f", value) : number
         let digits = integer.compactMap(\.wholeNumberValue)
         guard (13...19).contains(digits.count) else { return nil }
         let compact = (key ?? "").lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }

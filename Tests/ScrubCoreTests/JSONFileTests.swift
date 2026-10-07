@@ -497,3 +497,21 @@ func bareNameKeyNeedsAPersonRecord(_ input: String, _ replaced: Bool) throws {
         #expect(!output.contains(#""copy":100e"#) && !output.contains(#""copy":0.10e"#), "\(output)")
     }
 }
+
+// A count or a measurement can pass an identifier's checksum by chance; it stays as written.
+@Test(arguments: ["count", "total", "bytes", "duration", "ratio"])
+func jsonMeasurementsAreNoIdentifiers(_ key: String) throws {
+    for number in ["4111111111111111", "173296534"] {
+        let source = "{\"\(key)\":\(number),\"email\":\"quill.harbor@example.org\"}"
+        let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+        #expect(output.hasPrefix("{\"\(key)\":\(number),\"email\":") && !output.contains("quill.harbor"), "\(output)")
+    }
+}
+
+// A negative number is a card's only under a key that names one; a secret's key still takes it.
+@Test func jsonNegativeNumbersNeedAKeyToNameThem() throws {
+    let source = #"{"value":-9223372036854775809,"card_number":4111111111111111,"password":-12345}"#
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+    #expect(output.contains("-9223372036854775809") && !output.contains("4111111111111111") && !output.contains("-12345"), "\(output)")
+    _ = try JSONSource.read(output)
+}

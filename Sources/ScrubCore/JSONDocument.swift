@@ -220,6 +220,10 @@ final class JSONDocument {
         }
         @inline(never)
         private func collectNumber(_ document: JSONDocument, _ number: String, key: String?, path: String, records: [Int], keys: [String], typed: Set<String>) {
+            // Counts and measurements can pass an identifier's checksum by chance.
+            // Exclude them from both individual detection and column inference.
+            if DocumentLeaf.holdsNoOnesData(key)
+                || KeyHints.hint(key) == nil && KeyHints.words(key).last.map(Self.measures.contains) == true { return }
             population[keys.joined(separator: "."), default: []].append(number)
             guard let entity = JSONFile.numericEntity(key: key, number: number, context: Self.naming(keys, typed)) else {
                 if (7...20).contains(number.count), number.allSatisfy({ $0.isASCII && $0.isNumber }) {
