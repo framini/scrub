@@ -323,9 +323,7 @@ public enum XMLFile: FileFormat {
             }
             markedValues += name(values)
             let unresolved = values.flatMap(\.unresolved)
-            var output = counts.isEmpty ? text : XMLSerialization.render(document)
-            output = output.replacingOccurrences(of: #"^<\?xml(?=\s)[\s\S]*?\?>\s*"#, with: "", options: .regularExpression)
-            if declarationEnd(in: source) != nil, let end = text.range(of: "?>") { output = String(text[..<end.upperBound]) + "\n" + output }
+            let output = counts.isEmpty ? text : keepingLayout(of: text, in: XMLSerialization.render(document))
             guard try parses(Data(output.utf8)) else { throw ScrubError.unsupported("internal") }
             var marks: [Mark] = []
             for (value, entity, byHand) in markedValues where !value.isEmpty {
@@ -452,6 +450,56 @@ public enum XMLFile: FileFormat {
         try XMLDepth.check(Data(text.utf8))
         guard let document = try? XMLDocument(data: Data(text.utf8), options: XMLSerialization.parseOptions) else { return false }
         return document.dtd == nil && document.rootElement() != nil
+    }
+    /// The rendered document with the source's own text around its root: the
+    /// declaration as written, the space, line breaks and final newline
+    /// between the comments and instructions before and after the root, which
+    /// rendering drops, and CR LF line ends. Those comments and instructions are the rendered ones,
+    /// replaced as any value is. Rendered as is when the two don't line up.
+    static func keepingLayout(of source: String, in rendered: String) -> String {
+        guard let original = outside(source), let made = outside(rendered) else { return rendered }
+        let declared = { (token: Substring) in token.hasPrefix("<?xml") && token.dropFirst(5).first.map { $0.isWhitespace } == true }
+        func nodes(_ tokens: [Substring]) -> [Substring] { tokens.filter { !$0.first!.isWhitespace && !declared($0) } }
+        guard nodes(original.before).count == nodes(made.before).count, nodes(original.after).count == nodes(made.after).count else { return rendered }
+        func rebuild(_ tokens: [Substring], from rendered: [Substring]) -> String {
+            var next = nodes(rendered).makeIterator()
+            return tokens.map { $0.first!.isWhitespace || declared($0) ? String($0) : String(next.next()!) }.joined()
+        }
+        // A parser reads every line break as a line feed: a file that ends its lines with CR LF gets them back.
+        let feeds = source.utf8.lazy.filter { $0 == 10 }.count
+        let crlf = feeds > 0 && source.components(separatedBy: "\r\n").count - 1 == feeds
+        let root = crlf ? rendered[made.root].replacingOccurrences(of: "(?<!\r)\n", with: "\r\n", options: .regularExpression) : String(rendered[made.root])
+        return rebuild(original.before, from: made.before) + root + rebuild(original.after, from: made.after)
+    }
+    /// A document's text before and after its root element, as runs of space,
+    /// comments and instructions, and the root's own range; nil if anything else is there.
+    private static func outside(_ text: String) -> (before: [Substring], root: Range<String.Index>, after: [Substring])? {
+        var start = text.startIndex, end = text.endIndex
+        var before: [Substring] = [], after: [Substring] = []
+        while start < end, text[start] != "<" || text[start...].hasPrefix("<!--") || text[start...].hasPrefix("<?") {
+            let tail = text[start...]
+            let stop: String.Index?
+            if tail.first!.isWhitespace { stop = tail.firstIndex { !$0.isWhitespace } ?? end }
+            else if tail.hasPrefix("<!--") { stop = tail.range(of: "-->")?.upperBound }
+            else if tail.hasPrefix("<?") { stop = tail.range(of: "?>")?.upperBound }
+            else { return nil }
+            guard let stop else { return nil }
+            before.append(text[start..<stop])
+            start = stop
+        }
+        while end > start {
+            let head = text[start..<end]
+            let from: String.Index?
+            if head.last!.isWhitespace { from = head.lastIndex { !$0.isWhitespace }.map { text.index(after: $0) } ?? start }
+            else if head.hasSuffix("-->") { from = head.range(of: "<!--", options: .backwards)?.lowerBound }
+            else if head.hasSuffix("?>") { from = head.range(of: "<?", options: .backwards)?.lowerBound }
+            else { break }
+            guard let from, from > start else { return nil }
+            after.insert(text[from..<end], at: 0)
+            end = from
+        }
+        guard start < end, text[start] == "<", text[text.index(before: end)] == ">" else { return nil }
+        return (before, start..<end, after)
     }
     private static func declarationEnd(in text: String) -> String.Index? {
         let start = text.hasPrefix("\u{FEFF}") ? text.index(after: text.startIndex) : text.startIndex
