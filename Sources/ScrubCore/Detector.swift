@@ -170,7 +170,11 @@ public final class Detector {
             if KeyHints.isRole(key), let name = Self.writtenName(text) { return [Span(range: name, entity: "PERSON", score: 1)] }
             // So is a handle there ("author": "maria.gonzalez", "jdoe42"): the role's person, by another name;
             // and under a client's key ("user": "jdoe.js"), whatever it ends in.
-            if KeyHints.isRole(key) || Self.clientKey(key), Self.isHandle(text, client: Self.clientKey(key)) { return [Span(range: 0..<(text as NSString).length, entity: "USERNAME", score: 1)] }
+            let bare = text.trimmingCharacters(in: .whitespaces)
+            if KeyHints.isRole(key) || Self.clientKey(key), Self.isHandle(bare, client: Self.clientKey(key)), let found = text.range(of: bare) {
+                let start = NSRange(found, in: text).location
+                return [Span(range: start..<(start + (bare as NSString).length), entity: "USERNAME", score: 1)]
+            }
             // A time zone ("America/New_York") names a region, not where someone lives.
             if text.contains("/"), text.count < 64, !TextRanges.matches(Self.timeZone, in: text).isEmpty { return [] }
             let plainWord = text.allSatisfy { $0.isASCII && $0.isLowercase }

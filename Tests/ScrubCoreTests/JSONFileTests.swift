@@ -469,3 +469,17 @@ func bareNameKeyNeedsAPersonRecord(_ input: String, _ replaced: Bool) throws {
     #expect(!output.contains("2128675309"), "\(output.prefix(200))")
     #expect((try? JSONSource.read(output)) != nil)
 }
+
+// A client's handle with spaces around it is replaced, the spaces kept.
+@Test func jsonPaddedClientHandleIsReplaced() throws {
+    let output = String(decoding: try Scrubber.scrub(Data(#"{"user":" jdoe.js ","assignee":"  maria.lopez"}"#.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("jdoe") && !output.contains("maria.lopez"), "\(output)")
+    #expect(output.range(of: #""user":" [^ "]+ ","assignee":"  [^ "]+""#, options: .regularExpression) != nil, "\(output)")
+}
+
+// A number at the far end of the exponent's range, written again with a place after the point, matches its value.
+@Test func jsonNumberAtTheExponentsEndMatchesAnotherSpelling() throws {
+    let source = #"{"password":1e-9223372036854775808,"copy":1.0e-9223372036854775808}"#
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+    #expect(!output.contains("1.0e-"), "\(output)")
+}

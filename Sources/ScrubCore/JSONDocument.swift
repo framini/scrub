@@ -336,7 +336,8 @@ final class JSONDocument {
             personTypes.contains(type) ? "patient" : otherTypes.contains(type) ? "institution" : nil
         }
         /// The record types a reference names something other than a person by: every resource the
-        /// health record standard's fourth and fifth releases list, but its people's.
+        /// health record standard's fourth and fifth releases list, but its people's and those that may
+        /// stand for one (a study's subject, a relative's history), whose display the key they are under names.
         private static let otherTypes: Set<String> = [
             "Account", "ActivityDefinition", "ActorDefinition", "AdministrableProductDefinition", "AdverseEvent", "AllergyIntolerance",
             "Appointment", "AppointmentResponse", "ArtifactAssessment", "AuditEvent", "Basic", "Binary", "BiologicallyDerivedProduct",
@@ -347,7 +348,7 @@ final class JSONDocument {
             "DetectedIssue", "Device", "DeviceAssociation", "DeviceDefinition", "DeviceDispense", "DeviceMetric", "DeviceRequest", "DeviceUsage",
             "DeviceUseStatement", "DiagnosticReport", "DocumentManifest", "DocumentReference", "DomainResource", "EffectEvidenceSynthesis",
             "Encounter", "EncounterHistory", "Endpoint", "EnrollmentRequest", "EnrollmentResponse", "EpisodeOfCare", "EventDefinition", "Evidence",
-            "EvidenceReport", "EvidenceVariable", "ExampleScenario", "ExplanationOfBenefit", "FamilyMemberHistory", "Flag", "FormularyItem",
+            "EvidenceReport", "EvidenceVariable", "ExampleScenario", "ExplanationOfBenefit", "Flag", "FormularyItem",
             "GenomicStudy", "Goal", "GraphDefinition", "Group", "GuidanceResponse", "HealthcareService", "ImagingSelection", "ImagingStudy",
             "Immunization", "ImmunizationEvaluation", "ImmunizationRecommendation", "ImplementationGuide", "Ingredient", "InsurancePlan",
             "InventoryItem", "InventoryReport", "Invoice", "Library", "Linkage", "List", "Location", "ManufacturedItemDefinition", "Measure",
@@ -359,7 +360,7 @@ final class JSONDocument {
             "NutritionOrder", "NutritionProduct", "Observation", "ObservationDefinition", "OperationDefinition", "OperationOutcome", "Organization",
             "OrganizationAffiliation", "PackagedProductDefinition", "Parameters", "PaymentNotice", "PaymentReconciliation", "Permission",
             "PlanDefinition", "Procedure", "Provenance", "Questionnaire", "QuestionnaireResponse", "RegulatedAuthorization", "RequestGroup",
-            "RequestOrchestration", "Requirements", "ResearchDefinition", "ResearchElementDefinition", "ResearchStudy", "ResearchSubject",
+            "RequestOrchestration", "Requirements", "ResearchDefinition", "ResearchElementDefinition", "ResearchStudy",
             "Resource", "RiskAssessment", "RiskEvidenceSynthesis", "Schedule", "SearchParameter", "ServiceRequest", "Slot", "Specimen",
             "SpecimenDefinition", "StructureDefinition", "StructureMap", "Subscription", "SubscriptionStatus", "SubscriptionTopic", "Substance",
             "SubstanceDefinition", "SubstanceNucleicAcid", "SubstancePolymer", "SubstanceProtein", "SubstanceReferenceInformation",
@@ -458,9 +459,8 @@ final class JSONDocument {
         guard !digits.isEmpty else { return "0" }
         let zeros = digits.reversed().prefix { $0 == "0" }.count
         digits = digits.dropLast(zeros)
-        let (shifted, under) = parts.power.subtractingReportingOverflow(parts.fraction.count)
-        let (power, over) = shifted.addingReportingOverflow(zeros)
-        guard !under, !over else { return nil }
+        let (power, over) = parts.power.addingReportingOverflow(zeros - parts.fraction.count)
+        guard !over else { return nil }
         return (parts.negative ? "-" : "") + digits + "e" + String(power)
     }
     /// The number `value` written in `like`'s shape: its exponent as written, and at least as many

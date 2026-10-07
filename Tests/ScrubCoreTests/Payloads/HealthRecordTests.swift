@@ -205,3 +205,10 @@ private func aHealthRecordBundleKeepsOnePatientAndEveryCode(_ name: String) thro
     let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json").output, as: UTF8.self)
     #expect(output == source, "\(output)")
 }
+
+/// A study's subject and a relative's history may stand for a person: under a person's key their display is replaced.
+@Test func aSubjectStandingForAPersonIsNamed() throws {
+    let source = #"{"subject":{"reference":"ResearchSubject/42","display":"Ilse Marrow"},"patient":{"reference":"FamilyMemberHistory/7","display":"Tomas Fenwick"}}"#
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("Marrow") && !output.contains("Fenwick"), "\(output)")
+}
