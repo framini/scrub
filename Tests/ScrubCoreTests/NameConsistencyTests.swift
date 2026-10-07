@@ -120,4 +120,18 @@ struct NameConsistencyTests {
             #expect(spouse.hasSuffix(" " + (Self.standIn(result, "Underhill-Graves") ?? "?")), "seed \(seed): \(output)")
         }
     }
+
+    /// A full name closing a file's name before its extension is replaced whole, as the
+    /// home folder spelling the same person is; a file named with ordinary words stays.
+    @Test func aNameInAFilesNameIsReplacedWhole() throws {
+        let report = "Process:  Ledgerly [4412]\nLast file: /Users/genevieve.oduya/Documents/2025 return - Genevieve Oduya.ledger\nAlso open: Annual Report.pdf\n"
+        let json = #"{"recent": ["/Users/genevieve.oduya/Documents/2025 return - Genevieve Oduya.ledger", "/Users/genevieve.oduya/Documents/Annual Report.pdf"]}"#
+        for (text, file) in [(report, "crash.txt"), (json, "recent.json")] {
+            let (result, output) = try Self.scrub(text, file)
+            #expect(!output.contains("Oduya") && !output.lowercased().contains("genevieve"), "\(output)")
+            #expect(output.contains("Annual Report.pdf"), "\(output)")
+            let full = try #require(Self.standIn(result, "Genevieve Oduya"), "\(result.findings.map(\.original))")
+            #expect(output.contains(" - \(full).ledger"), "\(output)")
+        }
+    }
 }

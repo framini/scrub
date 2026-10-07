@@ -186,6 +186,7 @@ public final class Detector {
                 span.entity == "ADDRESS" ? Self.addressRange(span.range, in: text as NSString).map { Span(range: $0, entity: span.entity, score: span.score) } : span
             }
             spans.append(contentsOf: Self.spelledByEmail(spans, in: text, isCancelled: isCancelled))
+            if text.contains(".") { spans.append(contentsOf: Self.namedFiles(in: text)) }
             spans.append(contentsOf: RecordIDs.spans(in: text))
             spans.append(contentsOf: system(text))
             var organisations: [Range<Int>] = []
@@ -406,6 +407,22 @@ public final class Detector {
             }
         }
         return found
+    }
+    /// A person's full name closing a file's name before its extension ("2025 return - Genevieve
+    /// Oduya.ledger", "Lease_Odalys_Ferriter.pdf"), which no reader takes for a name with the
+    /// extension stuck to it: a known first name opening it, and no ordinary word in it.
+    private static let namedFile = TextPattern(#"(?<![\p{L}\p{N}'’.-])(\p{Lu}[\p{L}'’-]+(?:[ _]\p{Lu}[\p{L}'’-]+){1,3})\.[A-Za-z][A-Za-z0-9]{1,5}(?![\p{L}\p{N}])"#)
+    static func namedFiles(in text: String) -> [Span] {
+        TextRanges.matches(namedFile, in: text).compactMap { match in
+            let stem = TextRanges.substring(text, match.range(at: 1).location..<NSMaxRange(match.range(at: 1)))
+            var words = stem.split(whereSeparator: { $0 == " " || $0 == "_" })
+            // What the file is opens its name before whose it is ("Lease_Odalys_Ferriter").
+            while words.count > 2, !NameLists.isFirst(String(words[0])) { words.removeFirst() }
+            guard words.count >= 2, let first = words.first.map(String.init), NameLists.isFirst(first), !NameLists.isWord(first),
+                  words.dropFirst().allSatisfy({ NameLists.isName(String($0)) || !NameLists.isWord(String($0)) }) else { return nil }
+            let start = match.range(at: 1).location + (String(stem[..<words[0].startIndex]) as NSString).length
+            return Span(range: start..<NSMaxRange(match.range(at: 1)), entity: "PERSON", score: 0.85)
+        }
     }
     /// Found by what the value is, whatever it sits under: an email, a card that
     /// passes its check digit, an IBAN, an IP address, a key with a known prefix.
