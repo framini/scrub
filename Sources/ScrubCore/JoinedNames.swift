@@ -34,6 +34,7 @@ enum JoinedNames {
         var score: Double
         /// A place the tagger read that is also a given name ("Rania"): one only beside another piece.
         var place: Bool
+        let span: Span
     }
 
     /// `kept` and `doubts` with the pieces of each person joined; a doubted
@@ -44,24 +45,24 @@ enum JoinedNames {
         var pieces: [Piece] = []
         var others: [Span] = [], otherDoubts: [Span] = []
         for span in kept {
-            if span.entity == "PERSON", span.url == nil { pieces.append(Piece(range: span.range, sure: true, score: span.score, place: false)) }
+            if span.entity == "PERSON", span.url == nil { pieces.append(Piece(range: span.range, sure: true, score: span.score, place: false, span: span)) }
             else if span.entity == "LOCATION", case let value = word(span.range), !value.contains(" "), NameLists.isFirst(value), !NameLists.isOrdinary(value) {
-                pieces.append(Piece(range: span.range, sure: true, score: span.score, place: true))
+                pieces.append(Piece(range: span.range, sure: true, score: span.score, place: true, span: span))
                 others.append(span)
             } else { others.append(span) }
         }
         for doubt in doubts {
-            if doubt.entity == "PERSON" { pieces.append(Piece(range: doubt.range, sure: false, score: doubt.score, place: false)) } else { otherDoubts.append(doubt) }
+            if doubt.entity == "PERSON" { pieces.append(Piece(range: doubt.range, sure: false, score: doubt.score, place: false, span: doubt)) } else { otherDoubts.append(doubt) }
         }
         guard !pieces.isEmpty else { return (kept, doubts) }
         pieces.sort { $0.range.lowerBound != $1.range.lowerBound ? $0.range.lowerBound < $1.range.lowerBound : $0.range.upperBound > $1.range.upperBound }
         // Pieces side by side on one line, with what may stand inside a name between them.
-        var groups: [[Piece]] = []
+        // Pieces that overlap are left as they were read, for the findings' own order to settle.
+        var groups: [[Piece]] = [], tangled: Set<Int> = []
         for piece in pieces {
             if var last = groups.last, let end = last.map(\.range.upperBound).max() {
                 if piece.range.lowerBound < end {
-                    // Inside or across one already taken: part of it.
-                    last.append(piece); groups[groups.count - 1] = last; continue
+                    last.append(piece); groups[groups.count - 1] = last; tangled.insert(groups.count - 1); continue
                 }
                 let gap = word(end..<piece.range.lowerBound)
                 if !TextRanges.matches(bridge, in: gap).isEmpty {
@@ -72,7 +73,14 @@ enum JoinedNames {
         }
         var people: [Span] = [], doubted: [Span] = []
         var joinedPlaces: [Range<Int>] = []
-        for group in groups {
+        for (index, group) in groups.enumerated() {
+            if tangled.contains(index) {
+                for piece in group where !piece.place {
+                    let span = Span(range: unsuffixed(piece.range, in: text), entity: piece.span.entity, score: piece.span.score)
+                    if piece.sure { people.append(span) } else { doubted.append(span) }
+                }
+                continue
+            }
             // A place alone stays a place.
             if group.allSatisfy(\.place) { continue }
             if group.count > 1 { joinedPlaces += group.filter(\.place).map(\.range) }
@@ -131,11 +139,12 @@ enum JoinedNames {
                   case let word = (before as NSString).substring(with: match.range(at: 1)), given(word), NameLists.isFirst(word), !NameLists.isWordlike(word), !NameLists.isOrdinary(word) {
             lower = head + match.range.location
         }
-        // A suffix says which of a family it is, not who: it stays as written after the stand-in ("… Jr.").
-        if let match = TextRanges.matches(suffix, in: ns.substring(with: NSRange(location: lower, length: upper - lower))).first, match.range.location > 0 {
-            upper = lower + match.range.location
-        }
-        return (lower..<upper, nicknamed)
+        return (unsuffixed(lower..<upper, in: text), nicknamed)
+    }
+    /// A suffix says which of a family it is, not who: it stays as written after the stand-in ("… Jr.").
+    private static func unsuffixed(_ range: Range<Int>, in text: String) -> Range<Int> {
+        guard let match = TextRanges.matches(suffix, in: TextRanges.substring(text, range)).first, match.range.location > 0 else { return range }
+        return range.lowerBound..<(range.lowerBound + match.range.location)
     }
     /// A suffix ending a name, with the comma or space before it.
     private static let suffix = TextPattern(#"(?<=\p{L}\p{L}),? (?:Jr|Sr|II|III|IV)\.?$"#)

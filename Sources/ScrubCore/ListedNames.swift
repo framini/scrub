@@ -73,7 +73,10 @@ enum ListedNames {
     private static let lowerCued = TextPattern(#"(?:(?<![\p{L}\p{N}])(?:spoke (?:to|with)|talked (?:to|with)|ask|asked|cc|bcc|ping|pinged|per|according to|assigned to|reassigned to|escalated to|forwarded to|handed (?:over )?to)[ \t]+|@)(\p{Ll}+)(?![\p{L}\p{N}@.'’-])|(?<![\p{L}\p{N}@.'’-])(\p{Ll}+)(?= (?:said|says|mentioned|emailed|replied|confirmed|wrote|texted|messaged)\b)"#)
 
     /// The people chat lines are spoken by. A speaker is a listed first name
-    /// that is no word; one that is also a word ("will:", "mark:") is too
+    /// that is no word, or in a transcript of two speakers or more one that is
+    /// a word and speaks again ("wren:" twice); beside such a speaker, one no
+    /// list holds. One that is also a word and speaks once ("will:"), or one no
+    /// list holds that speaks again with no listed speaker beside it, is too
     /// likely to ignore and not sure enough to replace, so it is in `unsure`.
     /// So is a lowercase name that is also a word after what names a person
     /// in chat ("spoke to will", "ask grace about it"): never replaced on a
@@ -82,17 +85,30 @@ enum ListedNames {
         var sure: [Span] = [], unsure: [Span] = []
         let ns = text as NSString
         if text.contains(":") || text.contains("<") {
-            // Beside a listed speaker, one no list or dictionary holds speaks too ("deepa:").
-            var unknown: [Span] = []
+            // Each speaker's lines: in a transcript of two speakers or more, one who speaks again is someone.
+            var lines: [String: [Range<Int>]] = [:], order: [String] = []
             for match in TextRanges.matches(speaker, in: text, isCancelled: isCancelled) {
                 let group = match.range(at: 1).location != NSNotFound ? match.range(at: 1) : match.range(at: 2)
                 let word = ns.substring(with: group)
                 guard word.count >= 2, !People.isTitle(word), !NameShape.isRole(word) else { continue }
-                let span = Span(range: group.location..<NSMaxRange(group), entity: "PERSON", score: cuedScore)
-                if !NameLists.isFirst(word) { if word.count >= 3, !NameLists.isWord(word) { unknown.append(span) }; continue }
-                if NameLists.isWordlike(word) || NameLists.isOrdinary(word) { unsure.append(Span(range: span.range, entity: "PERSON", score: Doubt.unconfirmed.confidence)) } else { sure.append(span) }
+                if lines[word] == nil { order.append(word) }
+                lines[word, default: []].append(group.location..<NSMaxRange(group))
             }
-            if !sure.isEmpty { sure += unknown }
+            let transcript = lines.count >= 2
+            // Beside a listed speaker, one no list holds speaks too ("deepa:"); with none, it is asked
+            // about, since a log's lines open with a program's name ("sshd:") as a chat's with a person's.
+            var unknown: [Span] = []
+            func doubted(_ spans: [Span]) -> [Span] { spans.map { Span(range: $0.range, entity: "PERSON", score: Doubt.unconfirmed.confidence) } }
+            for word in order {
+                let spans = lines[word]!.map { Span(range: $0, entity: "PERSON", score: cuedScore) }
+                let again = transcript && spans.count >= 2
+                if !NameLists.isFirst(word) {
+                    if word.count >= 3, again && !NameLists.isOrdinary(word) || !NameLists.isWord(word) { unknown += spans }
+                } else if (NameLists.isWordlike(word) || NameLists.isOrdinary(word)) && !again {
+                    unsure += doubted(spans)
+                } else { sure += spans }
+            }
+            if !sure.isEmpty { sure += unknown } else { unsure += doubted(unknown.filter { span in lines[TextRanges.substring(text, span.range)]?.count ?? 0 >= 2 && transcript }) }
         }
         for match in TextRanges.matches(lowerCued, in: text, isCancelled: isCancelled) {
             let group = match.range(at: 1).location != NSNotFound ? match.range(at: 1) : match.range(at: 2)

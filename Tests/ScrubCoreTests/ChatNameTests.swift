@@ -28,6 +28,8 @@ import Testing
         ("[09:14] ingrid: can someone check the refund queue?\n[09:15] ops-bot: queue is empty\n[09:16] ingrid: thanks", ["ingrid"], ["ops", "bot", "queue", "refund"]),
         ("sven: did the customer reply?\ndeepa: not yet, chasing now", ["sven", "deepa"], ["customer", "reply", "chasing"]),
         ("<tomasz> on it\n<leilani> thanks, closing the ticket", ["tomasz", "leilani"], ["closing", "ticket"]),
+        // A name that is also a word speaks twice in a transcript, and the one it talks with no list holds.
+        ("wren: hey kasimirov did u see the refund?\nkasimirov: yeah, fixing it\nwren: ok thx", ["wren", "kasimirov"], ["refund", "fixing"]),
     ]
 
     @Test(arguments: Path.allCases)
@@ -71,6 +73,7 @@ import Testing
         "thanks, will do. I will ask about it tomorrow.",
         "note: customer called twice.\nstatus: pending\nerror: timeout after 30s",
         "the refund is due in june, per the contract; grace period applies.",
+        "INFO: sync started\nWARN: retrying the upload\nINFO: sync done",
     ]
 
     @Test(arguments: Path.allCases)
