@@ -15,6 +15,42 @@ import Testing
     } else { Issue.record("Expected table preview") }
 }
 
+/// A cell holding a body in base64 or as JSON is read inside, as a JSON string's is: each row's
+/// body written again in its own form, one stand-in for one value, the row's other cells kept.
+@Test(arguments: ["Pasted text", "a.csv"])
+func csvCellsHoldingBodiesAreScrubbedInside(_ name: String) throws {
+    let encoded = "eyJwYXNzd29yZCI6InF1aWxsaGFyYm9yIn0="
+    let input = "id,payload,note\n1,\(encoded),\"{\"\"email\"\":\"\"a@example.org\"\",\"\"status\"\":\"\"ok\"\"}\"\n2,\(encoded),\"{\"\"email\"\":\"\"a@example.org\"\",\"\"status\"\":\"\"ok\"\"}\"\n"
+    let result = try Scrubber.scrub(Data(input.utf8), name: name, forceFullDetection: false, seed: 7)
+    let output = String(decoding: result.output, as: UTF8.self)
+    #expect(result.format == "csv")
+    let rows = try CSVFile.parse(output, delimiter: ",")
+    #expect(rows.count == 3 && rows.allSatisfy { $0.count == 3 }, "\(output)")
+    guard rows.count == 3, rows.allSatisfy({ $0.count == 3 }) else { return }
+    #expect(rows[1][0] == "1" && rows[2][0] == "2")
+    #expect(rows[1][1] != encoded && rows[1][1] == rows[2][1], "\(output)")
+    let decoded = try #require(Data(base64Encoded: rows[1][1]).flatMap { String(data: $0, encoding: .utf8) })
+    #expect(decoded.hasPrefix(#"{"password":""#) && !decoded.contains("quillharbor"), "\(decoded)")
+    let note = try #require(try JSONSerialization.jsonObject(with: Data(rows[1][2].utf8)) as? [String: String])
+    #expect(note["status"] == "ok" && note["email"] != "a@example.org" && rows[1][2] == rows[2][2], "\(output)")
+    if case .table(_, _, _, let marks) = result.preview {
+        #expect(marks.contains { $0.row == 0 && $0.column == 1 } && marks.contains { $0.row == 1 && $0.column == 2 })
+    } else { Issue.record("Expected table preview") }
+    // Kept as written in the review, a value goes back into the bodies it came from, and only there.
+    let email = try #require(result.findings.first { $0.original == "a@example.org" })
+    let (choices, kept) = result.keeping([email], choices: result.choices, marks: result.marks)
+    let after = try CSVFile.parse(String(decoding: try result.applying(choices, marks: kept).output, as: UTF8.self), delimiter: ",")
+    #expect(after.count == 3 && after[1][2] == #"{"email":"a@example.org","status":"ok"}"# && after[2][2] == after[1][2] && after[1][1] == rows[1][1], "\(after)")
+}
+
+/// The reported case: two rows, one column of bodies in base64.
+@Test func csvCellsInBase64AreScrubbed() throws {
+    let input = "id,payload\n1,eyJwYXNzd29yZCI6InF1aWxsaGFyYm9yIn0=\n2,eyJwYXNzd29yZCI6InF1aWxsaGFyYm9yIn0=\n"
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "Pasted text", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+    let rows = try CSVFile.parse(output, delimiter: ",")
+    #expect(rows.count == 3 && rows[1][1] == rows[2][1] && !output.contains("eyJwYXNzd29yZCI6InF1aWxsaGFyYm9yIn0="), "\(output)")
+}
+
 @Test(arguments: ["\n=1+1", " =1+1", "\t=1+1", "＝1+1", "＠SUM(A1)", "＋cmd|x", "－cmd|x", "\r@SUM(A1)"])
 func csvNeutralizesFormula(_ cell: String) {
     #expect(CSVFile.neutralize(cell) == "'" + cell)

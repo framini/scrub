@@ -756,6 +756,7 @@ final class AppModel {
     private static func fileExtension(_ format: String) -> String {
         switch format {
         case "json": "json"
+        case "jsonl": "jsonl"
         case "xml": "xml"
         case "csv": "csv"
         default: "txt"

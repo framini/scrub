@@ -308,6 +308,47 @@ public enum KeyHints {
         }
         return nil
     }
+    /// The field a typed identifier's value is, from what its record says it is rather than a
+    /// sibling's plain name: `names` in turn (see `JSONDocument.Collector.typeNames`), as
+    /// {"system": "…/sid/passport-USA", "type": {"text": "Passport Number"}, "value": …} writes them.
+    /// A value whose key says its type ("valueString") is read so too, under its extension's "url".
+    static func typedField(_ key: String, names: [String]) -> String? {
+        guard !names.isEmpty, fieldValueKeys.contains(words(key).joined()) || isChoiceValue(key), hint(key) == nil else { return nil }
+        for name in names { if let field = identifierField(name) { return field } }
+        return nil
+    }
+    /// "valueString", "valueAddress": a record's one value, its key naming the value's type.
+    static func isChoiceValue(_ key: String) -> Bool {
+        key.hasPrefix("value") && key.dropFirst(5).first?.isUppercase == true
+    }
+    /// The key a kind of identifier is written under: "Passport Number", "us-ssn", "Medical
+    /// Record Number", and with a country's code after it, "passport-USA".
+    static func identifierField(_ name: String) -> String? {
+        guard name.utf16.count <= 80, !isToken(name) else { return nil }
+        if let field = header(name) { return field }
+        let parts = words(name)
+        if RecordIDs.isPersonKey(name) { return parts.joined(separator: "_") }
+        if parts.count >= 2, let last = parts.last, (2...3).contains(last.count), last.allSatisfy(\.isLetter),
+           let field = header(parts.dropLast().joined(separator: " ")) { return field }
+        return nil
+    }
+    /// The keys the codes of health records' identifier types (table 0203) stand for: "DL" is a driver's licence.
+    static let identifierTypeCodes: [String: String] = [
+        "DL": "driver_license_number", "PPN": "passport_number", "SS": "ssn", "TAX": "tax_id", "NI": "national_id", "NPI": "npi", "PRN": "id_number",
+        "MR": "mrn", "MRT": "mrn", "PI": "patient_id", "PT": "patient_id", "MA": "member_id", "MC": "member_id", "MB": "member_id", "SN": "subscriber_id"]
+    /// The last part of a URI's path, which names what it identifies: "us-ssn" of
+    /// "http://hl7.org/fhir/sid/us-ssn". Nil for a URI with no path ("http://hospital.example.org").
+    static func uriName(_ value: String) -> String? {
+        guard value.utf16.count <= 256, !value.contains(" ") else { return nil }
+        let rest: Substring
+        if let scheme = value.range(of: "://") {
+            rest = value[scheme.upperBound...].drop { $0 != "/" }
+        } else if value.lowercased().hasPrefix("urn:") {
+            rest = value.dropFirst(4)
+        } else { return nil }
+        let path = rest.prefix { $0 != "?" && $0 != "#" }
+        return path.split(whereSeparator: { $0 == "/" || $0 == ":" }).last.map(String.init)
+    }
     private static let tokenPart = TextPattern(#"\d[A-Za-z]"#)
     /// A record's own ID ("evt_xNptjX29KGaePinQ"), not a field's name: a digit
     /// runs into letters, as no field name writes it ("address1" and "us-ssn"

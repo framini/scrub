@@ -361,8 +361,8 @@ enum ContextStage {
     private static let year = TextPattern(#"(?<!\d)(?:19|20)\d{2}(?!\d)"#)
     private static let link = TextPattern(#"(?i)\b[a-z][a-z0-9+.\-]*://[^\s<>"]+|\bwww\.[^\s<>"]+|(?<![\w&])#\w+"#)
     private static let money = TextPattern(#"(?i)(?:[$£€¥]|\b(?:usd|gbp|gpb|eur|pln|try|chf|cad|aud|inr|jpy)\b)\s?[\d.,]+[kmb]?\b|\b\d[\d.,]*\s?(?:k|m|bn|billion|million|thousand)\b|\b\d{1,3}(?:,\s?\d{3})+(?:\.\d+)?\b"#)
-    private static let fileExtensions: Set<String> = ["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "log", "json", "xml", "zip", "gz", "png", "jpg", "jpeg", "gif", "heic", "mov",
-                                                      "mp4", "mpg", "mp3", "wav", "avi", "ppt", "pptx", "md", "py", "js", "swift", "html", "exe", "dmg"]
+    static let fileExtensions: Set<String> = ["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "log", "json", "xml", "zip", "gz", "png", "jpg", "jpeg", "gif", "heic", "mov",
+                                                      "mp4", "mpg", "mp3", "wav", "avi", "ppt", "pptx", "md", "py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "rb", "go", "rs", "java", "kt", "c", "h", "cpp", "sh", "yml", "yaml", "toml", "css", "html", "exe", "dmg"]
     /// Links and hashtags in `text`, where the stage finds nothing.
     static func links(in text: String) -> [Range<Int>] {
         guard text.contains("://") || text.contains("www.") || text.contains("#") else { return [] }

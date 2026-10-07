@@ -92,8 +92,8 @@ final class AddressModel: Sendable {
     private let convBiases: [[Float]]
     private let out: [Float]
     private let outBias: [Float]
-    /// Features by word, shared across calls.
-    private let known = Mutex<[String: [Float]]>([:])
+    /// Features by word, shared across calls, keyed by its exact scalars (see `NameModel`).
+    private let known = Mutex<[[UInt32]: [Float]]>([:])
     private static let knownLimit = 100_000
 
     /// Whether it reads lines with no number and addresses with none (see `Weights`).
@@ -507,9 +507,9 @@ final class AddressModel: Sendable {
     private func run(_ tokens: ArraySlice<NameModel.Token>, lines: ArraySlice<[Float]>) -> [Float] {
         let count = tokens.count, width = embed + shapes
         var input = [Float](repeating: 0, count: count * width)
-        let keys = tokens.map { String(String.UnicodeScalarView($0.scalars)) }
+        let keys = tokens.map { $0.scalars.map(\.value) }
         var found = known.withLock { cache in keys.map { cache[$0] } }
-        var fresh: [String: [Float]] = [:]
+        var fresh: [[UInt32]: [Float]] = [:]
         for (row, token) in tokens.enumerated() where found[row] == nil {
             let features = fresh[keys[row]] ?? self.features(token.scalars)
             fresh[keys[row]] = features

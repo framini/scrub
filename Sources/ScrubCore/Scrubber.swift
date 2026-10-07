@@ -16,6 +16,7 @@ public enum Scrubber {
         switch format {
         case "json": result = try JSONFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
         case "xml": result = try XMLFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
+        case "jsonl": result = try TextFile.processLines(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
         case "csv": result = try CSVFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
         default: result = try TextFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
         }
@@ -33,6 +34,7 @@ public enum Scrubber {
         let ext = (name as NSString).pathExtension.lowercased()
         switch ext {
         case "json": return "json"
+        case "jsonl", "ndjson": return "jsonl"
         case "xml": return "xml"
         case "csv", "tsv": return "csv"
         case "txt", "md", "markdown", "log", "text": return "text"
@@ -48,6 +50,8 @@ public enum Scrubber {
             catch ScrubError.unsupported("too_deep") { throw ScrubError.unsupported("too_deep") }
             catch {}
         }
+        // A document a line, as a log or an export writes them, before its commas make it a table.
+        if head.hasPrefix("{") || head.hasPrefix("["), try JSONSource.lines(in: text) != nil { return "jsonl" }
         if head.hasPrefix("<"), try XMLFile.parses(Data(head.utf8)) { return "xml" }
         let lines = text.split(whereSeparator: \.isNewline).prefix(20).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         if lines.count >= 2 {

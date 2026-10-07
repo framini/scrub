@@ -33,3 +33,38 @@ import Testing
     }
     try (lines.joined(separator: "\n") + "\n").write(toFile: out, atomically: true, encoding: .utf8)
 }
+
+/// Scrubs whole JSON documents from a JSONL file kept outside the repository: a
+/// line's "json_b64" (its exact bytes) or "json" as a file's bytes, or
+/// its "json_doc" (an object, or a string holding one), and writes one line per
+/// case with the status, the output and any error, so a parser's acceptance and
+/// what is kept or changed can be judged outside.
+/// SCRUB_JSON_CASES=/path runs it; SCRUB_JSON_CASES_OUT=/path receives the outputs.
+@Test func jsonCaseFile() throws {
+    let environment = ProcessInfo.processInfo.environment
+    guard let input = environment["SCRUB_JSON_CASES"], let out = environment["SCRUB_JSON_CASES_OUT"] else { return }
+    var lines: [String] = []
+    for line in try String(contentsOfFile: input, encoding: .utf8).split(separator: "\n") where !line.isEmpty {
+        let row = (try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]) ?? [:]
+        var source = Data()
+        // The bytes as given, where a line gives them: a string read from JSON may lose a leading byte order mark.
+        if let encoded = row["json_b64"] as? String, let bytes = Data(base64Encoded: encoded) { source = bytes }
+        else if let text = row["json"] as? String { source = Data(text.utf8) }
+        else if let text = row["json_doc"] as? String { source = Data(text.utf8) }
+        else if let doc = row["json_doc"], JSONSerialization.isValidJSONObject(doc) { source = try JSONSerialization.data(withJSONObject: doc, options: [.sortedKeys]) }
+        var result: [String: Any] = [:]
+        if let sha = row["sha1"] { result["sha1"] = sha }
+        do {
+            let output = try Scrubber.scrub(source, name: "doc.json", forceFullDetection: false, seed: 7).output
+            result["status"] = "ok"
+            // Decoded so a leading byte order mark stays in the text, as `String(data:encoding:)` would drop it.
+            if String(data: output, encoding: .utf8) != nil { result["out"] = String(decoding: output, as: UTF8.self) } else { result["out_b64"] = output.base64EncodedString() }
+        } catch {
+            result["status"] = "error"
+            result["out"] = "<error>"
+            result["message"] = String(describing: error)
+        }
+        lines.append(String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), as: UTF8.self))
+    }
+    try (lines.joined(separator: "\n") + "\n").write(toFile: out, atomically: true, encoding: .utf8)
+}

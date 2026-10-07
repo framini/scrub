@@ -1270,17 +1270,21 @@ final class StandIns {
             assigned[key] = fake
             return fake
         }
-        // Only the significant digits are personal: the exponent and a plain
-        // decimal's fraction stay, so 2128675309 and 2128675309.0 share a stand-in.
+        // Only the significant digits are personal: the exponent and a fraction of
+        // zeros stay, so 2128675309 and 2128675309.0 share a stand-in. Any other
+        // fraction is drawn too ("pin": 0.98765), a lone zero before it kept.
         let exponent = original.firstIndex { $0 == "e" || $0 == "E" } ?? original.endIndex
         let point = exponent == original.endIndex ? original.firstIndex(of: ".") ?? exponent : exponent
-        let significant = original[..<point].contains(where: { $0.isASCII && $0.isNumber }) ? point : exponent
-        let whole = original[..<significant].filter { $0.isASCII && $0.isNumber }
+        let integer = original[..<point].filter { $0.isASCII && $0.isNumber }
+        let drawsFraction = original[point..<exponent].contains { $0.isASCII && $0.isNumber && $0 != "0" }
+        let significant = drawsFraction || integer.isEmpty ? exponent : point
+        let start = drawsFraction && integer == "0" ? point : original.startIndex
+        let whole = original[start..<significant].filter { $0.isASCII && $0.isNumber }
         // A phone number keeps a real area code and a fictional 555-01xx line.
         let shared = digitKey(entity, whole).flatMap { assigned[$0] }.flatMap { pour($0, into: whole) }.flatMap { checked($0, identifier(whole)) }
         let drawn = shared ?? (entity == "PHONE_NUMBER" && [10, 11].contains(whole.count) ? phoneDigits(whole, address.flatMap { $0.isEmpty ? nil : place(for: $0) }) : number(whole))
         var iterator = drawn.makeIterator()
-        let fake = String(original[..<significant].map { character in
+        let fake = String(original[..<start]) + String(original[start..<significant].map { character in
             character.isASCII && character.isNumber ? iterator.next() ?? character : character
         }) + original[significant...]
         let kept = barelyEnding(entity, original, fake)

@@ -109,7 +109,8 @@ enum Fields {
         let trimmed = value.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, trimmed.utf16.count <= 80, KeyHints.fits("name", trimmed) || entity == "ID_NUMBER" else { return false }
         switch entity {
-        case "ID_NUMBER": return trimmed.contains(where: \.isNumber) && !trimmed.contains(" ")
+        // A UUID among a record's numbers is a system's own key, kept as every UUID is.
+        case "ID_NUMBER": return trimmed.contains(where: \.isNumber) && !trimmed.contains(" ") && !RecordIDs.isUUID(trimmed)
         default:
             return trimmed.allSatisfy { $0.isLetter || " .'’-".contains($0) } && trimmed.split(separator: " ").count <= 5
                 && !KeyHints.isCommonValue(trimmed) && trimmed.first?.isUppercase == true

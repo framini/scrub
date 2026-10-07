@@ -4,7 +4,7 @@ import Foundation
 /// again from what the pipeline made of them. A .json file is one; so is each
 /// body written inside other text (a curl command's, a log line's), and a
 /// string that holds a document of its own ("body": "{\"password\": …}") is
-/// read as one inside the document around it, a few levels deep at most. Only
+/// read as one inside the document around it, to a limit (see `deepest`). Only
 /// the tokens whose value changed are written again (see `JSONSource`).
 final class JSONDocument {
     let source: JSONSource
@@ -17,9 +17,44 @@ final class JSONDocument {
     /// Strings that hold a document of their own, by path, and those that hold one in base64.
     private var nested: [String: JSONDocument] = [:]
     private var encoded: Set<String> = []
-    private static let deepest = 3
+    /// How many documents deep one is read inside another, how many objects and lists deep
+    /// one may start (each adds up to 64, read through the same frames), and how much text,
+    /// in UTF-16 units, the documents strings hold may decode to in one scrub. A string
+    /// holding one past any of them is replaced whole, as a secret is (see `Embedding`).
+    private static let deepest = 16
+    private static let deepestLevel = 192
+    private static let decodable = 64 << 20
+    /// How many objects and lists deep its root sits in the documents around it.
+    private var level = 0
+    /// Numbers no key names, by path, outside fields that say they hold no one's data ("count"):
+    /// one that writes a number replaced elsewhere takes its stand-in (see `render`).
+    private var looseNumbers: Set<String> = []
 
     private init(_ source: JSONSource) { self.source = source }
+
+    /// What a string holds, read as a document: none; a document, sent as a string or in
+    /// base64; or one Scrub reads no further, past the limits or in base64 that reads as no
+    /// document. That one is replaced whole, as a secret's opaque value: nothing it holds is
+    /// written back unread, and the review lists it.
+    enum Embedding {
+        case none, opaque
+        case document(JSONDocument, encoded: Bool)
+    }
+    /// A string holding a document read no further: its stand-in is a secret's.
+    static func opaque(_ string: String, records: [Int]) -> DocumentLeaf { DocumentLeaf(string, key: "secret", records: records) }
+
+    /// What a string holding `child` writes now, unquoted: the document as rendered, in base64
+    /// again where it came so, under one mark over the whole as what it holds can't be shown.
+    /// Nil where nothing changed. A JSON string writes it quoted; a table's cell as it is.
+    static func written(_ child: JSONDocument, encoded: Bool, _ values: [DocumentValue], numbers: [String: (text: String, mark: Mark)]? = nil) -> (String, [Mark])? {
+        let (inner, marks) = numbers.map { child.render(values, numbers: $0) } ?? child.render(values)
+        if encoded {
+            guard inner != child.source.text else { return nil }
+            let text = Data(inner.utf8).base64EncodedString()
+            return (text, marks.first.map { [$0.moved(to: 0..<(text as NSString).length)] } ?? [])
+        }
+        return inner != child.source.text || !marks.isEmpty ? (inner, marks) : nil
+    }
 
     /// What every document of one scrub shares: the leaves they add, the
     /// records they number, and the keys they write.
@@ -95,9 +130,17 @@ final class JSONDocument {
                 guard Self.kindKeys.contains(KeyHints.words(pair.0).joined()), let text = pair.1.stringValue, text.utf16.count <= 64 else { return [] }
                 return KeyHints.words(text)
             })
+            // So does a coded type ({"type": {"text": "Passport Number"}, "value": …}), as a field's name would.
+            let typeNames = Self.typeNames(pairs)
+            let referred = Self.referredRole(pairs, parent: keys.last)
             nextRecord += 1
             let ancestry = KeyHints.isWrapper(pairs.map(\.0)) && !records.isEmpty ? records : records + [nextRecord]
             let named = pairs.compactMap { pair in pair.1.stringValue.map { (pair.0, $0) } }
+            // A name's given names beside its family name ({"family": "Lind", "given": ["Ama", "Rose"]})
+            // are one person's, not several people's: the first is the record's first name.
+            let surnamed = pairs.contains { if case .array = $0.1 { true } else { false } } && named.contains { pair in
+                KeyHints.hint(KeyHints.resolve(pair.0, parent: key, listed: listed, value: pair.1)) == "LAST_NAME"
+            }
             for (index, pair) in pairs.enumerated() {
                 let childPath = path + "/" + String(index)
                 // A field's plain name ("password") is read for what a pattern or a value
@@ -107,9 +150,20 @@ final class JSONDocument {
                 if fieldName { document.fieldKeys.insert(childPath) }
                 items.append(DocumentLeaf(pair.0, fieldName: fieldName))
                 var inherited: String?
+                // A UUID a record's type calls its number is the system's own key, kept as every
+                // UUID is: a record number of any other shape is replaced.
+                let kindField = KeyHints.typedField(pair.0, names: typeNames).flatMap { field in
+                    KeyHints.hint(field) == nil && pair.1.stringValue.map(RecordIDs.isUUID) == true ? nil : field
+                }
                 switch pair.1 {
-                case .object, .array: inherited = KeyHints.namedField(pair.0, siblings: named) ?? KeyHints.resolveContainer(pair.0, parent: key, listed: listed)
-                default: inherited = KeyHints.namedField(pair.0, siblings: named) ?? KeyHints.resolve(pair.0, parent: key, listed: listed, value: pair.1.stringValue)
+                case .object, .array: inherited = KeyHints.namedField(pair.0, siblings: named) ?? kindField ?? KeyHints.resolveContainer(pair.0, parent: key, listed: listed)
+                default: inherited = KeyHints.namedField(pair.0, siblings: named) ?? kindField ?? KeyHints.resolve(pair.0, parent: key, listed: listed, value: pair.1.stringValue)
+                }
+                if KeyHints.hint(inherited) == nil, case .string(let text) = pair.1 {
+                    // A reference's display names what it points to: a person in a role, or a business or a place.
+                    if let referred, pair.0 == "display" { inherited = referred }
+                    // "Patient/5b0e7c2a": a record's type and its ID in the document's store, no one's handle.
+                    if pair.0 == "reference", !TextRanges.matches(Self.storeReference, in: text).isEmpty { inherited = "reference_id" }
                 }
                 // The record's ancestors say whose it is too: "documents": [{"analysis": {"extracted_data": {"expiration_date": …}}}].
                 if let expiry = KeyHints.expiry(pair.0, siblings: pairs.map(\.0), parent: ([key ?? ""] + keys).joined(separator: "_"), kind: kind.union(typed)) { inherited = expiry }
@@ -124,29 +178,37 @@ final class JSONDocument {
                 case .object, .array: reaches = Self.isSlot(pair.0)
                 default: reaches = true
                 }
-                collect(document, pair.1, key: inherited, path: childPath, records: ancestry, keys: keys + [pair.0], depth: depth,
-                        typed: Self.kindKeys.contains(KeyHints.words(pair.0).joined()) || !reaches ? [] : kind.union(typed))
+                let reached = Self.kindKeys.contains(KeyHints.words(pair.0).joined()) || !reaches ? [] : kind.union(typed)
+                if surnamed, case .array(let values) = pair.1, KeyHints.hint(inherited) == "FIRST_NAME" {
+                    collectArray(document, values, key: inherited, path: childPath, records: ancestry, keys: keys + [pair.0], depth: depth, typed: reached, given: true)
+                } else {
+                    collect(document, pair.1, key: inherited, path: childPath, records: ancestry, keys: keys + [pair.0], depth: depth, typed: reached)
+                }
             }
         }
+        /// `given`: the list is one person's given names, the first the record's (see `collectObject`).
         @inline(never)
-        private func collectArray(_ document: JSONDocument, _ values: [JSONValue], key: String?, path: String, records: [Int], keys: [String], depth: Int, typed: Set<String>) {
+        private func collectArray(_ document: JSONDocument, _ values: [JSONValue], key: String?, path: String, records: [Int], keys: [String], depth: Int, typed: Set<String>, given: Bool = false) {
             let pair = JSONFile.coordinateKeys(key, values)
             for (index, child) in values.enumerated() {
                 // Several names or emails in one list may be several people's; one is the record's own.
-                collect(document, child, key: pair?[index] ?? key, path: path + "/" + String(index), records: values.count > 1 && KeyHints.hint(key).map({ ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "USERNAME"].contains($0) }) == true ? [] : records, keys: keys, depth: depth, listed: true, typed: typed)
+                let several = values.count > 1 && KeyHints.hint(key).map({ ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "USERNAME"].contains($0) }) == true
+                collect(document, child, key: pair?[index] ?? key, path: path + "/" + String(index), records: several && !(given && index == 0) ? [] : records, keys: keys, depth: depth, listed: true, typed: typed)
             }
         }
         @inline(never)
         private func collectString(_ document: JSONDocument, _ string: String, key: String?, path: String, records: [Int], keys: [String], depth: Int, typed: Set<String>) {
             guard !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-            // A body sent as a string, or as base64: its own document, read under the key that holds it.
-            if depth < JSONDocument.deepest, let (text, base64) = Self.document(in: string), let inner = try? JSONSource.read(text), Self.holds(inner.root) {
-                let child = JSONDocument(inner)
+            switch embed(string, level: document.level + path.utf8.lazy.filter { $0 == 47 }.count, key: key, records: records, keys: keys, depth: depth, typed: typed) {
+            case .document(let child, let base64):
                 document.nested[path] = child
                 if base64 { document.encoded.insert(path) }
-                collect(child, inner.root, key: key, path: "", records: records, keys: keys, depth: depth + 1,
-                        typed: keys.last.map(Self.isSlot) ?? false ? typed : [])
                 return
+            case .opaque:
+                document.valueIDs[path] = items.count
+                items.append(JSONDocument.opaque(string, records: records))
+                return
+            case .none: break
             }
             document.valueIDs[path] = items.count
             var leaf = DocumentLeaf(string, key: key, records: records, contextWords: Set(keys.flatMap { KeyHints.words($0) }))
@@ -163,6 +225,7 @@ final class JSONDocument {
                 if (7...20).contains(number.count), number.allSatisfy({ $0.isASCII && $0.isNumber }) {
                     bareNumbers.append(BareNumber(document: document, path: path, number: number, key: key, records: records, field: keys.joined(separator: ".")))
                 }
+                if !DocumentLeaf.holdsNoOnesData(keys.last), KeyHints.words(keys.last).last.map(Self.measures.contains) != true { document.looseNumbers.insert(path) }
                 return
             }
             document.valueIDs[path] = items.count
@@ -172,6 +235,9 @@ final class JSONDocument {
             leaf.field = keys.joined(separator: ".")
             items.append(leaf)
         }
+        /// Keys whose number measures something ("ratio": 2128675309.0): never a value written again.
+        private static let measures: Set<String> = ["ratio", "rate", "percent", "percentage", "average", "avg", "mean", "sum", "min", "max", "size", "length", "width", "height",
+                                                    "weight", "duration", "latency", "ms", "seconds", "bytes"]
         /// Keys that only hold a value, naming nothing of their own ("number", "id_value").
         private static let slots: Set<String> = ["number", "num", "no", "nr", "value", "val", "id", "identifier", "ident", "code", "digits", "text", "data", "document", "doc"]
         /// The words that may name an identifier under `keys`: the innermost key's, and where it
@@ -192,6 +258,84 @@ final class JSONDocument {
             let words = KeyHints.words(key)
             return !words.isEmpty && words.allSatisfy(slots.contains)
         }
+        private var decoded = 0
+        /// A value outside any document (a table's cell) that holds one, read as a JSON string holding it is.
+        func embed(_ string: String, key: String?, records: [Int], keys: [String]) -> Embedding {
+            embed(string, level: 0, key: key, records: records, keys: keys, depth: 0, typed: [])
+        }
+        /// A body sent as a string, or as base64: its own document, read under the key that holds it,
+        /// `level` objects and lists deep. Past the limits it is read no further (see `Embedding`).
+        private func embed(_ string: String, level: Int, key: String?, records: [Int], keys: [String], depth: Int, typed: Set<String>) -> Embedding {
+            guard let (text, base64) = Self.document(in: string) else { return .none }
+            // Text that only opens like a document is read as text, unless base64 hid it.
+            guard let inner = try? JSONSource.read(text) else { return base64 ? .opaque : .none }
+            guard Self.holds(inner.root) else { return .none }
+            let units = text.utf16.count
+            guard depth < JSONDocument.deepest, level <= JSONDocument.deepestLevel, decoded + units <= JSONDocument.decodable else { return .opaque }
+            decoded += units
+            let child = JSONDocument(inner)
+            child.level = level
+            collect(child, inner.root, key: key, path: "", records: records, keys: keys, depth: depth + 1,
+                    typed: keys.last.map(Self.isSlot) ?? false ? typed : [])
+            return .document(child, encoded: base64)
+        }
+        /// What a record's own kind says it is, each read as a field's name would be (see `KeyHints.typedField`):
+        /// a coded type's text, each of its codings' display and the key its code stands for, and the last
+        /// part of its system's or its extension's URI. {"system": "…/sid/us-ssn", "type": {"coding":
+        /// [{"code": "DL", "display": "Driver's license number"}], "text": …}}. The texts stay as written.
+        static func typeNames(_ pairs: [(String, JSONValue)]) -> [String] {
+            var names: [String] = []
+            for (key, value) in pairs {
+                switch key {
+                case "type":
+                    guard case .object(let concept) = value else { continue }
+                    for (part, member) in concept {
+                        if part == "text", let text = member.stringValue { names.append(text) }
+                        guard part == "coding", case .array(let codings) = member else { continue }
+                        for case .object(let coding) in codings {
+                            let field = { (name: String) in coding.first { $0.0 == name }?.1.stringValue }
+                            if let display = field("display") { names.append(display) }
+                            // A code means what its table says: one of the identifier types' table, or written with none.
+                            if let code = field("code"), let key = KeyHints.identifierTypeCodes[code], field("system").map({ $0.hasSuffix("0203") }) ?? true { names.append(key) }
+                        }
+                    }
+                case "system", "url":
+                    if let name = value.stringValue.flatMap(KeyHints.uriName) { names.append(name) }
+                default: continue
+                }
+            }
+            return names
+        }
+        /// The key a reference's display is read under: a role, where the record points to a person
+        /// by its reference ("Patient/…", "Practitioner/…") or under a key that names one ("subject",
+        /// "beneficiary"), so the detector reads a written name there; a business's, where it points
+        /// to anything else ("Organization/…", "Location/…") or under "insurer" or "location", so
+        /// the name of a practice or a ward ("Clinic East Wing") stays as written.
+        static func referredRole(_ pairs: [(String, JSONValue)], parent: String?) -> String? {
+            guard pairs.contains(where: { $0.0 == "display" }) else { return nil }
+            if let reference = pairs.first(where: { $0.0 == "reference" })?.1.stringValue,
+               let match = TextRanges.matches(referenceType, in: reference).first {
+                let type = TextRanges.substring(reference, match.range(at: 1).location..<NSMaxRange(match.range(at: 1)))
+                return personTypes.contains(type) ? "patient" : "institution"
+            }
+            guard let parent else { return nil }
+            let word = KeyHints.words(parent).joined()
+            if referringPeople.contains(word) { return KeyHints.isRole(parent) ? parent : "patient" }
+            return referringNoOne.contains(word) ? "institution" : nil
+        }
+        /// The record types a reference names a person by.
+        private static let personTypes: Set<String> = ["Patient", "Practitioner", "PractitionerRole", "RelatedPerson", "Person"]
+        /// Keys whose reference is to a person. A "provider" may be a practice as often as a
+        /// practitioner, so only its reference's type says it is one ("Practitioner/…").
+        private static let referringPeople: Set<String> = ["patient", "subject", "beneficiary", "subscriber", "policyholder", "practitioner", "requester", "performer", "recorder",
+                                                           "asserter", "author", "individual", "enterer", "informant", "attester"]
+        /// Keys whose reference is to an organisation or a place.
+        private static let referringNoOne: Set<String> = ["organization", "organisation", "managingorganization", "serviceprovider", "insurer", "payor", "coverage", "location",
+                                                          "facility", "custodian", "assigner", "partof"]
+        /// A reference by type to a record, alone ("Patient/5b0e7c2a"), at a server ("https://…/Patient/5b0e7c2a"), or by a search ("Practitioner?identifier=…").
+        private static let referenceType = TextPattern(#"(?:^|/)([A-Z][A-Za-z]+)(?:/[A-Za-z0-9.-]{1,64}(?:/_history/[A-Za-z0-9.-]{1,64})?$|\?)"#)
+        /// A reference by type to a record in the document's own store, alone: "Patient/5b0e7c2a", "Encounter/42/_history/2".
+        private static let storeReference = TextPattern(#"^[A-Z][A-Za-z]+/[A-Za-z0-9.-]{1,64}(?:/_history/[A-Za-z0-9.-]{1,64})?$"#)
         /// The document a string writes: itself when it opens as one, or what its base64 decodes to.
         private static func document(in string: String) -> (String, Bool)? {
             guard let first = string.first(where: { !$0.isWhitespace }) else { return nil }
@@ -234,41 +378,114 @@ final class JSONDocument {
         }
         return output == number ? String(number.dropLast()) + String(((Int(String(number.last!)) ?? 0) + 1) % 10) : output
     }
-    /// The document written with each changed token's new value, and the marks over them.
-    /// Whether a stand-in in a key was written inside one of its words: a letter or a digit runs on at either end.
-    private static func insideWord(_ value: DocumentValue) -> Bool {
+    /// Kinds read off words, which a key's own word may only look like: a middle name "The" in "lengthOfTheCurrentLease".
+    private static let wordKinds: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME", "INITIALS", "LOCATION", "REGION", "ADDRESS", "EMPLOYER"]
+    /// A key as scrubbed, each name matched inside one of its words (a letter or a digit runs on
+    /// at either end) written back as it was: a key's word is no name. A secret, an email or an
+    /// ID written into a key ("quillharborMetric") is still replaced. Nil where a name can't be written back.
+    private static func keyWritten(_ value: DocumentValue) -> DocumentValue? {
         let ns = value.text as NSString
         func joins(_ at: Int) -> Bool {
             guard at >= 0, at < ns.length, let scalar = Unicode.Scalar(ns.character(at: at)) else { return false }
             return CharacterSet.alphanumerics.contains(scalar)
         }
-        return value.marks.contains { !$0.range.isEmpty && (joins($0.range.lowerBound - 1) || joins($0.range.upperBound)) }
+        let inside = value.marks.filter { wordKinds.contains($0.entity) && !$0.range.isEmpty && (joins($0.range.lowerBound - 1) || joins($0.range.upperBound)) }
+            .sorted { $0.range.lowerBound < $1.range.lowerBound }
+        guard !inside.isEmpty else { return value }
+        guard inside.allSatisfy({ $0.original != nil }) else { return nil }
+        let edits = inside.map { (range: $0.range, value: $0.original ?? "") }
+        return DocumentValue(text: TextRanges.apply(edits, to: value.text).0, marks: TextRanges.shift(value.marks, by: edits), unresolved: [])
     }
+    /// Each number replaced somewhere, as written, with what a number writing it again is written as:
+    /// its stand-in where that is a number, else the stand-in's digits in its shape.
+    private static func numberStandIns(_ values: [DocumentValue]) -> [String: (text: String, mark: Mark)] {
+        var found: [String: (text: String, mark: Mark)] = [:]
+        for value in values {
+            for mark in value.marks {
+                guard let original = mark.original, found[original] == nil, original.utf8.allSatisfy({ (48...57).contains($0) || [43, 45, 46, 69, 101].contains($0) }),
+                      OriginalMatcher.spreads(original, entity: mark.entity), !TextRanges.matches(OrderedJSON.numberGrammar, in: original).isEmpty else { continue }
+                let fake = TextRanges.substring(value.text, mark.range)
+                guard fake != original else { continue }
+                let digits = fake.filter { $0.isASCII && $0.isNumber }
+                let text = !TextRanges.matches(OrderedJSON.numberGrammar, in: fake).isEmpty ? fake
+                    : original.allSatisfy({ $0.isASCII && $0.isNumber }) && digits.count == original.count && (digits.first != "0" || original.count == 1) ? digits
+                    : numberShaped(like: original, from: fake)
+                found[original] = (text, mark.moved(to: 0..<(text as NSString).length))
+            }
+        }
+        return found
+    }
+    /// The UTF-16 offset in `units` where each unit of the string token at `range` decoded starts, and
+    /// past the last its closing quote: an escape is one unit (`\/`, an escaped letter, half a surrogate pair), as is a shell's `'\''`.
+    private func decodedOffsets(_ range: Range<Int>, in units: [UInt16]) -> [Int] {
+        var offsets: [Int] = [], at = range.lowerBound + 1
+        let end = range.upperBound - 1
+        while at < end {
+            offsets.append(at)
+            if source.shell, units[at] == 39, units[at...].starts(with: [39, 92, 39, 39]) { at += 4 } else if units[at] == 92 { at += units[at + 1] == 117 ? 6 : 2 } else { at += 1 }
+        }
+        return offsets + [end]
+    }
+    /// The document written with each changed token's new value, and the marks over them.
     func render(_ values: [DocumentValue]) -> (String, [Mark]) {
+        render(values, numbers: looseNumbers.isEmpty && nested.isEmpty ? [:] : Self.numberStandIns(values))
+    }
+    private func render(_ values: [DocumentValue], numbers: [String: (text: String, mark: Mark)]) -> (String, [Mark]) {
         var edits: [(range: Range<Int>, value: String, marks: [Mark])] = []
-        func written(_ text: String, _ marks: [Mark], original: String) -> (String, [Mark])? {
-            text == original && marks.isEmpty ? nil : OrderedJSON.quoted(text, marks: marks)
+        var units: [UInt16]?
+        // A string changed in part is written again only where a mark replaced its original, so
+        // every escape around that is kept as written; where the marks don't account for every
+        // change, the whole token is written again.
+        func write(_ text: String, _ marks: [Mark], original: String, at range: Range<Int>) {
+            guard text != original || !marks.isEmpty else { return }
+            if let patches = patches(text, marks, original: original, at: range) { edits += patches; return }
+            let (token, placed) = OrderedJSON.quoted(text, marks: marks)
+            edits.append((range, token, placed))
+        }
+        func patches(_ text: String, _ marks: [Mark], original: String, at range: Range<Int>) -> [(range: Range<Int>, value: String, marks: [Mark])]? {
+            let written = Array(text.utf16)
+            var rebuilt: [UInt16] = [], spans: [(range: Range<Int>, mark: Mark)] = []
+            var cursor = 0
+            for mark in marks.sorted(by: { $0.range.lowerBound < $1.range.lowerBound }) {
+                guard let was = mark.original, mark.range.lowerBound >= cursor, mark.range.upperBound <= written.count else { return nil }
+                rebuilt += written[cursor..<mark.range.lowerBound]
+                let start = rebuilt.count
+                rebuilt += was.utf16
+                spans.append((start..<rebuilt.count, mark))
+                cursor = mark.range.upperBound
+            }
+            rebuilt += written[cursor...]
+            guard !spans.isEmpty, rebuilt.elementsEqual(original.utf16) else { return nil }
+            if units == nil { units = Array(source.text.utf16) }
+            let offsets = decodedOffsets(range, in: units ?? [])
+            guard offsets.count == rebuilt.count + 1 else { return nil }
+            return spans.map { span in
+                let value = String(OrderedJSON.quote(TextRanges.substring(text, span.mark.range)).dropFirst().dropLast())
+                return (offsets[span.range.lowerBound]..<offsets[span.range.upperBound], value, [span.mark.moved(to: 0..<(value as NSString).length)])
+            }
         }
         func walk(_ value: JSONValue, path: String) {
             switch value {
             case .object(let pairs):
-                // A key written again as another's is set apart; two keys the input writes alike stay as written.
+                // A key written again as another's is set apart; two keys the input writes alike stay alike.
                 let given = Set(pairs.map(\.0))
-                var outputs: [String] = []
+                var outputs: [String] = [], chosen: [String: (key: String, marks: [Mark])] = [:]
                 for (index, pair) in pairs.enumerated() {
                     let childPath = path + "/" + String(index)
                     var key = pair.0, marks: [Mark] = []
-                    if let id = keyIDs[childPath] {
-                        let scrubbed = values[id]
-                        let whole = scrubbed.marks.count == 1 && scrubbed.marks[0].range == 0..<(scrubbed.text as NSString).length
-                        // A key's word is no value: a name matched inside one ("lengthOfTheCurrentLease") leaves the key as written.
-                        if !(fieldKeys.contains(childPath) && whole), !Self.insideWord(scrubbed) { key = scrubbed.text; marks = scrubbed.marks }
+                    if let known = chosen[pair.0] {
+                        (key, marks) = known
+                    } else {
+                        if let id = keyIDs[childPath] {
+                            let scrubbed = values[id]
+                            let whole = scrubbed.marks.count == 1 && scrubbed.marks[0].range == 0..<(scrubbed.text as NSString).length
+                            if !(fieldKeys.contains(childPath) && whole), let kept = Self.keyWritten(scrubbed) { key = kept.text; marks = kept.marks }
+                        }
+                        if key != pair.0 { while outputs.contains(key) || given.contains(key) { key += "_"; marks = [] } }
+                        outputs.append(key)
+                        chosen[pair.0] = (key, marks)
                     }
-                    var unique = key
-                    if unique != pair.0 { while outputs.contains(unique) || given.contains(unique) { unique += "_" } }
-                    outputs.append(unique)
-                    if unique != key { marks = [] }
-                    if let range = source.keys[childPath], let (text, placed) = written(unique, marks, original: pair.0) { edits.append((range, text, placed)) }
+                    if let range = source.keys[childPath] { write(key, marks, original: pair.0, at: range) }
                     walk(pair.1, path: childPath)
                 }
             case .array(let members):
@@ -276,19 +493,25 @@ final class JSONDocument {
             case .string(let string):
                 guard let range = source.values[path] else { return }
                 if let child = nested[path] {
-                    let (inner, marks) = child.render(values)
-                    if encoded.contains(path), inner != child.source.text {
+                    if encoded.contains(path) {
                         // Written in base64 again: one mark over the whole, as what it holds can't be shown.
-                        let text = OrderedJSON.quote(Data(inner.utf8).base64EncodedString())
-                        edits.append((range, text, marks.first.map { [$0.moved(to: 1..<((text as NSString).length - 1))] } ?? []))
-                    } else if !encoded.contains(path), inner != child.source.text || !marks.isEmpty {
-                        let (text, placed) = OrderedJSON.quoted(inner, marks: marks); edits.append((range, text, placed))
+                        if let (inner, marks) = Self.written(child, encoded: true, values, numbers: numbers) {
+                            let (text, placed) = OrderedJSON.quoted(inner, marks: marks); edits.append((range, text, placed))
+                        }
+                    } else {
+                        let (inner, marks) = child.render(values, numbers: numbers)
+                        write(inner, marks, original: string, at: range)
                     }
-                } else if let id = valueIDs[path], let (text, placed) = written(values[id].text, values[id].marks, original: string) {
-                    edits.append((range, text, placed))
+                } else if let id = valueIDs[path] {
+                    write(values[id].text, values[id].marks, original: string, at: range)
                 }
             case .number(let number):
-                guard let range = source.values[path], let id = valueIDs[path], values[id].text != number || !values[id].marks.isEmpty else { return }
+                guard let range = source.values[path] else { return }
+                if valueIDs[path] == nil, looseNumbers.contains(path), let copy = numbers[number] {
+                    edits.append((range, copy.text, [copy.mark]))
+                    return
+                }
+                guard let id = valueIDs[path], values[id].text != number || !values[id].marks.isEmpty else { return }
                 let text = values[id].text
                 if TextRanges.matches(OrderedJSON.numberGrammar, in: text).isEmpty {
                     // A stand-in that is no number (a secret's) is written in the number's own shape instead.

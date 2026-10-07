@@ -47,11 +47,41 @@ enum NameTagger {
             if index.isMultiple(of: 64) && isCancelled() { return spans }
             let range = match.range.location..<NSMaxRange(match.range)
             if Names.firstFolded.contains(TextRanges.substring(text, range)), cued(range, in: text) {
+                // A name opening a handle ("maria.gonzalez", "maria_g") is the whole handle's,
+                // so the rest of it goes too; one in a file's name ("maria-cli.js") is no one's.
+                if let handle = handle(around: range, in: text) {
+                    if let span = handle { spans.append(span) }
+                    continue
+                }
                 spans.append(Span(range: range, entity: "PERSON", score: 0.85))
             }
         }
         spans.append(contentsOf: signOffs(in: text))
         return spans
+    }
+    /// The handle a name is joined into by a dot, an underscore or a dash, as a span (a person's
+    /// where only names are joined), or nil inside where it names a file; nil (no handle) where
+    /// the name stands alone or in an email.
+    private static func handle(around range: Range<Int>, in text: String) -> Span?? {
+        let ns = text as NSString
+        func joins(_ unit: unichar) -> Bool { unit < 128 && (CharacterSet.alphanumerics.contains(Unicode.Scalar(unit)!) || unit == 46 || unit == 95 || unit == 45) }
+        var start = range.lowerBound, end = range.upperBound
+        while start > 0, joins(ns.character(at: start - 1)) { start -= 1 }
+        while end < ns.length, joins(ns.character(at: end)) { end += 1 }
+        // A sentence's full stop or a dash closing it is no part of the handle.
+        while end > range.upperBound, [46, 45].contains(ns.character(at: end - 1)) { end -= 1 }
+        while start < range.lowerBound, [46, 45].contains(ns.character(at: start)) { start += 1 }
+        guard start < range.lowerBound || end > range.upperBound else { return nil }
+        if start > 0, [64, 47].contains(ns.character(at: start - 1)) || end < ns.length && ns.character(at: end) == 64 { return nil }
+        let token = ns.substring(with: NSRange(location: start, length: end - start))
+        if let dot = token.lastIndex(of: "."), ContextStage.fileExtensions.contains(token[token.index(after: dot)...].lowercased()) { return .some(nil) }
+        // Names joined by a dash are one person's ("maria-jose").
+        let parts = token.split(separator: "-")
+        if !token.contains(where: { $0 == "." || $0 == "_" || $0.isNumber }), parts.count > 1,
+           parts.allSatisfy({ Names.firstFolded.contains($0.lowercased()) || Names.lastFolded.contains($0.lowercased()) }) {
+            return .some(Span(range: start..<end, entity: "PERSON", score: 0.85))
+        }
+        return .some(Span(range: start..<end, entity: "USERNAME", score: 0.85))
     }
     // A known first name alone on the line after "Thanks," signs the message.
     // The model has no sentence to read it in, so it never tags it.

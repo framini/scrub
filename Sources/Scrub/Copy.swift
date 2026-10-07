@@ -12,7 +12,7 @@ enum Copy {
     ]
     static let howItWorksFooter = "macOS sandboxes the app with no network access, so nothing can be sent anywhere."
 
-    static let formats = "JSON · XML · CSV · TXT · MD · LOG"
+    static let formats = "JSON · JSONL · XML · CSV · TXT · MD · LOG"
 
     static func label(_ entity: String) -> String {
         switch entity {

@@ -25,8 +25,9 @@ public enum JSONFile: FileFormat {
             let (output, marks) = document.render(values)
             let length = (output as NSString).length
             let limit = min(length, 200_000)
-            // With nothing replaced, the input goes back byte for byte (BOM included).
-            return ScrubResult(format: "json", output: marks.isEmpty && output == text ? data : Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: counts, unresolved: values.flatMap(\.unresolved))
+            // With nothing replaced, the input goes back byte for byte; with anything, its BOM still opens it.
+            let bom = data.starts(with: [0xEF, 0xBB, 0xBF]) ? Data([0xEF, 0xBB, 0xBF]) : Data()
+            return ScrubResult(format: "json", output: marks.isEmpty && output == text ? data : bom + Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<limit), marks: marks.filter { $0.range.upperBound <= limit }, truncated: length > limit), counts: counts, unresolved: values.flatMap(\.unresolved))
         }
         progress(.checking, 0, 1)
         var result = try render(values, counts: job.counts)

@@ -67,9 +67,15 @@ public enum CSVFile: FileFormat {
             let people = cells.filter { KeyHints.bareNameIsPerson($0, personsRecord: personsRecord) }.count
             return people > 0 && people * 2 >= cells.count
         })
+        // A cell holding a body (as JSON, or in base64) is read as a JSON string holding one is,
+        // its values read before the cells' and written again in the body's own form.
+        let collector = JSONDocument.Collector()
+        var embedded: [Int: (document: JSONDocument, encoded: Bool, original: String)] = [:]
+        var position = -1
         for row in rows.indices {
             if row.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
             for column in rows[row].indices {
+                position += 1
                 var key = column < keys.count ? keys[column] : nil
                 // A column naming fields holds field names ("zip", "email"), and a bare
                 // "name" is a person's only as it is in JSON.
@@ -84,9 +90,16 @@ public enum CSVFile: FileFormat {
                     key = KeyHints.namedField("value", siblings: texts) ?? key
                 }
                 let header = column < columns.count ? columns[column] : ""
-                leaves.append(DocumentLeaf(rows[row][column], key: key, records: [row], objectPath: header.contains(".") ? String(header[..<header.lastIndex(of: ".")!]).lowercased() : ""))
+                switch collector.embed(rows[row][column], key: key, records: [row], keys: header.isEmpty ? [] : [header]) {
+                case .document(let document, let encoded): embedded[position] = (document, encoded, rows[row][column])
+                case .opaque: leaves.append(JSONDocument.opaque(rows[row][column], records: [row]))
+                case .none: leaves.append(DocumentLeaf(rows[row][column], key: key, records: [row], objectPath: header.contains(".") ? String(header[..<header.lastIndex(of: ".")!]).lowercased() : ""))
+                }
             }
         }
+        // The bodies' values come first, where their documents look them up; the cells' after.
+        let documents = embedded.isEmpty ? [] : collector.leaves, bodies = documents.count
+        if bodies > 0 { leaves = documents + leaves }
         var headerIDs: [Int] = []
         if hasHeader {
             for column in columns.indices {
@@ -96,11 +109,12 @@ public enum CSVFile: FileFormat {
         }
         // A heading's own long digits ("order_48213907") are drawn first, as in
         // a JSON key, so a cell writing the same number is replaced alike.
-        let drawn = hasHeader ? JSONFile.drawDigits(columns, job: job) : [:]
+        let drawn = JSONFile.drawDigits((hasHeader ? columns : []) + collector.names, job: job)
         progress(.finding, 0, leaves.count)
         var values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
         if !drawn.isEmpty {
             for index in headerIDs { values[index] = JSONFile.rewritingOwnText(values[index]) { JSONFile.replaceDigits($0, drawn: drawn) } }
+            for body in embedded.values { body.document.writeKeyDigits(&values, drawn: drawn) }
         }
         let records = leaves.map(\.lastRecord)
         let found = leaves.count
@@ -114,15 +128,22 @@ public enum CSVFile: FileFormat {
             var rows = widths.map { [String](repeating: "", count: $0) }, columns = headings
             var marks: [TableMark] = []
             let unresolved = values.flatMap(\.unresolved)
-            var valueIndex = 0
+            var valueIndex = bodies, position = -1
             for row in rows.indices {
                 if row.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
                 for column in rows[row].indices {
-                    rows[row][column] = values[valueIndex].text
-                    if row < previewRows {
-                        marks += values[valueIndex].marks.map { TableMark(row: row, column: column, range: $0.range, entity: $0.entity, byHand: $0.byHand) }
+                    position += 1
+                    let (text, placed): (String, [Mark])
+                    if let body = embedded[position] {
+                        (text, placed) = JSONDocument.written(body.document, encoded: body.encoded, values) ?? (body.original, [])
+                    } else {
+                        (text, placed) = (values[valueIndex].text, values[valueIndex].marks)
+                        valueIndex += 1
                     }
-                    valueIndex += 1
+                    rows[row][column] = text
+                    if row < previewRows {
+                        marks += placed.map { TableMark(row: row, column: column, range: $0.range, entity: $0.entity, byHand: $0.byHand) }
+                    }
                 }
             }
             for (column, index) in headerIDs.enumerated() {
@@ -175,7 +196,8 @@ public enum CSVFile: FileFormat {
         }
         progress(.checking, 0, 1)
         var result = try render(values, counts: job.counts)
-        result.review = Review(values: values, counts: job.counts, records: records, people: job.personLinks(), render: render)
+        // A body's numbers stay numbers through every edit, as a .json file's do.
+        result.review = Review(values: values, counts: job.counts, records: records, people: job.personLinks(), numeric: Set(documents.indices.filter { documents[$0].numericEntity != nil }), render: render)
         progress(.checking, 1, 1)
         return result
     }

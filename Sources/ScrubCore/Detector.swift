@@ -168,6 +168,8 @@ public final class Detector {
         do {
             if let keyed = Self.keyed(text, key: key) { return keyed }
             if KeyHints.isRole(key), let name = Self.writtenName(text) { return [Span(range: name, entity: "PERSON", score: 1)] }
+            // So is a handle there ("author": "maria.gonzalez", "jdoe42"): the role's person, by another name.
+            if KeyHints.isRole(key), Self.isHandle(text) { return [Span(range: 0..<(text as NSString).length, entity: "USERNAME", score: 1)] }
             // A time zone ("America/New_York") names a region, not where someone lives.
             if text.contains("/"), text.count < 64, !TextRanges.matches(Self.timeZone, in: text).isEmpty { return [] }
             let plainWord = text.allSatisfy { $0.isASCII && $0.isLowercase }
@@ -652,6 +654,14 @@ public final class Detector {
     /// The range of a value written as a name: two to four capitalised words, with a
     /// surname's particles between them, "Last, First",
     /// either with a trailing note like "(Support)", or a known first name alone.
+    /// One token a person signs in with: letters with a dot, an underscore or digits ("maria.gonzalez",
+    /// "jdoe42"), never a file's name, a version, a link or an email.
+    static func isHandle(_ text: String) -> Bool {
+        guard (3...40).contains(text.count), text.first?.isLetter == true, text.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }),
+              text.contains(where: { $0 == "." || $0 == "_" || $0.isNumber }), text.last.map({ $0.isLetter || $0.isNumber }) == true else { return false }
+        if let dot = text.lastIndex(of: "."), ContextStage.fileExtensions.contains(text[text.index(after: dot)...].lowercased()) { return false }
+        return text.filter(\.isLetter).count >= 3
+    }
     static func writtenName(_ text: String) -> Range<Int>? {
         let match = TextRanges.matches(nameShape, in: text).first
             ?? TextRanges.matches(loneFirst, in: text).first.flatMap { match in

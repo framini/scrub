@@ -202,6 +202,39 @@ func check(_ body: String, gone: [String], seed: UInt64 = 7, _ more: (Route, JSO
     }
 }
 
+/// Every string a document holds, each decoded as deep as it goes: from base64, and as a document of its own.
+private func unwrapped(_ value: JSONValue) -> [String] {
+    strings(value).flatMap { text -> [String] in
+        guard let data = Data(base64Encoded: text), let decoded = String(data: data, encoding: .utf8), let inner = parsed(decoded) else { return [text] }
+        return [text, decoded] + unwrapped(inner)
+    }
+}
+
+/// A body wrapped in base64 again and again is read inside however many times it is, to a
+/// limit; past it, the opaque value is replaced whole, so nothing decodes to what it held.
+@Test(arguments: [4, 16, 20])
+func bodiesEncodedManyTimesLeaveNothingInside(_ times: Int) throws {
+    var body = #"{"password":"quillharbor","status":"active"}"#
+    for _ in 0..<times { body = #"{"body_b64":""# + Data(body.utf8).base64EncodedString() + #""}"# }
+    for route in Route.allCases {
+        let output = try route.scrub(body)
+        guard let root = parsed(output) else { Issue.record("\(route) \(times): no longer parses: \(output.prefix(200))"); continue }
+        let decoded = unwrapped(root)
+        #expect(!decoded.contains { $0.contains("quillharbor") } && !output.contains("quillharbor"), "\(route) \(times)")
+        // Within the limit the body is read, its other fields kept.
+        if times <= 16 { #expect(decoded.contains { $0.contains(#""status":"active""#) }, "\(route) \(times)") }
+    }
+}
+
+/// A body in base64 cut off partway can't be read, so it isn't written back as it came.
+@Test func brokenBodiesInBase64AreReplacedWhole() throws {
+    let encoded = Data(#"{"password":"quillharbor","status":"act"#.utf8).base64EncodedString()
+    try check(#"{"body_b64":""# + encoded + #"","status":"active"}"#, gone: [encoded]) { route, root, output in
+        let decoded = value(root, "body_b64").flatMap { Data(base64Encoded: $0) }.map { String(decoding: $0, as: UTF8.self) } ?? ""
+        #expect(!decoded.contains("quillharbor") && value(root, "status") == "active", "\(route): \(output)")
+    }
+}
+
 /// A pretty-printed body in base64 is read as one, whatever it opens with.
 @Test func prettyBase64BodiesAreScrubbed() throws {
     try check(#"{"body_b64":"ewogInBhc3N3b3JkIjogInF1aWxsaGFyYm9yIgp9"}"#, gone: ["ewogInBhc3N3b3JkIjogInF1aWxsaGFyYm9yIgp9"]) { route, root, output in

@@ -27,6 +27,27 @@ struct JSONSource {
         return JSONSource(text: text, root: root, shell: shell, values: reader.values, keys: reader.keys)
     }
 
+    /// JSON Lines: each line that isn't blank an object or a list of its own, as a log
+    /// or an export writes them. Each line's range (its spaces with it, its line break
+    /// not), or nil where any line is something else.
+    static func lines(in text: String) throws -> [Range<Int>]? {
+        var ranges: [Range<Int>] = []
+        var start = 0
+        let units = Array(text.utf16)
+        for at in 0...units.count where at == units.count || units[at] == 10 || units[at] == 13 {
+            defer { start = at + 1 }
+            guard let first = units[start..<at].first(where: { ![9, 32].contains($0) }) else { continue }
+            guard first == 123 || first == 91 else { return nil }
+            ranges.append(start..<at)
+        }
+        for range in ranges {
+            do { _ = try read(String(decoding: units[range], as: UTF16.self)) }
+            catch ScrubError.unsupported("too_deep") { throw ScrubError.unsupported("too_deep") }
+            catch { return nil }
+        }
+        return ranges.isEmpty ? nil : ranges
+    }
+
     /// The objects and lists written whole inside other text: a curl command's
     /// body, a log line's, a document pasted between notes. Each is a range of
     /// `text` that reads as JSON on its own, outermost first, never overlapping,

@@ -2,7 +2,9 @@ import Foundation
 
 public enum TextFile: FileFormat {
     static func decode(_ data: Data) throws -> String {
-        guard !data.prefix(8192).contains(0) else { throw ScrubError.unsupported("binary_file") }
+        // A binary file, or text in UTF-16, writes NULs throughout; text with a stray one is still text.
+        let head = data.prefix(8192)
+        guard head.lazy.filter({ $0 == 0 }).count * 8 <= head.count else { throw ScrubError.unsupported("binary_file") }
         var bytes = data
         if bytes.starts(with: [0xEF, 0xBB, 0xBF]) { bytes.removeFirst(3) }
         guard let text = String(data: bytes, encoding: .utf8) else { throw ScrubError.unsupported("not_utf8") }
@@ -35,10 +37,20 @@ public enum TextFile: FileFormat {
         return result
     }
 
+    /// JSON Lines (.jsonl, .ndjson, or pasted so): each line read as a .json file is, all
+    /// of them in one scrub, so a value written on two lines takes one stand-in, and the
+    /// line breaks and blank lines between them written back as they were.
+    static func processLines(_ data: Data, job: Job, progress: (Stage, Int, Int) -> Void, forceFullDetection: Bool) throws -> ScrubResult {
+        let text = try decode(data)
+        try Scrubber.checkCancellation()
+        guard let lines = try JSONSource.lines(in: text) else { throw ScrubError.unsupported("invalid_json") }
+        return try process(text, regions: lines.map { ($0, false, nil) }, format: "jsonl", job: job, progress: progress, forceFullDetection: forceFullDetection)
+    }
+
     /// Text with JSON written inside it (a curl command's body, a log line's):
     /// each body is read and written as a .json file is (see `JSONDocument`),
     /// and the text between them as text, each part its own value.
-    private static func process(_ text: String, regions: [(range: Range<Int>, shell: Bool, key: String?)], job: Job, progress: (Stage, Int, Int) -> Void, forceFullDetection: Bool) throws -> ScrubResult {
+    private static func process(_ text: String, regions: [(range: Range<Int>, shell: Bool, key: String?)], format: String = "text", job: Job, progress: (Stage, Int, Int) -> Void, forceFullDetection: Bool) throws -> ScrubResult {
         enum Part { case text(Int), json(JSONDocument) }
         let collector = JSONDocument.Collector()
         var parts: [Part] = []
@@ -80,7 +92,7 @@ public enum TextFile: FileFormat {
                 length += (written as NSString).length
             }
             let previewLength = min(200_000, length)
-            return ScrubResult(format: "text", output: Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<previewLength), marks: marks.filter { $0.range.upperBound <= previewLength }, truncated: length > previewLength), counts: counts, unresolved: values.flatMap(\.unresolved))
+            return ScrubResult(format: format, output: Data(output.utf8), preview: .text(TextRanges.substring(output, 0..<previewLength), marks: marks.filter { $0.range.upperBound <= previewLength }, truncated: length > previewLength), counts: counts, unresolved: values.flatMap(\.unresolved))
         }
         progress(.checking, 0, 1)
         var result = render(values, counts: job.counts)

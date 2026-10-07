@@ -42,8 +42,9 @@ final class NameModel: Sendable {
     private let out: [Float]
     private let outBias: Float
     /// Features by word, shared across calls: a document repeats its words in
-    /// every row and every correction pass.
-    private let known = Mutex<[String: [Float]]>([:])
+    /// every row and every correction pass. Keyed by the word's exact scalars, as a
+    /// String would take "é" and "e" with a combining accent as one word.
+    private let known = Mutex<[[UInt32]: [Float]]>([:])
     private static let knownLimit = 100_000
 
     /// The SHA-256 of the shipped weights. A file that differs is not loaded:
@@ -149,6 +150,8 @@ final class NameModel: Sendable {
             if last.count > 2, last[last.count - 1] == "s", last[last.count - 2] == "'" || last[last.count - 2] == "’" { upper -= 2 }
             let range = tokens[index].range.lowerBound..<upper
             let handle = index == end && Self.looksLikeHandle(tokens[index].scalars)
+            // A file's name ("./bin/tool-cli.js") is no one's handle.
+            if handle, let dot = last.lastIndex(of: "."), ContextStage.fileExtensions.contains(String(String.UnicodeScalarView(last[(dot + 1)...])).lowercased()) { index = end + 1; continue }
             let alone = !tokens[..<index].contains(where: \.isWord) && !tokens[(end + 1)...].contains(where: \.isWord)
             if !alone, Self.couldName(tokens[index...end]), handle || !NameTagger.partOfOrganisation(range, in: text) {
                 spans.append(Span(range: range, entity: handle ? "USERNAME" : "PERSON", score: Self.score))
@@ -198,9 +201,9 @@ final class NameModel: Sendable {
     private func run(_ tokens: ArraySlice<Token>) -> [Float] {
         let count = tokens.count, width = embed + shapes
         var input = [Float](repeating: 0, count: count * width)
-        let keys = tokens.map { String(String.UnicodeScalarView($0.scalars)) }
+        let keys = tokens.map { $0.scalars.map(\.value) }
         var found = known.withLock { cache in keys.map { cache[$0] } }
-        var fresh: [String: [Float]] = [:]
+        var fresh: [[UInt32]: [Float]] = [:]
         for (row, token) in tokens.enumerated() where found[row] == nil {
             let features = fresh[keys[row]] ?? self.features(token.scalars)
             fresh[keys[row]] = features

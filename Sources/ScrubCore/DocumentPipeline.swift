@@ -62,8 +62,12 @@ struct DocumentLeaf: Sendable {
         self.numericEntity = numericEntity
         self.fieldName = fieldName
         view = numericEntity == nil ? Visible(text) : nil
-        nonPersonal = KeyHints.hint(key) == nil && KeyHints.words(key).last.map(Self.nonPersonalWords.contains) == true
+        nonPersonal = Self.holdsNoOnesData(key)
             || KeyHints.hint(key) == "SECRET" && numericEntity == nil && !KeyHints.fits(key, text)
+    }
+    /// Whether `key` says its value is a status, an amount, a time, a code or the like.
+    static func holdsNoOnesData(_ key: String?) -> Bool {
+        KeyHints.hint(key) == nil && KeyHints.words(key).last.map(nonPersonalWords.contains) == true
     }
 }
 

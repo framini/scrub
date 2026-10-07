@@ -292,3 +292,84 @@ func bareNameKeyNeedsAPersonRecord(_ input: String, _ replaced: Bool) throws {
     // Eight times the numbers take about eight times as long; measured afresh each time, sixty-four.
     #expect(long < short * 16 + .milliseconds(500), "\(short) then \(long)")
 }
+
+// A number written again under a key that names nothing is the same value, and takes the same stand-in.
+@Test func jsonNumberWrittenAgainTakesTheSameStandIn() throws {
+    let input = #"{"phone":2128675309,"copy":2128675309,"items":[2128675309],"count":2128675309,"order":5550001234,"seats":12}"#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    let out = try #require(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+    let phone = try #require(out["phone"] as? Int)
+    #expect(phone != 2128675309)
+    #expect(out["copy"] as? Int == phone)
+    #expect((out["items"] as? [Int])?.first == phone)
+    #expect(out["count"] as? Int == 2128675309)
+    #expect(out["order"] as? Int == 5550001234)
+    #expect(out["seats"] as? Int == 12)
+    #expect(output.contains(#""copy":\#(phone)"#))
+}
+
+// A secret written into a key is replaced there too; a name matched inside a key's word is not.
+@Test func jsonSecretInsideAKeyIsReplaced() throws {
+    let input = #"{"password":"quillharbor","quillharborMetric":1,"middle":"The","lengthOfTheCurrentLease":"24 months"}"#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("quillharbor"))
+    let out = try #require(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+    #expect(out.count == 4)
+    #expect(out.contains { $0.key.hasSuffix("Metric") && $0.value as? Int == 1 })
+    #expect(out["lengthOfTheCurrentLease"] as? String == "24 months")
+}
+
+// A secret written as a decimal is personal in every digit: its fraction is drawn too.
+@Test func jsonDecimalSecretsDrawTheirFraction() throws {
+    let input = #"{"password":0.123456789,"pin":0.98765,"phone":2128675309.0}"#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("123456789") && !output.contains("98765") && !output.contains("2128675309"))
+    let out = try #require(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: NSNumber])
+    #expect(output.range(of: #""password":0\.\d{9},"pin":0\.\d{5},"phone":\d{10}\.0"#, options: .regularExpression) != nil, "\(output)")
+    #expect(out.count == 3)
+}
+
+// A key written twice in one object is one key: both are written as the same stand-in.
+@Test func jsonDuplicatePersonalKeysStayOneKey() throws {
+    let input = #"{"rosalind@example.org":1,"rosalind@example.org":2,"plain":3}"#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("rosalind"))
+    let source = try JSONSource.read(output)
+    guard case .object(let pairs) = source.root else { Issue.record("Expected an object"); return }
+    #expect(pairs.count == 3)
+    #expect(pairs[0].0 == pairs[1].0 && pairs[0].0 != pairs[2].0)
+    #expect(pairs[0].0.contains("@") && !pairs[0].0.hasSuffix("_"))
+}
+
+// A string changed in part keeps every escape outside what changed as written, half a surrogate pair among them.
+@Test func jsonPartialEditKeepsEscapesAsWritten() throws {
+    let slash = String(UnicodeScalar(92))
+    let note = "ok " + slash + "/ " + slash + "ud800 rosalind@example.org " + slash + "t " + slash + "u00e9 rosalind@example.org end"
+    let input = "{\"note\":\"" + note + "\",\"k" + slash + "/ rosalind@example.org\":1}"
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("rosalind"), "\(output)")
+    #expect(output.hasPrefix("{\"note\":\"ok " + slash + "/ " + slash + "ud800 "), "\(output)")
+    #expect(output.contains(" " + slash + "t " + slash + "u00e9 ") && output.contains(" end\""), "\(output)")
+    #expect(output.contains("\"k" + slash + "/ "), "\(output)")
+    let source = try JSONSource.read(output)
+    guard case .object(let pairs) = source.root, case .string(let value) = pairs[0].1 else { Issue.record("Expected an object"); return }
+    let emails = value.split(separator: " ").filter { $0.contains("@") }
+    #expect(emails.count == 2 && emails[0] == emails[1])
+}
+
+// A document opening with a byte order mark keeps it when anything in it is replaced.
+@Test func jsonByteOrderMarkStaysWhenReplaced() throws {
+    let data = Data([0xEF, 0xBB, 0xBF]) + Data(#"{"email":"rosalind@example.org"}"#.utf8)
+    let output = try Scrubber.scrub(data, name: "a.json").output
+    #expect(output.starts(with: [0xEF, 0xBB, 0xBF]))
+    #expect(!String(decoding: output, as: UTF8.self).contains("rosalind"))
+}
+
+/// A script's file name is no one's handle; a handle beside it still is.
+@Test func jsonFileNameIsNoHandle() throws {
+    let source = #"{"name":"tool","bin":"./bin/maria-cli.js","main":"./lib/tool.js","author":"ask jdoe42 or maria.gonzalez"}"#
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(output.contains(#""bin":"./bin/maria-cli.js""#))
+    #expect(output.contains(#""main":"./lib/tool.js""#))
+    #expect(!output.contains("jdoe42") && !output.contains("gonzalez"))
+}
