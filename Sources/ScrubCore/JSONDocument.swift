@@ -84,6 +84,8 @@ final class JSONDocument {
             let field: String
         }
         private var bareNumbers: [BareNumber] = []
+        /// Values under a bare "name", by path, written as a person's though nothing says they are (see `KeyHints.writtenAsName`).
+        private var unsureNames: Set<String> = []
         /// Every value each field writes, strings and numbers alike, and the strings' leaves.
         private var population: [String: [String]] = [:]
         private var fieldStrings: [String: [Int]] = [:]
@@ -171,7 +173,10 @@ final class JSONDocument {
                 if KeyHints.hint(inherited) == nil, KeyHints.isDocumentNumber(pair.0), !kind.isDisjoint(with: KeyHints.documentKinds) { inherited = "document_number" }
                 if KeyHints.hint(inherited) == nil, let born = KeyHints.birthField(pair.0, value: pair.1.stringValue ?? pair.1.numberText, siblings: named, kind: kind) { inherited = born }
                 if KeyHints.isBareName(pair.0), case .string(let name) = pair.1,
-                   !KeyHints.bareNameIsPerson(name, siblings: pairs.map(\.0), parent: key) { inherited = nil }
+                   !KeyHints.bareNameIsPerson(name, siblings: pairs.map(\.0), parent: key, values: named.map(\.1)) {
+                    inherited = nil
+                    if KeyHints.writtenAsName(name, parent: key) { unsureNames.insert(childPath) }
+                }
                 // The kind a record says reaches its own values, and through a slot ("number": {"value": …}, "number": […]) the values it wraps.
                 let reaches: Bool
                 switch pair.1 {
@@ -214,6 +219,7 @@ final class JSONDocument {
             var leaf = DocumentLeaf(string, key: key, records: records, contextWords: Set(keys.flatMap { KeyHints.words($0) }))
             leaf.namingWords = Self.naming(keys, typed)
             leaf.field = keys.joined(separator: ".")
+            leaf.unsureName = unsureNames.contains(path)
             population[leaf.field ?? "", default: []].append(leaf.seen)
             fieldStrings[leaf.field ?? "", default: []].append(items.count)
             items.append(leaf)

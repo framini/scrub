@@ -47,6 +47,9 @@ struct DocumentLeaf: Sendable {
     /// The field the value is one of across its document: its keys from the root, a list's
     /// items one field ("people.aka"). Nil outside a document's structure.
     var field: String?
+    /// A bare "name" written as a person's though nothing says it is one (see
+    /// `KeyHints.writtenAsName`): unless detection finds the person, it is doubted.
+    var unsureName = false
     private static let nonPersonalWords: Set<String> = ["status", "state", "type", "kind", "result", "outcome", "decision", "amount", "currency", "total", "balance", "fee",
                                                         "price", "count", "quantity", "at", "time", "timestamp", "date", "created", "updated", "version", "method", "code", "level", "score", "reason", "category", "channel", "mode"]
 
@@ -680,6 +683,20 @@ enum DocumentPipeline {
         return Detector.keyed(leaf.seen, key: leaf.key) ?? []
     }
 
+    /// A bare "name" written as a person's that nothing found or doubted: the whole name,
+    /// found where it holds only names the name model reads as a person's, else doubted.
+    private static func unsureName(_ text: String, besides found: [Span], model: NameModel?, isCancelled: () -> Bool) -> (span: Span, sure: Bool)? {
+        guard !found.contains(where: { nameEntities.contains($0.entity) }) else { return nil }
+        let ns = text as NSString
+        let trimmed = ns.range(of: #"\S(?:.*\S)?"#, options: .regularExpression)
+        guard trimmed.location != NSNotFound else { return nil }
+        let range = trimmed.location..<NSMaxRange(trimmed), name = ns.substring(with: trimmed)
+        if EastAsianNames.surnamed(name) == nil, KeyHints.onlyNames(name), model?.readsAsName(name, isCancelled: isCancelled) == true {
+            return (Span(range: range, entity: "PERSON", score: NameModel.score), true)
+        }
+        return (Span(range: range, entity: "PERSON", score: Doubt.unconfirmed.confidence), false)
+    }
+
     private static func detectBases(_ leaves: [DocumentLeaf], progress: (Stage, Int, Int) -> Void) throws -> ([[Span]?], [[Span]]) {
         let count = leaves.count
         guard count > 0 else { return ([], []) }
@@ -713,8 +730,13 @@ enum DocumentPipeline {
                     else if leaf.fieldName { local.append(Patterns.find(leaf.seen, isCancelled: { cancelled.isSet })) }
                     else {
                         let read = detector.read(leaf.seen, key: leaf.key, contextWords: leaf.contextWords, naming: leaf.namingWords, context: context[index])
-                        local.append(read.spans)
-                        if !read.doubts.isEmpty { doubts.append((index, read.doubts)) }
+                        var doubted = read.doubts
+                        if leaf.unsureName, let name = unsureName(leaf.seen, besides: read.spans + doubted, model: names ? NameModel.shared : nil, isCancelled: { cancelled.isSet }) {
+                            if name.sure { local.append(read.spans + [name.span]) } else { local.append(read.spans); doubted.append(name.span) }
+                        } else {
+                            local.append(read.spans)
+                        }
+                        if !doubted.isEmpty { doubts.append((index, doubted)) }
                     }
                 }
                 results.withLock { $0.replaceSubrange(start..<end, with: local) }

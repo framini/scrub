@@ -86,7 +86,12 @@ public enum CSVFile: FileFormat {
                 // A row may run past its header: its extra cells have no column.
                 let underNames = column < parents.count && ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(KeyHints.hint(parents[column].filter { !$0.allSatisfy(\.isNumber) }.joined(separator: "_")) ?? "")
                 let cell = rows[row][column], peopleColumn = peopleColumns.contains(column) && cell.split(separator: " ").count <= 5 && cell.first?.isUppercase == true && cell.allSatisfy { $0.isLetter || " .'’-".contains($0) }
-                if naming.contains(column) || KeyHints.isBareName(key) && !underNames && !peopleColumn && !KeyHints.bareNameIsPerson(cell, personsRecord: personsRecord) { key = nil }
+                var unsure = false
+                if naming.contains(column) { key = nil }
+                else if KeyHints.isBareName(key) && !underNames && !peopleColumn && !KeyHints.bareNameIsPerson(cell, personsRecord: personsRecord) && !KeyHints.spelledByEmail(cell, in: rows[row]) {
+                    key = nil
+                    unsure = KeyHints.writtenAsName(cell, parent: column < parents.count ? parents[column].joined(separator: "_") : nil)
+                }
                 if let fields = owned[column], KeyHints.ownRecord(fields, value: rows[row][column]) { key = "name" }
                 if let siblings = named[column] {
                     let texts = siblings.compactMap { $0 < rows[row].count ? (KeyHints.words(columns[$0]).last!, rows[row][$0]) : nil }
@@ -96,7 +101,10 @@ public enum CSVFile: FileFormat {
                 switch collector.embed(rows[row][column], key: key, records: [row], keys: header.isEmpty ? [] : [header]) {
                 case .document(let document, let encoded): embedded[position] = (document, encoded, rows[row][column])
                 case .opaque: leaves.append(JSONDocument.opaque(rows[row][column], records: [row]))
-                case .none: leaves.append(DocumentLeaf(rows[row][column], key: key, records: [row], objectPath: header.contains(".") ? String(header[..<header.lastIndex(of: ".")!]).lowercased() : ""))
+                case .none:
+                    var leaf = DocumentLeaf(rows[row][column], key: key, records: [row], objectPath: header.contains(".") ? String(header[..<header.lastIndex(of: ".")!]).lowercased() : "")
+                    leaf.unsureName = unsure && key == nil
+                    leaves.append(leaf)
                 }
             }
         }

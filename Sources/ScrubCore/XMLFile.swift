@@ -22,20 +22,25 @@ public enum XMLFile: FileFormat {
         var nameIDs: [Int] = []
         var nextRecord = 0
         func local(_ name: String?) -> String? { name?.split(separator: ":").last.map(String.init) }
-        func add(_ node: XMLNode, key: String?, records: [Int], words: Set<String>) {
+        /// `unsure`: a bare name written as a person's that nothing says is one (see `KeyHints.writtenAsName`).
+        func add(_ node: XMLNode, key: String?, records: [Int], words: Set<String>, unsure: Bool = false) {
             guard let value = node.stringValue, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             nodes.append([node])
             valueIDs.append(leaves.count)
-            leaves.append(DocumentLeaf(value, key: key, records: records, contextWords: words))
+            var leaf = DocumentLeaf(value, key: key, records: records, contextWords: words)
+            leaf.unsureName = unsure
+            leaves.append(leaf)
         }
         /// Text split by inline elements ("<i>Odal</i>ys Ferriter wrote…") read as one value: its
         /// pieces joined by `Visible.joint`, which detection reads through and stand-ins keep.
-        func addJoined(_ texts: [XMLNode], key: String?, records: [Int], words: Set<String>) {
+        func addJoined(_ texts: [XMLNode], key: String?, records: [Int], words: Set<String>, unsure: Bool = false) {
             let values = texts.map { $0.stringValue ?? "" }
             guard values.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return }
             nodes.append(texts)
             valueIDs.append(leaves.count)
-            leaves.append(DocumentLeaf(values.joined(separator: Visible.joint), key: key, records: records, contextWords: words))
+            var leaf = DocumentLeaf(values.joined(separator: Visible.joint), key: key, records: records, contextWords: words)
+            leaf.unsureName = unsure
+            leaves.append(leaf)
         }
         func addName(_ node: XMLNode, records: [Int]) {
             guard let name = node.name else { return }
@@ -78,9 +83,20 @@ public enum XMLFile: FileFormat {
                     if let expiry = KeyHints.expiry(name, siblings: siblings.map(\.0), parent: local(parent.name), kind: kind) { elementKey = expiry }
                     else if let born = KeyHints.birthField(name, value: text, siblings: siblings, kind: kind) { elementKey = born }
                 }
-                func key(_ name: String?, resolved: String?, parent: String?, value: String?, siblings: @autoclosure () -> [String]) -> String? {
-                    if KeyHints.isBareName(name), KeyHints.isBareName(resolved), let value, !KeyHints.bareNameIsPerson(value, siblings: siblings(), parent: parent) { return nil }
+                func key(_ name: String?, resolved: String?, parent: String?, value: String?, siblings: @autoclosure () -> [String], values: @autoclosure () -> [String] = []) -> String? {
+                    if KeyHints.isBareName(name), KeyHints.isBareName(resolved), let value, !KeyHints.bareNameIsPerson(value, siblings: siblings(), parent: parent, values: values()) { return nil }
                     return resolved
+                }
+                // A bare name `key` found no one's, still written as a person's.
+                func unsure(_ name: String?, key: String?, parent: String?, value: String?) -> Bool {
+                    KeyHints.isBareName(name) && key == nil && value.map { KeyHints.writtenAsName($0.trimmingCharacters(in: .whitespacesAndNewlines), parent: parent) } == true
+                }
+                // The texts of an element's fields, beside its attributes' values: an email among them may spell a name there.
+                func fieldTexts(_ element: XMLElement?) -> [String] {
+                    ((element?.attributes ?? []).compactMap(\.stringValue)) + (element?.children ?? []).compactMap { child in
+                        guard let child = child as? XMLElement, !(child.children ?? []).contains(where: { $0 is XMLElement }) else { return nil }
+                        return child.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
                 }
                 func names(_ element: XMLElement?) -> [String] {
                     ((element?.attributes ?? []) + (element?.children ?? []).filter { $0 is XMLElement }).compactMap { local($0.name) }
@@ -94,7 +110,8 @@ public enum XMLFile: FileFormat {
                     addName(attribute, records: ancestry)
                     let attributeTexts = (element.attributes ?? []).compactMap { a in local(a.name).map { ($0, a.stringValue ?? "") } }
                     let resolved = local(attribute.name).flatMap { KeyHints.namedField($0, siblings: attributeTexts) } ?? KeyHints.resolve(local(attribute.name), parent: elementKey)
-                    add(attribute, key: key(local(attribute.name), resolved: resolved, parent: local(element.name), value: attribute.stringValue, siblings: names(element)), records: ancestry, words: words)
+                    let attributeKey = key(local(attribute.name), resolved: resolved, parent: local(element.name), value: attribute.stringValue, siblings: names(element), values: fieldTexts(element))
+                    add(attribute, key: attributeKey, records: ancestry, words: words, unsure: unsure(local(attribute.name), key: attributeKey, parent: local(element.name), value: attribute.stringValue))
                 }
                 // The inline elements' names and attributes are read as any; their text with the element's.
                 func readNames(within node: XMLNode) {
@@ -124,7 +141,8 @@ public enum XMLFile: FileFormat {
                 let textRecords = records.isEmpty ? ancestry : records
                 func addRun(_ texts: [XMLNode]) {
                     let joined = texts.map { $0.stringValue ?? "" }.joined()
-                    addJoined(texts, key: key(local(element.name), resolved: textKey, parent: keys.last, value: joined, siblings: names(element.parent as? XMLElement)), records: textRecords, words: words)
+                    let runKey = key(local(element.name), resolved: textKey, parent: keys.last, value: joined, siblings: names(element.parent as? XMLElement), values: fieldTexts(element.parent as? XMLElement))
+                    addJoined(texts, key: runKey, records: textRecords, words: words, unsure: unsure(local(element.name), key: runKey, parent: keys.last, value: joined))
                 }
                 if let texts = Self.inline(element) {
                     readNames(within: element)
@@ -134,7 +152,8 @@ public enum XMLFile: FileFormat {
                 func read(_ child: XMLNode) throws {
                     if child is XMLElement { return try walk(child, records: ancestry, keys: currentKeys, parentKey: elementKey) }
                     if child.kind == .processingInstruction { addName(child, records: ancestry) }
-                    add(child, key: child.kind == .text ? key(local(element.name), resolved: textKey, parent: keys.last, value: child.stringValue, siblings: names(element.parent as? XMLElement)) : nil, records: textRecords, words: words)
+                    let childKey = child.kind == .text ? key(local(element.name), resolved: textKey, parent: keys.last, value: child.stringValue, siblings: names(element.parent as? XMLElement), values: fieldTexts(element.parent as? XMLElement)) : nil
+                    add(child, key: childKey, records: textRecords, words: words, unsure: child.kind == .text && unsure(local(element.name), key: childKey, parent: keys.last, value: child.stringValue))
                 }
                 // Text beside fields: each run of it between them is read as one with
                 // the formatting inside it ("Spoke with <i>Odal</i>ys … <password>…"),

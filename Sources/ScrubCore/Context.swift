@@ -600,12 +600,15 @@ public enum KeyHints {
     private static let people: Set<String> = ["user", "customer", "contact", "employee", "patient", "person", "people", "member", "owner", "student", "applicant", "candidate", "passenger", "traveler", "traveller", "signer", "signatory", "holder", "accountholder", "cardholder", "author", "profile", "individual", "borrower", "tenant", "buyer", "seller", "payee", "payer", "driver", "worker", "staff", "teammate", "actor", "guest", "debtor", "creditor", "receiver", "originator", "beneficiary", "associate"]
     private static let notPeople: Set<String> = ["business", "company", "organization", "organisation", "merchant", "employer", "vendor", "institution", "bank", "product", "plan", "model", "account", "app", "application", "project", "team", "workflow", "enrichment", "template", "school"]
     /// Whether a bare "name" holds a person: its record also holds personal details,
-    /// its parent is about people ("customers", "manager"), or the value uses a known
-    /// first or last name. Otherwise, as for "Everyday Checking", detection decides.
+    /// its parent is about people ("customers", "manager"), the value uses a known
+    /// first or last name, or an email beside it spells it. Otherwise, as for
+    /// "Everyday Checking", detection decides (see `writtenAsName` for what it can't).
     /// `inObject`: the siblings are one object's, not every key in loose text.
-    static func bareNameIsPerson(_ value: String, siblings: [String], parent: String?, inObject: Bool = true) -> Bool {
+    /// `values`: the record's other strings, whatever their keys.
+    static func bareNameIsPerson(_ value: String, siblings: [String], parent: String?, inObject: Bool = true, values: [String] = []) -> Bool {
         // A list of a person's other names ("aka": [{"name": …}]) holds names, in any script and of one word too.
         if ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(hint(parent) ?? ""), value.contains(where: \.isLetter), !isCommonValue(value) { return true }
+        if spelledByEmail(value, in: values) { return true }
         guard let known = nameEvidence(value) else { return false }
         if isNotPeople(parent) { return ownRecord(siblings, value: value) }
         return isPersonsRecord(siblings: siblings, parent: parent, inObject: inObject) || known
@@ -628,10 +631,54 @@ public enum KeyHints {
         // Written as a name in another script ("Йоана Петрова"), which a product's name seldom is in an API's data.
         let otherScript = (2...4).contains(parts.count) && value.unicodeScalars.contains { $0.value >= 0x0370 && $0.properties.isAlphabetic }
             && parts.allSatisfy { $0.first.map { $0.isUppercase || !$0.isCased } == true }
-        let known = particled || listed || otherScript || parts.contains { Names.firstFolded.contains($0.lowercased()) || Names.lastFolded.contains($0.lowercased()) }
+        // A surname the long lists hold closing a name whose first word is no ordinary one ("Tomasz Wierzbicki"), not "Burger King".
+        let surnamed = (2...4).contains(parts.count) && NameLists.isSurname(String(parts[parts.count - 1])) && !NameLists.isWord(String(parts[parts.count - 1]))
+            && !NameLists.isWord(String(parts[0])) && Detector.writtenName(value) != nil
+        // Chinese, Japanese or Korean written whole ("王秀英"): a common surname leading it says whose; with none, the record decides.
+        if let eastAsian = EastAsianNames.surnamed(value) { return eastAsian }
+        let known = particled || listed || surnamed || otherScript || parts.contains { Names.firstFolded.contains($0.lowercased()) || Names.lastFolded.contains($0.lowercased()) }
         // One unknown word ("NORTHWIND") names a business or product more often than a person.
         if parts.count < 2 && !known { return nil }
         return known
+    }
+    /// Whether a bare "name" nothing says is a person's is still written as one: two to four
+    /// capitalised words, none an ordinary word or a business's ("Hamish Olawale", not
+    /// "Everyday Checking"), or a Chinese, Japanese or Korean name's shape. Kept as written,
+    /// it is put to a person in review, never kept unseen. Under a business, a product
+    /// or an app ("merchant": {"name": …}) it is theirs.
+    static func writtenAsName(_ value: String, parent: String?) -> Bool {
+        guard !isNotPeople(parent) else { return false }
+        if EastAsianNames.surnamed(value) != nil { return true }
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        guard (2...4).contains(trimmed.split(separator: " ").count), Detector.writtenName(trimmed) == 0..<(trimmed as NSString).length else { return false }
+        return !trimmed.split(whereSeparator: { !$0.isLetter }).contains { part in
+            let word = String(part)
+            return NameLists.isWord(word) && !NameLists.isFirst(word) && !NameLists.isSurname(word)
+        }
+    }
+    /// Whether every word of a value `writtenAsName` passed is a name or no word at all:
+    /// "Hamish Olawale", not "Land Berlin". Such a value the name model reads as a
+    /// person's is replaced; any other is put to a person.
+    static func onlyNames(_ value: String) -> Bool {
+        value.split(whereSeparator: { !$0.isLetter }).allSatisfy { part in
+            let word = String(part)
+            return NameLists.isName(word) || !NameLists.isWord(word)
+        }
+    }
+    /// Whether an email among `values` spells `name` in its local part: its surname with the
+    /// first name or its initial ("hamish.olawale@", "holawale@"), or the first name with the
+    /// surname's initial ("hamisho@"). Its owner is the person named.
+    static func spelledByEmail(_ name: String, in values: [String]) -> Bool {
+        guard !values.isEmpty else { return false }
+        let words = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).split(whereSeparator: { !$0.isLetter }).map(String.init)
+        guard (2...4).contains(words.count), let first = words.first, let last = words.last, first.count >= 2, last.count >= 3 else { return false }
+        return values.contains { value in
+            guard value.utf16.count <= 254, let at = value.firstIndex(of: "@"), at > value.startIndex, !value.contains(where: \.isWhitespace),
+                  value[value.index(after: at)...].contains(".") else { return false }
+            let local = String(value[..<at].folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).filter(\.isLetter))
+            return local.contains(last) && (local.contains(first) || local.hasPrefix(String(first.prefix(1))))
+                || first.count >= 3 && local.hasPrefix(first) && local.dropFirst(first.count).hasPrefix(String(last.prefix(1)))
+        }
     }
     /// Whether a key names a business, a product or an app ("application", "accounts").
     static func isNotPeople(_ key: String?) -> Bool {

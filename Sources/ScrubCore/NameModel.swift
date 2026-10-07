@@ -131,6 +131,15 @@ final class NameModel: Sendable {
         return Reading(tokens: tokens, scores: scores)
     }
 
+    /// Whether every word of a value a field labels a name reads as a person's. A value
+    /// alone gives the model no words around it, so it reads the value after that label.
+    func readsAsName(_ value: String, isCancelled: () -> Bool = { false }) -> Bool {
+        let label = "Name: ", offset = ("Name: " as NSString).length
+        guard let reading = read(label + value, isCancelled: isCancelled) else { return false }
+        let words = zip(reading.tokens, reading.scores).filter { $0.0.isWord && $0.0.range.lowerBound >= offset }
+        return !words.isEmpty && words.allSatisfy { $0.1 >= Self.threshold }
+    }
+
     /// The names and handles a reading holds.
     func find(_ text: String, reading: Reading) -> [Span] {
         let tokens = reading.tokens, scores = reading.scores
