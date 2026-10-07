@@ -403,8 +403,12 @@ final class StandIns {
         if runs.count == 1, runs[0] == trimmed {
             let value = Int(trimmed) ?? 0, width = trimmed.count
             switch width {
-            case 1, 2 where part == .day: made = padded(day + 12, trimmed.first == "0" ? 2 : 1)
-            case 1, 2: made = part == .year || part == nil && value > 12 ? padded(year % 100, width) : padded(month, trimmed.first == "0" ? 2 : 1)
+            // Each pattern takes its own `where`: "case 1, 2 where …" would send every one-digit month here.
+            case 1 where part == .day, 2 where part == .day: made = padded(day + 12, trimmed.first == "0" ? 2 : 1)
+            case 1, 2:
+                // A month written in one digit keeps one: October to December would widen it.
+                if width == 1, month > 9 { month = (1...9).filter { !written.contains($0) }.randomElement(using: &rng) ?? 1 }
+                made = part == .year || part == nil && value > 12 ? padded(year % 100, width) : padded(month, trimmed.first == "0" ? 2 : 1)
             case 4: made = part == .year || Int(trimmed.prefix(2)).map({ $0 > 12 }) == true ? String(year) : padded(month, 2) + padded(year % 100, 2)
             case 6: made = padded(month, 2) + String(year)
             default: made = String(year)
