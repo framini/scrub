@@ -104,6 +104,12 @@ enum NameShape {
             trailingRole = trailingRole || isRole(last.text)
             parts.removeLast()
         }
+        // "Spoke with Pieter van der Berg": an ordinary word, then one in lowercase that is no surname's
+        // particle, open no name; the name is what follows them.
+        if let cut = parts.lastIndex(where: { $0.text.first?.isLowercase == true && !JoinedNames.particles.contains($0.bare) }), cut + 1 < parts.count,
+           parts[cut + 1].text.first?.isUppercase == true, parts[..<cut].contains(where: { NameLists.isOrdinary($0.bare) && !NameLists.isName($0.bare) }) {
+            parts.removeFirst(cut + 1)
+        }
         while let first = parts.first, isRole(first.text) || joining.contains(first.bare) || commands(first, in: text) || parts.count > 1 && opener(first) { parts.removeFirst() }
         // "at 4:12 PM Jasper Thornquist": the time's half of the day and its zone go with the time.
         while parts.count > 1, clock.contains(parts[0].bare), afterTime(parts[0].range.lowerBound, in: text) { parts.removeFirst() }

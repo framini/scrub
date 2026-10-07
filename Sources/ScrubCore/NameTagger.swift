@@ -105,10 +105,13 @@ enum NameTagger {
     private static let strongBefore: Set<String> = ["named", "called", "mr", "mrs", "ms", "dr", "contact", "owner", "customer", "patient", "employee"]
     private static let informalBefore: Set<String> = ["its", "it's", "im", "i'm", "with", "w", "spoke", "ask", "tell", "cc"]
     private static let reporting: Set<String> = ["said", "asked", "wrote", "emailed", "phoned", "called", "replied"]
+    private static let articles: Set<String> = ["a", "an", "the", "this", "that", "these", "those", "our", "your", "my", "its", "their", "every", "each", "some", "any", "no"]
     private static func cued(_ range: Range<Int>, in text: String) -> Bool {
         let value = TextRanges.substring(text, range).lowercased()
         let next = Context.words(after: range.upperBound, in: text, limit: 1, pattern: asciiWord).first?.lowercased()
         let before = Context.before(range, in: text, limit: 3)
+        // "saw an amber alert", "the will power": after an article a word is a thing, whatever cue stands further back.
+        if let previous = Context.words(before: range.lowerBound, in: text, limit: 1, pattern: asciiWord).first?.lowercased(), articles.contains(previous) { return false }
         if !before.isDisjoint(with: strongBefore) || next.map({ reporting.contains($0) }) == true { return true }
         if Names.ambiguousFirst.contains(value) { return false }
         if next == "from" && value == TextRanges.substring(text, range) { return true }
@@ -146,7 +149,9 @@ enum NameTagger {
             if variant {
                 guard tag == .personalName else { return true }
                 let tokens = TextRanges.matches(asciiWord, in: TextRanges.substring(original, mapped)).map { TextRanges.substring(original, (mapped.lowerBound + $0.range.location)..<(mapped.lowerBound + NSMaxRange($0.range))).lowercased() }
-                let knownFullName = tokens.count >= 2 && tokens.first.map { Names.firstFolded.contains($0) } == true
+                // A known first name before a word that is no name ("amber alert", "will power") is no full name.
+                let knownFullName = tokens.count >= 2 && tokens.first.map { Names.firstFolded.contains($0) && !NameLists.isWordlike($0) } == true
+                    && !tokens.contains { NameLists.isOrdinary($0) && !NameLists.isFirst($0) && !NameLists.isSurname($0) }
                 guard knownFullName || cued(mapped, in: original) else { return true }
             }
             let found = TextRanges.substring(original, mapped)

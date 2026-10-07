@@ -82,6 +82,8 @@ public final class Detector {
             kept.removeAll { Self.machineAccount($0, in: ns) }
             if !doubts.isEmpty { doubts = Self.doubted(doubts, besides: kept, in: text, links: foundLinks) }
             if !doubts.isEmpty { (kept, doubts) = Self.joined(doubts, onto: kept, in: text) }
+            // A person written in pieces is one person (see `JoinedNames`).
+            (kept, doubts) = JoinedNames.joined(kept, doubts, in: text)
             return Self.wholeName(kept, in: text)
         }
     }
