@@ -272,6 +272,11 @@ public final class Detector {
             spans.append(contentsOf: ListedNames.scan(text, isCancelled: isCancelled).filter { span in
                 !unsaid.contains { $0.overlaps(span.range) } && (span.score != ListedNames.pairScore || !organisations.contains { $0.overlaps(span.range) })
             })
+            // Who speaks a chat line ("sarah: on it"); a name that is also a word there, or after
+            // what names a person in chat ("spoke to will"), is asked about.
+            let spoken = ListedNames.spoken(in: text, isCancelled: isCancelled)
+            spans.append(contentsOf: spoken.sure)
+            doubts += spoken.unsure.filter { span in !spans.contains { $0.range.overlaps(span.range) } }
             // A given name before a hyphenated surname the tagger read in pieces ("Brisa Smith-Jones").
             spans.append(contentsOf: ListedNames.hyphenated(in: text, people: spans.filter { $0.entity == "PERSON" }.map(\.range), organisations: organisations, isCancelled: isCancelled).filter { span in
                 !unsaid.contains { $0.overlaps(span.range) }

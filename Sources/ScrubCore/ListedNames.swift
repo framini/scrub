@@ -64,6 +64,46 @@ enum ListedNames {
         return spans
     }
 
+    /// A chat line's speaker, after the time it was sent if any: "sarah: did the
+    /// customer reply?", "[09:14] aisha: can someone check…", "<tom> on it".
+    private static let speaker = TextPattern(#"(?m)^[ \t>]*(?:\[[^\]\n]{1,24}\][ \t]*|\d{1,2}:\d{2}(?::\d{2})?(?:[ \t]*(?i:am|pm))?[ \t]+)?(?:<(\p{L}[\p{L}'’]*)>|(\p{L}[\p{L}'’]*):)[ \t]+\S"#)
+    /// A lowercase name that is also a word, after what names a person in chat
+    /// ("spoke to will", "ask grace", "cc mark", "per june", "@rose") or before
+    /// a verb only a person does ("grace mentioned").
+    private static let lowerCued = TextPattern(#"(?:(?<![\p{L}\p{N}])(?:spoke (?:to|with)|talked (?:to|with)|ask|asked|cc|bcc|ping|pinged|per|according to|assigned to|reassigned to|escalated to|forwarded to|handed (?:over )?to)[ \t]+|@)(\p{Ll}+)(?![\p{L}\p{N}@.'’-])|(?<![\p{L}\p{N}@.'’-])(\p{Ll}+)(?= (?:said|says|mentioned|emailed|replied|confirmed|wrote|texted|messaged)\b)"#)
+
+    /// The people chat lines are spoken by. A speaker is a listed first name
+    /// that is no word; one that is also a word ("will:", "mark:") is too
+    /// likely to ignore and not sure enough to replace, so it is in `unsure`.
+    /// So is a lowercase name that is also a word after what names a person
+    /// in chat ("spoke to will", "ask grace about it"): never replaced on a
+    /// list's word alone, never silently left.
+    static func spoken(in text: String, isCancelled: () -> Bool = { false }) -> (sure: [Span], unsure: [Span]) {
+        var sure: [Span] = [], unsure: [Span] = []
+        let ns = text as NSString
+        if text.contains(":") || text.contains("<") {
+            // Beside a listed speaker, one no list or dictionary holds speaks too ("deepa:").
+            var unknown: [Span] = []
+            for match in TextRanges.matches(speaker, in: text, isCancelled: isCancelled) {
+                let group = match.range(at: 1).location != NSNotFound ? match.range(at: 1) : match.range(at: 2)
+                let word = ns.substring(with: group)
+                guard word.count >= 2, !People.isTitle(word), !NameShape.isRole(word) else { continue }
+                let span = Span(range: group.location..<NSMaxRange(group), entity: "PERSON", score: cuedScore)
+                if !NameLists.isFirst(word) { if word.count >= 3, !NameLists.isWord(word) { unknown.append(span) }; continue }
+                if NameLists.isWordlike(word) || NameLists.isOrdinary(word) { unsure.append(Span(range: span.range, entity: "PERSON", score: Doubt.unconfirmed.confidence)) } else { sure.append(span) }
+            }
+            if !sure.isEmpty { sure += unknown }
+        }
+        for match in TextRanges.matches(lowerCued, in: text, isCancelled: isCancelled) {
+            let group = match.range(at: 1).location != NSNotFound ? match.range(at: 1) : match.range(at: 2)
+            let word = ns.substring(with: group)
+            guard word.count >= 3, NameLists.isFirst(word), NameLists.isWordlike(word) || NameLists.isOrdinary(word), !NameShape.joining.contains(word),
+                  !NameShape.months.contains(word) || match.range(at: 1).location != NSNotFound else { continue }
+            unsure.append(Span(range: group.location..<NSMaxRange(group), entity: "PERSON", score: Doubt.unconfirmed.confidence))
+        }
+        return (sure, unsure)
+    }
+
     static func scan(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
         var spans: [Span] = []
         let ns = text as NSString
