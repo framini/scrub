@@ -178,3 +178,44 @@ func oneDigitResultsUnderPersonalKeysStay(_ name: String) throws {
     #expect(try value(output, "verification_result", "document", "document_number") == "0")
     #expect(try value(output, "verification_data", "document", "dob") != "1984-03-17")
 }
+
+/// A house number with its letter ("32b") opens the line that joins a split
+/// address as it stands in its own field, on the same street.
+@Test(arguments: renderings)
+func lettedHouseNumberAgreesWithItsLine(_ name: String) throws {
+    for seed in UInt64(1)...4 {
+        let response = #"{"previous_addresses":[{"street_name":"Whiteladies Road","house_number":"32b","apt":"Flat 9","city":"Bristol","zip":"BS8 1TH","country":"GB","formatted":"32b Whiteladies Road, Bristol BS8 1TH, United Kingdom"}]}"#
+        let output = try scrub(response, as: name, seed: seed)
+        let street = try value(output, "previous_addresses", "0", "street_name"), number = try value(output, "previous_addresses", "0", "house_number")
+        let line = try value(output, "previous_addresses", "0", "formatted")
+        #expect(number != "32b" && line.hasPrefix("\(number) \(street), "), "\(number) \(street) vs \(line)")
+    }
+}
+
+/// A dotted birth date whose day and month are the same number is read day
+/// first, so parts beside it take the stand-in's day and month in their places;
+/// a floor written the German way under "unit" is a unit.
+@Test(arguments: renderings)
+func sameDayAndMonthAndGermanFloors(_ name: String) throws {
+    for seed in UInt64(1)...6 {
+        let response = #"{"subject":{"fullName":"Jennifer Okafor","dob":"10.10.1956","dobParts":{"day":10,"month":10,"year":1956}},"address":{"address1":"Am Mühlbach 13a","unit":"2. OG","town":"Hamburg","zip":"20095","country":"DE"}}"#
+        let output = try scrub(response, as: name, seed: seed)
+        let date = try value(output, "subject", "dob").split(separator: ".").compactMap { Int($0) }
+        let parts = try ["day", "month", "year"].map { try Int(value(output, "subject", "dobParts", $0)) }
+        #expect(parts == date.map(Optional.some), "parts \(parts), date \(date)")
+        let unit = try value(output, "address", "unit")
+        #expect(unit != "2. OG" && unit.range(of: #"^\d\. OG$"#, options: .regularExpression) != nil, "\(unit)")
+    }
+}
+
+/// Nine digits written as an SSN under a national ID's key, which no other
+/// kind's check passes, take an SSN the SSA could issue.
+@Test func ssnShapedNationalIDTakesAnIssuableOne() throws {
+    var made: [String] = []
+    for seed in UInt64(1)...30 {
+        let ssn = try value(scrub(#"{"first_name":"Rosalind","national_id":{"data":"458-96-1485"}}"#, as: "signup.json", seed: seed), "national_id", "data")
+        let area = Int(ssn.prefix(3)) ?? 0
+        if ssn == "458-96-1485" || ssn.range(of: #"^\d{3}-\d{2}-\d{4}$"#, options: .regularExpression) == nil || area == 0 || area == 666 || area >= 900 || ssn.dropFirst(4).hasPrefix("00") || ssn.hasSuffix("0000") { made.append(ssn) }
+    }
+    #expect(made.isEmpty, "not SSNs the SSA issues: \(made)")
+}

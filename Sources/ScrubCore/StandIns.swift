@@ -324,8 +324,10 @@ final class StandIns {
             } else if let real = Self.eitherWay(original), let made = Self.eitherWay(fake) {
                 // "04.06.1981" reads either way round, and its stand-in is written in the same places:
                 // a month or day written alone beside it takes the stand-in's part in whichever place it matches.
-                pairs = [DayPair(real: Day(year: real.year, month: real.first, day: real.second), fake: Day(year: made.year, month: made.first, day: made.second)),
-                         DayPair(real: Day(year: real.year, month: real.second, day: real.first), fake: Day(year: made.year, month: made.second, day: made.first))]
+                let monthFirst = DayPair(real: Day(year: real.year, month: real.first, day: real.second), fake: Day(year: made.year, month: made.first, day: made.second))
+                let dayFirst = DayPair(real: Day(year: real.year, month: real.second, day: real.first), fake: Day(year: made.year, month: made.second, day: made.first))
+                // Where both read alike ("10.10.1956"), a date written with dots puts its day first.
+                pairs = original.contains(".") ? [dayFirst, monthFirst] : [monthFirst, dayFirst]
             }
             for pair in pairs {
                 if days[pair.real] == nil { days[pair.real] = pair.fake }
@@ -1081,7 +1083,8 @@ final class StandIns {
             assigned[key] = fake
             return fake
         }
-        let numbered = words.first.map { $0.allSatisfy(\.isNumber) } ?? false
+        // "32b Whiteladies Road": a house number with its letter is a number too.
+        let numbered = words.first.map { $0.range(of: #"^\d+[A-Za-z]?$"#, options: .regularExpression) != nil } ?? false
         let number = numbered ? words.first!.count : 0
         let last = words.count > 1 ? words.last.map(String.init) : nil
         let kind = last.flatMap { Self.suffixes.contains($0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) ? $0 : nil } ?? "Street"
@@ -1092,7 +1095,7 @@ final class StandIns {
         if !run.isEmpty { streetRuns[run] = name }
         let shouted = original == original.uppercased() && original.contains(where: \.isLetter)
         func written(_ number: String) -> String { let made = "\(number) \(name) \(kind)"; return shouted ? made.uppercased() : made }
-        var fake = written(numbered ? addressNumber(String(words.first!)) : digits(3))
+        var fake = written(numbered ? addressNumbered(String(words.first!)) : digits(3))
         for _ in 0..<8 where !unused(fake, original) { fake = written(digits(number > 0 ? min(number, 5) : 3)) }
         assigned[key] = fake
         return fake
@@ -1241,6 +1244,8 @@ final class StandIns {
             if attempt < 40, !named.allSatisfy({ Self.fits(drawn, $0) }) || social && !issuable(drawn.filter { $0.isASCII && $0.isNumber }) { continue }
             if layout(drawn) == layout(original) { break }
         }
+        // Nine digits no kind's check passes, as an SSN is written, are drawn as one: an area the SSA issues stays one.
+        if social, made == nil { return make("US_SSN", original, nil) }
         // Digits alone stay digits: a passport's nine digits that pass another kind's check by chance take no check letter.
         if let drawn = made, !original.contains(where: \.isLetter), drawn.contains(where: \.isLetter) { return nil }
         return made

@@ -468,7 +468,8 @@ public enum KeyHints {
                 return trimmed.contains(where: { $0.isLetter || $0.isNumber }) && !isCommonValue(trimmed) && !placeholderOpenings.contains(where: { trimmed.lowercased().hasPrefix($0) }) && trimmed.utf16.count <= 120
             }
             // "Apt 23", "#12", "4B", and a floor named by its number ("11th floor").
-            return trimmed.contains(where: \.isNumber) && (unitWords.contains(first) || trimmed.hasPrefix("#") || !trimmed.contains(" ") && trimmed.count <= 6
+            // So is a unit as another country writes one ("3º B", "2. OG").
+            return trimmed.contains(where: \.isNumber) && (unitWords.contains(first) || trimmed.hasPrefix("#") || !trimmed.contains(" ") && trimmed.count <= 6 || AddressBlock.isUnit(trimmed)
                 || trimmed.split(separator: " ").count <= 3 && trimmed.lowercased().split(separator: " ").contains { ["floor", "fl", "suite", "unit"].contains(String($0)) })
         }
         // A house number is short: "12", "12A", "12-14", "12 bis".
