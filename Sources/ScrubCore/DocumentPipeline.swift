@@ -238,14 +238,15 @@ enum DocumentPipeline {
         return values
     }
     private static func detectAndPrepare(_ leaves: [DocumentLeaf], job: Job, progress: (Stage, Int, Int) -> Void) throws -> (GazetteerMatcher, [DocumentValue], [Bool]) {
-        let (bases, doubts) = try detectBases(leaves, progress: progress)
-        let prepared = try prepare(leaves, bases: bases, doubts: doubts, job: job)
+        let (bases, keyed, doubts) = try detectBases(leaves, progress: progress)
+        let prepared = try prepare(leaves, bases: keyed, doubts: doubts, job: job)
         return (prepared.0, prepared.1, bases.map { $0?.isEmpty == true })
     }
 
-    private static func prepare(_ leaves: [DocumentLeaf], bases: [[Span]?], doubts: [[Span]], job: Job) throws -> (GazetteerMatcher, [DocumentValue]) {
-        job.reserveNames(zip(leaves, bases).flatMap { leaf, stored in
-            base(leaf, stored: stored).compactMap { span -> String? in
+    /// `bases`: each value's spans in the text as seen (`DocumentLeaf.seen`), its key's where detection left it to the key.
+    private static func prepare(_ leaves: [DocumentLeaf], bases: [[Span]], doubts: [[Span]], job: Job) throws -> (GazetteerMatcher, [DocumentValue]) {
+        job.reserveNames(zip(leaves, bases).flatMap { leaf, base in
+            base.compactMap { span -> String? in
                 if nameEntities.contains(span.entity) { return TextRanges.substring(leaf.seen, span.range) }
                 // A name in an email's local part ("mateo.nguyen@") is someone's: no stand-in reuses it.
                 // Ordinary words ("info", "the", "sales") name no one, and would block half the names to draw from.
@@ -325,8 +326,8 @@ enum DocumentPipeline {
         var founds = [[Span]](repeating: [], count: leaves.count)
         for index in order {
             try Scrubber.checkCancellation()
-            let (leaf, stored) = (leaves[index], bases[index])
-            var found = detected(leaf, base: base(leaf, stored: stored), gazetteer: gazetteer, detector: job.detector)
+            let leaf = leaves[index]
+            var found = detected(leaf, base: bases[index], gazetteer: gazetteer, detector: job.detector)
             if found.isEmpty, leaf.numericEntity == nil, hint(leaf.key) == nil, mayName(leaf.rawKey ?? leaf.key), RecordIDs.isPersonal(leaf, spelled: spelled, ownRecord: object(leaf).map(personal.contains) ?? false) {
                 found = [Span(range: 0..<(leaf.seen as NSString).length, entity: "RECORD_ID", score: 1)]
             } else if leaf.numericEntity == nil, !leaf.fieldName, hint(leaf.key) == nil, case let ids = RecordIDs.spelled(in: leaf.seen, known: spelled), !ids.isEmpty {
@@ -664,11 +665,11 @@ enum DocumentPipeline {
         }
     }
 
-    private static func observeInitial(_ leaves: [DocumentLeaf], bases: [[Span]?], job: Job) {
-        for (index, (leaf, stored)) in zip(leaves, bases).enumerated() {
+    private static func observeInitial(_ leaves: [DocumentLeaf], bases: [[Span]], job: Job) {
+        for (index, (leaf, base)) in zip(leaves, bases).enumerated() {
             if index.isMultiple(of: 1024) && Task.isCancelled { return }
             let found = leaf.numericEntity.map { [Span(range: 0..<(leaf.text as NSString).length, entity: $0, score: 1)] }
-                ?? Detector.resolve(base(leaf, stored: stored))
+                ?? Detector.resolve(base)
             job.observeSpans([(leaf.seen, found)])
         }
     }
@@ -678,12 +679,6 @@ enum DocumentPipeline {
             ?? detector.combined(base, text: leaf.seen, matcher: gazetteer)
     }
 
-    /// Spans in the text as seen (`DocumentLeaf.seen`).
-    private static func base(_ leaf: DocumentLeaf, stored: [Span]?) -> [Span] {
-        if let stored { return stored }
-        guard !leaf.text.isEmpty else { return [] }
-        return Detector.keyed(leaf.seen, key: leaf.key) ?? []
-    }
 
     /// A bare "name" written as a person's that nothing found or doubted: the whole name,
     /// found where it holds only names the name model reads as a person's, else doubted.
@@ -699,9 +694,11 @@ enum DocumentPipeline {
         return (Span(range: range, entity: "PERSON", score: Doubt.unconfirmed.confidence), false)
     }
 
-    private static func detectBases(_ leaves: [DocumentLeaf], progress: (Stage, Int, Int) -> Void) throws -> ([[Span]?], [[Span]]) {
+    /// What detection found in each value, nil where it left the value to its key; the
+    /// same with the key's spans in those; and the people each value's detectors doubt.
+    private static func detectBases(_ leaves: [DocumentLeaf], progress: (Stage, Int, Int) -> Void) throws -> ([[Span]?], [[Span]], [[Span]]) {
         let count = leaves.count
-        guard count > 0 else { return ([], []) }
+        guard count > 0 else { return ([], [], []) }
         // The context model first: its findings fill only what every other detector leaves.
         let context = try ContextStage.find(leaves.map { leaf in
             leaf.numericEntity != nil || leaf.fieldName || KeyHints.hint(leaf.key) != nil || KeyHints.isStructural(leaf.key) ? nil : leaf.seen
@@ -709,6 +706,7 @@ enum DocumentPipeline {
         let chunkSize = max(128, (count + max(1, ProcessInfo.processInfo.activeProcessorCount) * 4 - 1) / (max(1, ProcessInfo.processInfo.activeProcessorCount) * 4))
         let chunkCount = (count + chunkSize - 1) / chunkSize
         let results = Mutex(Array<[Span]?>(repeating: nil, count: count))
+        let keyed = Mutex(Array<[Span]>(repeating: [], count: count))
         let doubted = Mutex(Array<[Span]>(repeating: [], count: count))
         // Worker threads are outside the task, so Task.isCancelled is always false
         // there; the calling thread watches it and raises a flag they can see.
@@ -725,13 +723,18 @@ enum DocumentPipeline {
                 let end = min(count, start + chunkSize)
                 var local: [[Span]?] = [], doubts: [(Int, [Span])] = []
                 local.reserveCapacity(end - start)
+                // Records repeat their values ("level": "info"): one read the model had no part in
+                // is the same wherever its text, key and words are.
+                var reads: [ReadKey: (spans: [Span], doubts: [Span])] = [:]
                 for index in start..<end {
                     if cancelled.isSet { return }
                     let leaf = leaves[index]
                     if leaf.numericEntity != nil || KeyHints.hint(leaf.key) != nil && !leaf.text.isEmpty { local.append(nil) }
                     else if leaf.fieldName { local.append(Patterns.find(leaf.seen, isCancelled: { cancelled.isSet })) }
                     else {
-                        let read = detector.read(leaf.seen, key: leaf.key, contextWords: leaf.contextWords, naming: leaf.namingWords, context: context[index])
+                        let key = context[index] == nil ? ReadKey(text: leaf.seen, key: leaf.key, contextWords: leaf.contextWords, naming: leaf.namingWords) : nil
+                        let read = key.flatMap { reads[$0] } ?? detector.read(leaf.seen, key: leaf.key, contextWords: leaf.contextWords, naming: leaf.namingWords, context: context[index])
+                        if let key, reads[key] == nil { reads[key] = read }
                         var doubted = read.doubts
                         if leaf.unsureName, let name = unsureName(leaf.seen, besides: read.spans + doubted, model: names ? NameModel.shared : nil, isCancelled: { cancelled.isSet }) {
                             if name.sure { local.append(read.spans + [name.span]) } else { local.append(read.spans); doubted.append(name.span) }
@@ -741,7 +744,10 @@ enum DocumentPipeline {
                         if !doubted.isEmpty { doubts.append((index, doubted)) }
                     }
                 }
+                // Where detection leaves a value to its key, the key's spans.
+                let keys = zip(local, leaves[start..<end]).map { found, leaf in found ?? (leaf.text.isEmpty ? [] : Detector.keyed(leaf.seen, key: leaf.key) ?? []) }
                 results.withLock { $0.replaceSubrange(start..<end, with: local) }
+                keyed.withLock { $0.replaceSubrange(start..<end, with: keys) }
                 if !doubts.isEmpty { doubted.withLock { all in for (index, found) in doubts { all[index] = found } } }
             }
             done.leave()
@@ -750,7 +756,18 @@ enum DocumentPipeline {
             if Task.isCancelled { cancelled.set() }
         }
         try Scrubber.checkCancellation()
-        return (results.withLock { $0 }, doubted.withLock { $0 })
+        return (results.withLock { $0 }, keyed.withLock { $0 }, doubted.withLock { $0 })
+    }
+    /// A text and key as written, code unit for code unit: two spellings Swift calls equal
+    /// ("é" composed or not) differ in length, so in where their spans fall.
+    private struct ReadKey: Hashable {
+        let text: [UInt8]
+        let key: [UInt8]?
+        let contextWords: Set<String>
+        let naming: Set<String>?
+        init(text: String, key: String?, contextWords: Set<String>, naming: Set<String>?) {
+            self.text = Array(text.utf8); self.key = key.map { Array($0.utf8) }; self.contextWords = contextWords; self.naming = naming
+        }
     }
 }
 

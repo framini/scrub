@@ -37,19 +37,32 @@ func aModelThatDoesNotLoadIsNamedInTheResult(_ name: String) throws {
 /// own thread for work it starts; started on the global queues, whose threads
 /// it shares with Swift concurrency, that work never began once every one of
 /// those threads was waiting.
+///
+/// Each is timed from when it starts. A task waits behind every job queued on
+/// Swift concurrency's threads before it, whatever its priority, and the test
+/// runner queues the rest of the suite there: timed from the test's start, a
+/// full run measured its own queue, not the scrubs.
 @Test func moreScrubsAtOnceThanCoresAllFinish() {
     let count = ProcessInfo.processInfo.activeProcessorCount + 2
-    let group = DispatchGroup()
-    let finished = Mutex(0)
+    // For each scrub, when it started and whether it finished with a result.
+    let runs = Mutex([(started: ContinuousClock.Instant?, scrubbed: Bool?)](repeating: (nil, nil), count: count))
     for index in 0..<count {
-        group.enter()
         Task.detached {
-            defer { group.leave() }
+            runs.withLock { $0[index].started = .now }
             let text = "Odalys Ferriter (odalys@kestrel.example) asked Teodoro Quillan to call her on 415-867-2290, ticket \(index)."
-            if (try? Scrubber.scrub(Data(text.utf8), name: "note.txt", forceFullDetection: false, seed: UInt64(index))) != nil { finished.withLock { $0 += 1 } }
+            let scrubbed = (try? Scrubber.scrub(Data(text.utf8), name: "note.txt", forceFullDetection: false, seed: UInt64(index))) != nil
+            runs.withLock { $0[index].scrubbed = scrubbed }
         }
     }
-    // Generous: the rest of the suite shares these threads, and the machine may be busy.
-    #expect(group.wait(timeout: .now() + 900) == .success, "scrubs still waiting after fifteen minutes")
-    #expect(finished.withLock { $0 } == count)
+    while true {
+        let now = ContinuousClock.now, current = runs.withLock { $0 }
+        if current.allSatisfy({ $0.scrubbed != nil }) { break }
+        // Generous: the machine may be busy.
+        if let stuck = current.indices.first(where: { current[$0].scrubbed == nil && current[$0].started.map { $0.duration(to: now) > .seconds(900) } == true }) {
+            Issue.record("scrub \(stuck) still running fifteen minutes after it started")
+            return
+        }
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    #expect(runs.withLock { $0 }.allSatisfy { $0.scrubbed == true })
 }

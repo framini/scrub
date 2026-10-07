@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Synchronization
 
 /// An identifier a country gives a person, described as data (see
 /// THIRD_PARTY_NOTICES): the forms it is written in, the
@@ -3289,9 +3290,29 @@ enum Recognizers {
 
     /// The kind of identifier `value`, whole, is where `words` name it: it passes a kind's check in one of its forms and one of the words names that kind,
     /// as a key's words name a string under it ("kimlik": 89508837288).
+    /// Only a kind the words name scores 1 at the text's start (no word stands before it), so only those
+    /// kinds are read, as `find` reads them, and the first whose match is the whole value names it.
     static func named(_ value: String, by words: Set<String>) -> String? {
         let ns = value as NSString
-        return find(value, ns: ns, units: Array(value.utf16), contextWords: words, isCancelled: { false }).first { $0.range == 0..<ns.length && $0.score >= 1 }?.entity
+        let units = Array(value.utf16), whole = NSRange(location: 0, length: ns.length)
+        let small = units.contains { (97...122).contains($0) }
+        var capitals: (units: [UInt16], text: NSString)?
+        let kinds = named(among: words)
+        for (index, recognizer) in all.enumerated() where kinds[index] {
+            for form in recognizer.forms {
+                guard let regex = form.pattern.regex else { continue }
+                if Patterns.matches(regex, in: ns, units: units, isCancelled: { false }).contains(where: { $0.range == whole }), recognizer.passes(value) { return recognizer.entity }
+                guard small, recognizer.folds else { continue }
+                if capitals == nil {
+                    let upperUnits = units.map { (97...122).contains($0) ? $0 - 32 : $0 }
+                    capitals = (upperUnits, String(utf16CodeUnits: upperUnits, count: upperUnits.count) as NSString)
+                }
+                guard let (upperUnits, upper) = capitals, value != upper as String,
+                      Patterns.matches(regex, in: upper, units: upperUnits, isCancelled: { false }).contains(where: { $0.range == whole }), recognizer.passes(value) else { continue }
+                return recognizer.entity
+            }
+        }
+        return nil
     }
 
     /// Words that sit between a value and the word naming it without changing what it names ("the", "my", "de");
@@ -3318,6 +3339,22 @@ enum Recognizers {
         guard !words.isEmpty else { return false }
         return context.contains { entry in (entryParts[entry] ?? parts(entry)).contains { $0.allSatisfy { part in words.contains { mentions($0, part) } } } }
     }
+    /// For each kind in `all`, whether one of `words` names it. The same keys' words come with
+    /// every record, so each set is read once.
+    static func named(among words: Set<String>) -> [Bool] {
+        guard !words.isEmpty else { return unnamed }
+        if let known = namedAmong.withLock({ $0[words] }) { return known }
+        let found = all.map { named($0.context, among: words) }
+        namedAmong.withLock { known in
+            if known.count >= 4096 { known.removeAll() }
+            known[words] = found
+        }
+        return found
+    }
+    private static let unnamed = [Bool](repeating: false, count: all.count)
+    private static let namedAmong = Mutex<[Set<String>: [Bool]]>([:])
+    /// Each kind's entries' first words, by its place in `all`: `find` asks whether the text writes them.
+    private static let firstWords: [[String]] = all.map { recognizer in Array(Set(recognizer.context.compactMap { $0.split(whereSeparator: { !$0.isLetter }).first.map(String.init) })) }
     /// Every kind's entries read once: `named` asks for them on every value.
     private static let entryParts: [String: [[String]]] = Dictionary(all.flatMap(\.context).map { ($0, parts($0)) }, uniquingKeysWith: { first, _ in first })
     /// A context entry's words as a key's or a type field's are read: "driver's license" is driver, s, license;
@@ -3357,10 +3394,19 @@ enum Recognizers {
         let upper = small ? String(utf16CodeUnits: upperUnits, count: upperUnits.count) as NSString : ns
         // Searched as an NSString: a String's own search is slow over a long text, once per kind's word.
         let lower = (small ? text.lowercased() : "") as NSString
-        for recognizer in all {
+        // Each first word looked for once, whichever kinds share it.
+        var held: [String: Bool] = [:]
+        func holds(_ word: String) -> Bool {
+            if let known = held[word] { return known }
+            let found = lower.range(of: word, options: .literal).location != NSNotFound
+            held[word] = found
+            return found
+        }
+        let kinds = named(among: contextWords)
+        for (index, recognizer) in all.enumerated() {
             if isCancelled() { return spans }
-            let keyed = Self.named(recognizer.context, among: contextWords)
-            let capitalised = small && recognizer.folds && (keyed || recognizer.context.contains { entry in entry.split(whereSeparator: { !$0.isLetter }).first.map { lower.range(of: String($0), options: .literal).location != NSNotFound } ?? false })
+            let keyed = kinds[index]
+            let capitalised = small && recognizer.folds && (keyed || firstWords[index].contains(where: holds))
             for form in recognizer.forms {
                 guard let regex = form.pattern.regex else { continue }
                 for match in Patterns.matches(regex, in: ns, units: units, isCancelled: isCancelled) {

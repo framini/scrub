@@ -293,3 +293,84 @@ private func expectPrompt(_ measure: () async throws -> (stopped: Duration, refe
     print("plain text debug: 4000=\(half), 8000=\(full)")
     #expect(full < half * 3)
 }
+
+/// The fastest of two runs of each, alternated: other suites run in
+/// parallel, and their load changes between two timings.
+private func fastest(_ a: () throws -> Void, _ b: () throws -> Void) rethrows -> (Duration, Duration) {
+    var first = Duration.seconds(3600), second = Duration.seconds(3600)
+    for _ in 0..<2 {
+        var start = ContinuousClock.now
+        try a()
+        first = min(first, start.duration(to: .now))
+        start = .now
+        try b()
+        second = min(second, start.duration(to: .now))
+    }
+    return (first, second)
+}
+
+/// A customer export: an ID, a name, an email, a phone and a city on every row.
+private func customerCSV(_ count: Int) -> Data {
+    let firsts = ["Odalys", "Teodoro", "Marisol", "Kwabena", "Ingrid", "Tobiah", "Saoirse", "Leocadia"]
+    let lasts = ["Ferriter", "Quillan", "Abernathy", "Oduya", "Brackenridge", "Thornquist", "Castellanos", "Venkataraman"]
+    let cities = ["Albany", "Tacoma", "Dayton", "Fresno", "Provo"]
+    let rows = (0..<count).map { index -> String in
+        let first = firsts[index % firsts.count], last = lasts[index / firsts.count % lasts.count]
+        return "C-\(10_000 + index),\(first),\(last),\(first.lowercased()).\(last.lowercased())\(index)@example.com,(212) 555-01\(String(format: "%02d", index % 100)),\(cities[index % cities.count]),2024-\(String(format: "%02d", index % 12 + 1))-\(String(format: "%02d", index % 28 + 1)),\(index * 7 % 1000).\(index % 100)"
+    }
+    return Data(("customer_id,first_name,last_name,email,phone,city,signup_date,ltv\n" + rows.joined(separator: "\n") + "\n").utf8)
+}
+
+/// A service's log: a time, a level, a user's email, an address and a status on every line.
+private func serviceLog(_ count: Int) -> Data {
+    let lines = (0..<count).map { index in
+        #"{"ts": "2026-10-01T\#(String(format: "%02d:%02d:%02d", 12 + index / 3600 % 12, index / 60 % 60, index % 60))Z", "level": "\#(index % 50 == 0 ? "warn" : "info")", "user_email": "user\#(index % 300)@example.com", "ip": "198.51.100.\#(index % 250)", "status": \#(index % 50 == 0 ? 503 : 200), "latency_ms": \#(index % 500)}"#
+    }
+    return Data((lines.joined(separator: "\n") + "\n").utf8)
+}
+
+/// A table and a log four times as long take about four times as long, not sixteen.
+@Test func customerExportAndServiceLogScaleLinearly() throws {
+    for (name, make) in [("customers.csv", customerCSV), ("service.jsonl", serviceLog)] {
+        let small = make(400), large = make(1_600)
+        let (short, long) = try fastest({ _ = try Scrubber.scrub(small, name: name, forceFullDetection: false, seed: 3) },
+                                        { _ = try Scrubber.scrub(large, name: name, forceFullDetection: false, seed: 3) })
+        print("\(name) debug: 400=\(short), 1600=\(long)")
+        #expect(long < short * 6, "\(name): 400 rows \(short), 1600 rows \(long)")
+    }
+}
+
+/// A value its key names (`"phone": "(212) 555-0142"`) is checked against the kinds the key
+/// names, not read for every kind there is.
+@Test func aKeyedValueIsReadOnlyForTheKindsItsKeyNames() {
+    let values = (0..<300).map { "(212) 555-\(String(format: "%04d", $0 * 37 % 10_000))" }
+    let words: Set<String> = ["phone"]
+    let (named, read) = fastest({ for value in values { _ = Recognizers.named(value, by: words) } },
+                                { for value in values { _ = Recognizers.find(value, ns: value as NSString, units: Array(value.utf16), contextWords: words, isCancelled: { false }) } })
+    print("keyed value debug: named=\(named), every kind=\(read)")
+    #expect(named * 3 < read)
+}
+
+/// A column of values no kind passes (a log's times) is given up once nine in ten can no longer pass one.
+@Test func aColumnNoKindHoldsIsGivenUpEarly() {
+    let times = (0..<3_000).map { "2026-10-01T\(String(format: "%02d:%02d:%02d", $0 / 3600, $0 / 60 % 60, $0 % 60))Z" }
+    let (column, every) = fastest({ #expect(Fields.column(times) == nil) }, { for time in times { _ = Recognizers.candidates(time) } })
+    print("column debug: column=\(column), every value=\(every)")
+    #expect(column * 3 < every)
+}
+
+/// A document's records repeat their values ("level": "info"): one read once costs little where it is written again.
+@Test func repeatedValuesAreReadOnce() throws {
+    let lines = { (repeated: Bool) in
+        Data((0..<600).map { index -> String in
+            let tag = repeated ? "" : "-\(index)"
+            return #"{"service": "checkout-api-eu-west-1-blue-canary\#(tag)", "path": "/api/v2/orders/search?status=open&sort=created_at&page=12\#(tag)", "build": "2026.10.01-rc3+arm64.release.9f8e7d\#(tag)", "route": "orders.search.v2.primary.read-replica\#(tag)", "trace": "svc=checkout;zone=eu-west-1b;pool=blue;tier=standard\#(tag)"}"#
+        }.joined(separator: "\n").utf8)
+    }
+    let same = lines(true), distinct = lines(false)
+    let (repeated, unique) = try fastest({ _ = try Scrubber.scrub(same, name: "service.jsonl", forceFullDetection: false, seed: 3) },
+                                         { _ = try Scrubber.scrub(distinct, name: "service.jsonl", forceFullDetection: false, seed: 3) })
+    print("repeated values debug: repeated=\(repeated), distinct=\(unique)")
+    // Read once, about half as long; read every time, about two thirds.
+    #expect(repeated * 9 < unique * 5)
+}

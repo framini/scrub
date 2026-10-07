@@ -75,9 +75,15 @@ enum Fields {
             if !canonical.isEmpty, distinct[canonical] == nil { distinct[canonical] = value }
         }
         guard distinct.count >= 4 else { return nil }
-        var passing: [String: Int] = [:]
+        var passing: [String: Int] = [:], left = distinct.count, most = 0
         for value in distinct.values {
-            for recognizer in Recognizers.candidates(value) where recognizer.verifies { passing[recognizer.name, default: 0] += 1 }
+            // Once no kind can reach nine in ten, the rest needn't be read.
+            guard (most + left) * 10 >= distinct.count * 9 else { return nil }
+            left -= 1
+            for recognizer in Recognizers.candidates(value) where recognizer.verifies {
+                passing[recognizer.name, default: 0] += 1
+                most = max(most, passing[recognizer.name] ?? 0)
+            }
         }
         // Two kinds every value passes (a CPF is a Guatemalan NIT too): the registry's earlier, longer-known one.
         let order = Dictionary(uniqueKeysWithValues: Recognizers.all.enumerated().map { ($1.name, $0) })
