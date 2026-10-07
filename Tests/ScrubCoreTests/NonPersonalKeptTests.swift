@@ -104,6 +104,14 @@ struct NonPersonalKeptTests {
             #expect(json.range(of: #", [A-Z]{2} \d{5}\. Done"#, options: .regularExpression) != nil, "\(json)")
             let text = try Self.scrub(note, name: "note.txt", seed: seed)
             #expect(text.hasPrefix("Hi, I'm ") && !text.contains("Bartholomew"), "\(text)")
+            // A first name opening a line is still the person's, wherever the tagger places it.
+            let signed = try Self.scrub("James B\n", name: "note.txt", seed: seed)
+            #expect(!signed.contains("James"), "\(signed)")
+            // A unit after a number is still the address's, never a sentence after it.
+            let unit = try Self.scrub("Please deliver to 1407 Linden Park Road 4410. Apt. 12 is on the left.\n", name: "note.txt", seed: seed)
+            #expect(!unit.contains("Linden Park") && !unit.contains("Apt. 12 "), "\(unit)")
+            let street = try Self.scrub("The bus drops you off at 731 Rákóczi Ferenc útja 48. St.\n", name: "note.txt", seed: seed)
+            #expect(!street.contains("Rákóczi") && street.components(separatedBy: "St").count == 2, "\(street)")
         }
     }
 

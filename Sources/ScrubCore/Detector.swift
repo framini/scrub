@@ -801,7 +801,7 @@ public final class Detector {
         if let stop = TextRanges.matches(sentenceAfterPostcode, in: ns.substring(with: range)).first { range.length = stop.range.location }
         return range.location..<NSMaxRange(range)
     }
-    private static let sentenceAfterPostcode = TextPattern(#"(?<=\d|\d[A-Z]|\d[A-Z]{2})\.(?=[ \t]+\p{Lu}\p{Ll})"#)
+    private static let sentenceAfterPostcode = TextPattern(#"(?<=\d{4}|\d[A-Z]{2})\.(?=[ \t]+(?!(?:Apt|Apartment|Suite|Ste|Unit|Flat|Floor|St|Ave|Rd|Box)\b)\p{Lu}\p{Ll})"#)
     private static let nameBefore = TextPattern(#"\p{Lu}[\p{L}'’.-]*[ \t]+$"#)
     private static let nameAfter = TextPattern(#"^[ \t]+\p{Lu}"#)
     private static func withinList(_ range: Range<Int>, _ ns: NSString) -> Bool {

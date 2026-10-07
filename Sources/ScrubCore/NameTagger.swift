@@ -156,8 +156,8 @@ enum NameTagger {
             let isCity = tag == .personalName && Names.citiesFolded.contains(found.lowercased())
             // A country ("Canada", "United States") is where millions live; it names no one.
             if tag == .placeName, let country = Places.country(found), country != "other" { return true }
-            // An ordinary word opening a sentence ("Hi, I'm…", read as Hawaii) is the word, unless it is a city's name too.
-            if tag == .placeName, !found.contains(" "), opensSentence(mapped, in: original), NameLists.isWord(found.lowercased()) || found.count <= 2,
+            // An ordinary word opening a sentence ("Hi, I'm…", read as Hawaii) is the word, unless it is a city's or a person's name too.
+            if tag == .placeName, !found.contains(" "), opensSentence(mapped, in: original), NameLists.isWord(found.lowercased()) && !NameLists.isName(found) || found.count <= 2,
                !Names.citiesFolded.contains(found.lowercased()) { return true }
             result.append(Span(range: mapped, entity: tag == .personalName && !isCity ? "PERSON" : "LOCATION", score: tag == .personalName && !isCity ? 0.85 : 0.6))
             return true
