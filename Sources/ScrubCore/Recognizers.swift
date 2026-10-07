@@ -986,6 +986,20 @@ enum Recognizers {
         }, draw: { _, rng in
             ["P"] + characters([0] + randomDigits(7, &rng))
         }),
+        // An individual taxpayer number the IRS gives those who can't have an SSN: nine
+        // digits, the first a 9 (no SSN's area), the middle two in the ranges it issues.
+        Recognizer("US_ITIN", keys: ["itin", "itinnumber", "individualtaxpayeridentificationnumber"], forms: [
+            .init(#"\b9\d{2}([- ]?)(?:5\d|6[0-5]|7\d|8[0-8]|9[0-2]|9[4-9])\1\d{4}\b"#, 0.3),
+        ], context: ["itin", "individual taxpayer identification number", "taxpayer identification number"], verifies: false, check: { characters in
+            guard let d = numbers(characters), d.count == 9, d[0] == 9 else { return false }
+            let group = d[3] * 10 + d[4]
+            return (50...65).contains(group) || (70...88).contains(group) || (90...92).contains(group) || (94...99).contains(group)
+        }, draw: { _, rng in
+            // The ranges issued longest, which every check of one accepts.
+            let groups = Array(70...88) + Array(90...92) + Array(94...99)
+            let group = groups[Int.random(in: 0..<groups.count, using: &rng)]
+            return characters([9] + randomDigits(2, &rng) + [group / 10, group % 10] + [Int.random(in: 1...9, using: &rng)] + randomDigits(3, &rng))
+        }),
         Recognizer("PASSPORT", forms: [
             .init(#"\b[A-Z]{1,2}\d{6,8}\b"#, 0.1),
             // A Philippine passport's letter, seven digits and letter.

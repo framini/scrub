@@ -405,8 +405,8 @@ enum RecordIDs {
         guard idKey(key) else { return false }
         // A flattened column names its object first ("actor.id"): the field is its last part, as a nested key is.
         let words = KeyHints.words(key?.split(separator: ".").last.map(String.init))
-        // Any of a device's identifiers is the person's who uses it: "device": {"signals": {"hashId": …}}.
-        if leaf.contextWords.contains("device"), words.last == "id", plainID(leaf.text) || isUUID(leaf.text) || leaf.text.count >= 16 && leaf.text.allSatisfy(\.isHexDigit) { return true }
+        // Any of a device's identifiers is the person's who uses it: "device": {"signals": {"hashId": …}}, "device": {"fingerprint": …}.
+        if leaf.contextWords.contains("device"), ["id", "fingerprint", "hash"].contains(words.last ?? ""), plainID(leaf.text) || isUUID(leaf.text) || leaf.text.count >= 16 && leaf.text.allSatisfy(\.isHexDigit) { return true }
         if words == ["id"] || words == ["uid"] {
             let prefix = keptPrefix(leaf.text).dropLast().lowercased()
             // A person's own object: under a collection of people, beside their name or email, or with a person's prefix.

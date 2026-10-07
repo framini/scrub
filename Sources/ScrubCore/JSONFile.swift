@@ -125,6 +125,8 @@ public enum JSONFile: FileFormat {
         }
         if let hint = KeyHints.hint(key), !numericEntities.contains(hint) { return nil }
         if KeyHints.hint(key) == "ADDRESS" { return KeyHints.addressNumberKey(key) && KeyHints.fits(key, number) && number.allSatisfy({ $0.isASCII && $0.isNumber }) && number.count <= 5 ? "ADDRESS" : nil }
+        // "dob": 1, "document_number": 0: a check's result, never a whole date or a document's number.
+        if let hint = KeyHints.hint(key), ["DATE_OF_BIRTH", "ID_NUMBER", "US_SSN"].contains(hint), number.count == 1, hint != "DATE_OF_BIRTH" || KeyHints.datePart(key) == nil { return nil }
         guard let value = Double(number), value.isFinite else { return KeyHints.hint(key) }
         // A score like 0.99 under "dob" or "city" rates the field; it holds no value of it.
         // So is a small one written with a decimal point ("1.00"); 2128675309.0 is still a phone number.

@@ -91,7 +91,7 @@ struct AddressBlock {
 
     // MARK: Pieces
 
-    private static let unitWords = #"flat|apt|apartment|appt|apto|suite|ste|unit|floor|fl|level|lvl|room|rm|bldg|block|blk|shop|lot|plot|pmb|top|wohnung|bâtiment|bat|piso|escalier|étage|etage|bureau|sala|bloco|int|depto|kat|lgh|house no|no"#
+    private static let unitWords = #"flat|apt|apartment|appt|app|apto|bât|suite|ste|unit|floor|fl|level|lvl|room|rm|bldg|block|blk|shop|lot|plot|pmb|top|wohnung|bâtiment|bat|piso|escalier|étage|etage|bureau|sala|bloco|int|depto|kat|lgh|house no|no"#
     private static let boxWords = #"p\.?\s?o\.?\s?box|post office box|gpo box|locked bag|private bag|postfach|postbus|postboks|b\.?p\.?|cs|apartado(?: de correos)?|casella postale|box|c\.?p\.?|caixa postal"#
     private static let unit = TextPattern(#"(?i)^\s*(?:(?:"# + unitWords + #")(?![\p{L}])\.?\s*[#n°º.]*\s*[\p{L}\d][\p{L}\d./-]{0,7}|#\s?\d[\d-]*|\d{1,2}(?:st|nd|rd|th|e|er|ème|\.)?\s+(?:floor|étage|piso|og|stock|andar|etg|etasje|kerros)|(?:ground|first|second|third|fourth|fifth|top|lower|upper)\s+floor|rez-de-chaussée|bajo|r/c|\d{1,2}\s?[º°ª]\s*(?:[\p{L}]{1,5}\.?)?|\d{1,2}\.\s?(?:th|tv|mf|sal)\.?|\d{1,2}[rª]\s+\d{1,2}[ªa]|(?:"# + boxWords + #")\s*\d[\d ]*(?:\s+(?:stn|station)\s+\p{L}+)?)\s*$"#)
     static func isUnit(_ piece: String) -> Bool { !TextRanges.matches(unit, in: piece).isEmpty }
@@ -349,8 +349,10 @@ struct AddressBlock {
     static func knownCountry(city: String) -> String? {
         // "Praha 2" is in Praha, "København K" is København K.
         let lower = city.lowercased()
-        let found = Set(Places.all.filter { $0.city.lowercased() == lower }.map(\.country)
-                        + Places.abroad.filter { $0.city.lowercased() == lower || lower.hasPrefix($0.city.lowercased() + " ") || $0.city.lowercased().hasPrefix(lower + " ") }.map(\.country))
+        // A city named whole outranks one it only begins: "Porto" is Porto, not Porto Alegre.
+        let exact = Set(Places.all.filter { $0.city.lowercased() == lower }.map(\.country) + Places.abroad.filter { $0.city.lowercased() == lower }.map(\.country))
+        if !exact.isEmpty { return exact.count == 1 ? exact.first : nil }
+        let found = Set(Places.abroad.filter { lower.hasPrefix($0.city.lowercased() + " ") || $0.city.lowercased().hasPrefix(lower + " ") }.map(\.country))
         return found.count == 1 ? found.first : nil
     }
 

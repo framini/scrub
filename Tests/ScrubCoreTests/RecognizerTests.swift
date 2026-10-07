@@ -128,6 +128,7 @@ let recognizerSamples: [String: String] = [
     "KE_PIN": "A004517392K",
     "CR_DIMEX": "155812345678",
     "US_PTIN": "P01234567",
+    "US_ITIN": "912-78-1234",
     "CO_NIT": "123.456.789-6",
     "VE_RIF": "V-12345678-1",
     "EC_RUC": "1712345675001",
@@ -774,6 +775,7 @@ private func scrubbedText(_ text: String, seed: UInt64 = 7) throws -> String {
     ("ES_NIF_KLM", "nif", "NIF"), ("CU_NI", "carnet_identidad", "carnet de identidad"), ("DO_CEDULA", "cedula", "cédula"),
     ("ID_NIK", "nik", "NIK"), ("MY_NRIC", "mykad", "MyKad"), ("PK_CNIC", "cnic", "CNIC"),
     ("KE_PIN", "kra_pin", "KRA PIN"), ("CR_DIMEX", "dimex", "DIMEX"), ("US_PTIN", "ptin", "PTIN"),
+    ("US_ITIN", "itin", "ITIN"),
 ])
 func aPersonsOwnNumberIsReplacedInItsKind(_ name: String, _ key: String, _ phrase: String) throws {
     let number = try #require(recognizerSamples[name])

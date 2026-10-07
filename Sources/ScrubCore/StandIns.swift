@@ -314,10 +314,23 @@ final class StandIns {
         } else if entity == "DATE_OF_BIRTH" {
             guard let real = Self.dateParts(original), years[real.year] != nil else { return }
             for scope in scopes where !(scopedYears[scope]?.contains(real.year) ?? false) { scopedYears[scope, default: []].append(real.year) }
-            guard let month = real.month, let day = real.day, let made = Self.dateParts(fake), let fakeMonth = made.month, let fakeDay = made.day else { return }
-            let pair = DayPair(real: Day(year: real.year, month: month, day: day), fake: Day(year: made.year, month: fakeMonth, day: fakeDay))
-            if days[pair.real] == nil { days[pair.real] = pair.fake }
-            for scope in scopes where !(scopedDays[scope]?.contains { $0.real == pair.real } ?? false) { scopedDays[scope, default: []].append(pair) }
+            var pairs: [DayPair] = []
+            if let month = real.month, let day = real.day, let made = Self.dateParts(fake), let fakeMonth = made.month, let fakeDay = made.day {
+                pairs = [DayPair(real: Day(year: real.year, month: month, day: day), fake: Day(year: made.year, month: fakeMonth, day: fakeDay))]
+            } else if let month = real.month, let day = real.day, let made = Self.positions(fake), let order = Self.positions(original) {
+                // "16.09.1976" → "05.06.1968": the stand-in reads either way, but is written in the original's order.
+                let dayFirst = order.first == day && order.second == month
+                pairs = [DayPair(real: Day(year: real.year, month: month, day: day), fake: Day(year: made.year, month: dayFirst ? made.second : made.first, day: dayFirst ? made.first : made.second))]
+            } else if let real = Self.eitherWay(original), let made = Self.eitherWay(fake) {
+                // "04.06.1981" reads either way round, and its stand-in is written in the same places:
+                // a month or day written alone beside it takes the stand-in's part in whichever place it matches.
+                pairs = [DayPair(real: Day(year: real.year, month: real.first, day: real.second), fake: Day(year: made.year, month: made.first, day: made.second)),
+                         DayPair(real: Day(year: real.year, month: real.second, day: real.first), fake: Day(year: made.year, month: made.second, day: made.first))]
+            }
+            for pair in pairs {
+                if days[pair.real] == nil { days[pair.real] = pair.fake }
+                for scope in scopes where !(scopedDays[scope]?.contains { $0.real == pair.real } ?? false) { scopedDays[scope, default: []].append(pair) }
+            }
         }
     }
     /// The candidates a derived value takes from: those of the nearest scope
@@ -560,6 +573,19 @@ final class StandIns {
         if yearFirst { return (year, rest[0], rest[1]) }
         return rest[0] > 12 ? (year, rest[1], rest[0]) : rest[1] > 12 ? (year, rest[0], rest[1]) : (year, nil, nil)
     }
+    /// A date whose day and month could be either way round ("11/07/1984",
+    /// "04.06.1981"): its year and its two other numbers in the order written.
+    static func eitherWay(_ written: String) -> (year: Int, first: Int, second: Int)? {
+        guard let found = positions(written), (1...12).contains(found.first), (1...12).contains(found.second) else { return nil }
+        return found
+    }
+    /// A numeric date with its year last: the year and its two other numbers in the order written.
+    static func positions(_ written: String) -> (year: Int, first: Int, second: Int)? {
+        let runs = written.trimmingCharacters(in: .whitespacesAndNewlines).split(whereSeparator: { !$0.isNumber }).map(String.init)
+        guard runs.count == 3, runs[2].count == 4, let year = Int(runs[2]), (1900...2100).contains(year), let first = Int(runs[0]), let second = Int(runs[1]),
+              (1...31).contains(first), (1...31).contains(second), written.allSatisfy({ !$0.isLetter }) else { return nil }
+        return (year, first, second)
+    }
     private static let monthNames = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
     /// The month a word names, in full or cut to three letters or more ("March", "MAR", "Sept.").
     static func month(_ word: String) -> Int? {
@@ -627,6 +653,8 @@ final class StandIns {
         // A UK district of the original's shape other than its own will do, in any place (see `canWrite`).
         let inCountry = Places.all.filter { place in
             place.country == country && Places.region(place.region, in: country)?.code != ownRegion && !originals.contains(place.city.lowercased())
+                // Nor the original's own city written without its accents: "Montréal" never becomes "Montreal".
+                && parts.city.map { place.city.compare($0.trimmingCharacters(in: .whitespaces), options: [.caseInsensitive, .diacriticInsensitive]) != .orderedSame } ?? true
         }
         let writing = inCountry.filter { place in parts.postal.map { canWrite(place, like: $0) } ?? true }
         let elsewhere = writing.filter { place in parts.postal.map { !place.postal.contains(Self.district($0)) } ?? true }
@@ -744,6 +772,8 @@ final class StandIns {
             // "624, chemin des Chênes": a house number on its own, a street named as another language does.
             else if piece.allSatisfy(\.isNumber) { written = addressNumbered(piece) }
             else if AddressBlock.isStreet(piece), !piece.first!.isNumber { written = foreignStreet(like: piece, country: parts.country.flatMap(AddressBlock.countryName) ?? Places.country(city: parts.city, region: parts.region, postal: parts.postal, country: nil)) }
+            // "384 rue Saint-Denis" in Montréal: named as the same street in a field of its own is.
+            else if Self.french(piece), !AddressBlock.isUnit(piece) { written = foreignStreet(like: piece, country: place.country) }
             else { written = unit(piece) ?? (AddressBlock.isUnit(piece) ? renumbered(piece) : street(like: piece)) }
             return written + (index < parsed.pieces.count - 1 ? separators.next() ?? ", " : "")
         }.joined() + (original.hasSuffix(".") ? "." : "")
@@ -775,7 +805,7 @@ final class StandIns {
             case .street:
                 let trimmed = piece.trimmingCharacters(in: .whitespaces)
                 written = trimmed.allSatisfy(\.isNumber) ? addressNumbered(piece)
-                    : Self.english(parsed.country) && trimmed.first?.isNumber == true ? street(like: piece) : foreignStreet(like: piece, country: parsed.country)
+                    : Self.english(parsed.country) && trimmed.first?.isNumber == true && !Self.french(trimmed) ? street(like: piece) : foreignStreet(like: piece, country: parsed.country)
             case .locality: written = locality(piece, localities[index] ?? AddressBlock.Locality(), place: place, abroad: abroad)
             case .place:
                 let trimmed = piece.trimmingCharacters(in: .whitespaces)
@@ -786,6 +816,10 @@ final class StandIns {
         }.joined()
     }
 
+    /// A street named the French way, its kind in small letters before its name: "4520 rue Saint-Denis", "avenue du Parc".
+    static func french(_ street: String) -> Bool {
+        street.split(separator: " ").contains { ["rue", "avenue", "boulevard", "chemin", "allée", "impasse", "montée", "côte", "rang", "place", "quai"].contains(String($0)) }
+    }
     private static func english(_ country: String?) -> Bool { country.map { ["US", "CA", "GB", "AU", "NZ", "IE", "ZA", "IN", "SG"].contains($0) } ?? true }
 
     /// Its digits drawn afresh, the rest as written: "3º Esq." → "7º Esq.".
@@ -874,9 +908,8 @@ final class StandIns {
             swap(parts.region, parts.region.map { Places.write(place, like: $0) })
             swap(parts.city, parts.city.map { city(of: place, like: $0) })
         } else if let abroad {
-            swap(parts.postal, parts.postal.map { postal in
-                abroad.postal(like: postal, digit: { self.digit() }, letter: { self.pick(Array("ACDEFHKNPRTVWXY")) ?? "A" })
-            })
+            // The same postcode in a field of its own takes the same stand-in: "80538" and "Am Gries 3a, 80538 München" agree.
+            swap(parts.postal, parts.postal.map { abroadPart("POSTAL_CODE", $0, abroad) })
             swap(parts.region, parts.region.map { abroad.region ?? $0 })
             swap(parts.city, parts.city.map { $0 == $0.uppercased() ? abroad.city.uppercased() : abroad.city })
         } else {
@@ -936,7 +969,8 @@ final class StandIns {
     private func foreignStreet(like original: String, country: String?) -> String {
         let key = "STREET\u{0}" + original.lowercased()
         if let known = assigned[key] { return known }
-        let pool = names(for: country).filter { !original.lowercased().contains($0.lowercased()) }
+        // A Quebec street ("rue Saint-Denis") is named as a French one is.
+        let pool = names(for: Self.french(original) && country == "CA" ? "FR" : country).filter { !original.lowercased().contains($0.lowercased()) }
         // "de l'Ardoise": the elided article stays, the name after it is the name.
         var words: [String] = []
         for word in original.split(separator: " ", omittingEmptySubsequences: false).map(String.init) {
@@ -1319,7 +1353,9 @@ final class StandIns {
     private static let boxes = ["po box", "p.o. box", "p.o.box", "p o box", "post office box", "postfach", "apartado", "private bag", "gpo box", "locked bag", "postbus", "postboks",
                                 "bp ", "b.p. ", "cs ", "casella postale", "caixa postal", "box ", "c.p. ", "cp "]
     private static let units: Set<String> = ["apt", "apartment", "suite", "ste", "unit", "floor", "fl", "room", "rm", "bldg", "building", "#", "flat", "level", "lvl", "shop", "lot",
-                                             "pmb", "blk", "block", "top", "wohnung", "appt", "apto", "piso", "bureau", "sala", "bloco", "depto", "int", "escalier", "bâtiment", "plot"]
+                                             "pmb", "blk", "block", "top", "wohnung", "appt", "apto", "piso", "bureau", "sala", "bloco", "depto", "int", "escalier", "bâtiment", "plot",
+                                             // Quebec's and France's: "App. 3", "Bât. A".
+                                             "app", "bât", "bat"]
     private static let digitsOnly: Set<String> = ["PHONE_NUMBER", "US_SSN", "ID_NUMBER", "POSTAL_CODE", "US_BANK_NUMBER", "US_PASSPORT", "US_DRIVER_LICENSE", "US_ITIN", "MEDICAL_LICENSE"]
     private func make(_ entity: String, _ original: String, _ persona: Persona?, _ place: Place? = nil) -> String {
         // An identifier the registry knows takes a fresh one passing the same check, as a form validating it would ask.
@@ -1357,7 +1393,8 @@ final class StandIns {
         }
         // A number stays a number of the same length, so a JSON body pasted as
         // text still parses and a column of IDs keeps its width.
-        if Self.digitsOnly.contains(entity), !original.isEmpty, original.allSatisfy({ $0.isASCII && $0.isNumber }) {
+        // Nine digits read as an SSN are drawn as one below, an area the SSA issues and all.
+        if Self.digitsOnly.contains(entity), !original.isEmpty, original.allSatisfy({ $0.isASCII && $0.isNumber }), !(entity == "US_SSN" && original.count == 9) {
             return original.first == "0" ? (0..<original.count).map { _ in digit() }.joined() : digits(original.count)
         }
         switch entity {
@@ -1410,6 +1447,8 @@ final class StandIns {
             // "PO Box 7712, Halifax NS B3K 5M2" is a box and a locality, each rewritten.
             if let parsed = AddressBlock.read(original), parsed.pieces.count > 1 { return block(original, parsed) }
             if let unit = unit(original) { return unit }
+            // A unit as another country writes one ("3º B", "2. OG") takes another number, never a street.
+            if AddressBlock.isUnit(original), original.contains(where: \.isNumber) { return renumbered(original) }
             // A house or unit number on its own ("12", "4B", "12/2", "12 bis") takes the
             // number the same digits take in any street line beside it.
             if original.range(of: #"^\d{1,5}[A-Za-z]?(?:\s*[-/]\s*\d{1,5}[A-Za-z]?)?(?:\s?(?:bis|ter))?$"#, options: .regularExpression) != nil { return addressNumbered(original) }
@@ -1430,6 +1469,8 @@ final class StandIns {
             }
             // A street written as another country writes one keeps its layout.
             if let parsed = AddressBlock.read(original), !Self.english(parsed.country) { return block(original, parsed) }
+            // "4520 rue Saint-Denis" stays a rue, named as the same street anywhere else.
+            if Self.french(original), !original.contains(",") { return foreignStreet(like: original, country: streetAddress?.country.flatMap(Places.code) ?? "CA") }
             return street(like: original)
         case "INITIALS":
             owner = persona
@@ -1445,7 +1486,9 @@ final class StandIns {
             // the IRS issues (an area of 9) stays one, any other a number the SSA could;
             // a number named so that is neither keeps its own length.
             guard original.filter(\.isNumber).count == 9 else { return Recognizers.standIn(for: original, using: &rng) ?? idLike(original) }
-            let area = original.first(where: \.isNumber) == "9" ? 900 + Int.random(in: 0...99, using: &rng) : [Int.random(in: 1...665, using: &rng), Int.random(in: 667...899, using: &rng)].randomElement(using: &rng)!
+            // No leading zero its original didn't have: a bare number stays one.
+            let low = original.first(where: \.isNumber) == "0" ? 1 : 100
+            let area = original.first(where: \.isNumber) == "9" ? 900 + Int.random(in: 0...99, using: &rng) : [Int.random(in: low...665, using: &rng), Int.random(in: 667...899, using: &rng)].randomElement(using: &rng)!
             let group = area >= 900 ? (Array(70...88) + [90, 91, 92] + Array(94...99)).randomElement(using: &rng)! : Int.random(in: 1...99, using: &rng)
             var drawn = (String(format: "%03d%02d", area, group) + digits(4)).makeIterator()
             return String(original.map { $0.isNumber ? drawn.next() ?? $0 : $0 })

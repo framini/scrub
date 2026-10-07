@@ -184,7 +184,8 @@ enum DocumentPipeline {
             for index in values.indices where active[index] {
                 try Scrubber.checkCancellation()
                 let previous = values[index]
-                if previous.fullyMarked { continue }
+                // A zone was decided whole: a city found elsewhere is no city inside "Europe/Prague".
+                if previous.fullyMarked || isTimeZone(leaves[index]) { continue }
                 let reusable = !forceFullDetection && emptyBases[index] && previous.text == leaves[index].text
                 job.enter(value: index, records: leaves[index].enclosing, part: leaves[index].datePart, object: leaves[index].objectPath, naming: leaves[index].naming, kind: leaves[index].decided)
                 var held = previous.held
@@ -358,9 +359,13 @@ enum DocumentPipeline {
                 text = job.numericLexeme(leaf.text, entity: entity, address: addresses[index])
                 marks = [job.lastUnclear ? Mark(range: 0..<(text as NSString).length, entity: entity, original: leaf.text, confidence: Doubt.unclearOwner.confidence, doubt: .unclearOwner)
                          : Mark(range: 0..<(text as NSString).length, entity: entity, original: leaf.text, confidence: 1)]
-            } else if found.isEmpty, let address = addresses[index], isTimeZone(leaf) {
-                text = job.replacement(for: "TIME_ZONE", original: leaf.text, persona: nil, address: address)
-                marks = [Mark(range: 0..<(text as NSString).length, entity: "TIME_ZONE", original: leaf.text, confidence: 1)]
+            } else if isTimeZone(leaf) {
+                // A zone is one name, "Europe/Berlin": never a city or a person read inside it. It follows
+                // the stand-in place of an address beside it, and stays as written beside none.
+                if let address = addresses[index] {
+                    text = job.replacement(for: "TIME_ZONE", original: leaf.text, persona: nil, address: address)
+                    marks = [Mark(range: 0..<(text as NSString).length, entity: "TIME_ZONE", original: leaf.text, confidence: 1)]
+                } else { (text, marks) = (leaf.text, []) }
             } else {
                 held = doubts.indices.contains(index) ? doubts[index].map { doubt in
                     Mark(range: leaf.view?.raw(doubt.range) ?? doubt.range, entity: doubt.entity, original: TextRanges.substring(leaf.seen, doubt.range), confidence: min(doubt.score, Doubt.unconfirmed.confidence), doubt: .unconfirmed)

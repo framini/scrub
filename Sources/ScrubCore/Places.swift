@@ -286,7 +286,8 @@ enum Places {
         if city == nil, region == nil, postal == nil, let coordinates, coordinates.trimmingCharacters(in: .whitespaces).hasPrefix("-"), Double(coordinates.split(separator: ",").first ?? "").map({ abs($0) <= 90 }) == true { return "AU" }
         if let postal, let known = Self.country(postal: postal) { return known }
         if let region, let known = Self.region(region) { return known.country }
-        if let city, let known = all.first(where: { $0.city.caseInsensitiveCompare(city.trimmingCharacters(in: .whitespaces)) == .orderedSame }) { return known.country }
+        // "Montréal" is Montreal, however its accents are written.
+        if let city, let known = all.first(where: { $0.city.compare(city.trimmingCharacters(in: .whitespaces), options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }) { return known.country }
         return "US"
     }
 

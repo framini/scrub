@@ -78,6 +78,8 @@ public enum KeyHints {
         ("state stateprovince stateorprovince province provincestate region addressregion administrativearea administrativearealevel1 statecode provincecode regioncode stateabbr stateabbreviation countrysubdivision majoradmindivision administrativedistrictlevel1 subdivision prefecture canton", "REGION"),
         ("password passwd pwd passphrase secret clientsecret apisecret apikey accesskey secretkey privatekey token accesstoken refreshtoken idtoken authtoken sessiontoken bearertoken authorization cookie sessionid otp credential credentials cvv cvc cvv2 securitycode pin secretanswer securityanswer memorableword memorableanswer", "SECRET"),
         ("username login handle screenname nickname", "USERNAME"),
+        // A ZIP code's four extra digits in a field of their own name a block or a building.
+        ("zip4 plus4 zipplus4code zipext zipextension zipcodeext zipcodeextension zipaddon", "ID_NUMBER"),
         ("nationalid nationalidnumber nationalidentifier nationalinsurancenumber nino personalnumber personalidnumber personnummer idnumber identitynumber identitycard idcard idcardnumber governmentid identitydocument passport passportnumber passportno passportid taxid taxnumber taxpayerid tin sin socialinsurancenumber driverlicense driverslicense driverlicensenumber licensenumber driverlicence driverslicence drivinglicence drivinglicense licencenumber driverlicencenumber nif nie dni cpf curp pesel bsn aadhaar documentnumber accountnumber bankaccountnumber acctnumber accountno acctno acctnum routingnumber ein creditfilenumber cpfnumber nis nisnumber cic electorkey electornumber docnumber documentno licenseplate platenumber identificationnumber idno photoid photoidnumber imsi ocr mxine ine", "ID_NUMBER")
     ]
     /// Every key name and the kind it hints, the registry's identifiers' keys among them (see `Recognizers`).
@@ -114,6 +116,8 @@ public enum KeyHints {
         if parts.count >= 2, digestWords.contains(last), let field = hint(parts.dropLast().joined(separator: "_")), digestKinds.contains(field) { return field }
         // A field written for display holds the field: "dob_display", "phone_formatted".
         if parts.count >= 2, displayWords.contains(last), let field = hint(parts.dropLast().joined(separator: "_")) { return field }
+        // A birth date written in parts holds them: "dob_parts": {"day": …}, "dateOfBirthComponents".
+        if parts.count >= 2, ["parts", "components", "breakdown", "split"].contains(last), hint(parts.dropLast().joined(separator: "_")) == "DATE_OF_BIRTH" { return "DATE_OF_BIRTH" }
         return qualified(parts)
     }
     /// A field named with a qualifier in front ("billing_email", "home_phone",
@@ -451,7 +455,8 @@ public enum KeyHints {
         // A second address line is a unit ("Apt 4B", "Suite 210", "#12"), not a measure.
         if entity == "ADDRESS", unitKeys.contains(compactKey(key)) || unitKeys.contains(words(key).last ?? "") || unitKeys.contains(words(key).suffix(2).joined()) {
             let first = trimmed.split(whereSeparator: { $0 == " " || $0 == "." }).first.map { $0.lowercased() } ?? ""
-            let unitWords: Set<String> = ["apt", "apartment", "suite", "ste", "unit", "floor", "fl", "room", "rm", "bldg", "building", "po", "p", "box", "flat", "level", "lvl", "lot", "block", "blk", "door", "office", "dept", "pmb", "penthouse", "ph", "basement", "bsmt", "trailer", "space", "spc"]
+            let unitWords: Set<String> = ["apt", "apartment", "suite", "ste", "unit", "floor", "fl", "room", "rm", "bldg", "building", "po", "p", "box", "flat", "level", "lvl", "lot", "block", "blk", "door", "office", "dept", "pmb", "penthouse", "ph", "basement", "bsmt", "trailer", "space", "spc",
+                                          "app", "appt", "bât", "bat", "bâtiment"]
             // "Apt A", "Flat C": a unit named by a letter.
             if unitWords.contains(first), trimmed.split(separator: " ").count <= 3 { return true }
             // An address's further lines ("address2": "Paddington", "line2": "c/o Fernbrook Farm") are the address, whatever they hold;
@@ -487,13 +492,16 @@ public enum KeyHints {
             if let point = unsigned.firstIndex(of: "."), point < unsigned.index(before: unsigned.endIndex),
                unsigned.allSatisfy({ $0 == "." || $0.isASCII && $0.isNumber }), unsigned.filter({ $0 == "." }).count == 1 { return false }
             if entity == "PHONE_NUMBER" { return trimmed.filter(\.isNumber).count >= 7 }
+            // A whole birth date is never one digit: "dob": 1 is a check's result.
+            if trimmed.count == 1, entity == "DATE_OF_BIRTH", datePart(key) == nil { return false }
             return trimmed.contains(where: \.isNumber)
         }
         if entity == "EMAIL_ADDRESS" { return trimmed.contains("@") || trimmed.range(of: "%40", options: .caseInsensitive) != nil }
         // "state": "open" and "region": "us-east-1" hold no place.
         // A region of birth may be any country's ("Jalisco", "OAXACA"): a word or two of letters.
         if entity == "REGION", words(key).contains("birth") { return Places.region(trimmed) != nil || trimmed.split(separator: " ").count <= 3 && trimmed.allSatisfy { $0.isLetter || $0 == " " || $0 == "-" } && !isCommonValue(trimmed) }
-        if entity == "REGION" { return Places.region(trimmed) != nil }
+        // A Mexican or Indian state, a Brazilian one's code ("Jalisco", "SP") is a region as a US one is.
+        if entity == "REGION" { return Places.region(trimmed) != nil || Places.regionAbroad(trimmed) != nil }
         if entity == "LATITUDE" || entity == "LONGITUDE" { return coordinate(trimmed, limit: entity == "LATITUDE" ? 90 : 180) }
         if entity == "COORDINATES" {
             let pair = trimmed.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
