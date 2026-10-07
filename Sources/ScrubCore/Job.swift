@@ -465,7 +465,7 @@ public final class Job {
     /// `held` marks places left as written in `text`; they come back where
     /// they stand in the output, without any a replacement covers.
     func apply(_ text: String, spans: [Span], owner: Persona?, address: AddressParts? = nil, held: inout [Mark]) throws -> (String, [Mark]) {
-        let ordered = spans.sorted { $0.range.lowerBound < $1.range.lowerBound }
+        let ordered = Self.outsideTimeZones(spans, in: text).sorted { $0.range.lowerBound < $1.range.lowerBound }
         var fakes = Array(repeating: "", count: ordered.count)
         var addresses: [AddressParts?], owners: [Persona?]
         if address == nil && owner == nil, let structured = records(in: text, ordered) {
@@ -515,6 +515,18 @@ public final class Job {
                 : Mark(range: range, entity: kind(of: original, read: span.entity), original: original, confidence: sure)
         })
     }
+    /// The spans that touch no time zone's identifier ("Europe/London",
+    /// "America/Argentina/Buenos_Aires"): a city inside one names a zone, not
+    /// where anyone is, and an edit inside it leaves a zone no system knows.
+    static func outsideTimeZones(_ spans: [Span], in text: String) -> [Span] {
+        guard text.contains("/") else { return spans }
+        let zones = TextRanges.matches(zoneName, in: text).compactMap { match -> Range<Int>? in
+            let range = match.range.location..<NSMaxRange(match.range)
+            return TimeZone(identifier: TextRanges.substring(text, range)) != nil ? range : nil
+        }
+        return zones.isEmpty ? spans : spans.filter { span in span.entity == "TIME_ZONE" || !zones.contains { $0.overlaps(span.range) } }
+    }
+    private static let zoneName = TextPattern(#"(?<![\p{L}\p{N}_-])(?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Europe|Indian|Pacific)/[A-Za-z_+-]+(?:/[A-Za-z_+-]+)?(?![\p{L}\p{N}_])"#)
     func scrubValue(_ text: String, key: String? = nil, owner: Persona? = nil, contextWords: Set<String> = []) throws -> (String, [Mark], [Mark]) {
         let spans = observe([(text, key)], contextWords: contextWords)[0]
         let (initial, marks) = try apply(text, spans: spans, owner: owner)

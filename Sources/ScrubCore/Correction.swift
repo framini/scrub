@@ -35,7 +35,7 @@ enum Correction {
         for pass in 0..<passes {
             try Scrubber.checkCancellation()
             let found = visibleLeftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer, gate: gate, base: pass == 0 ? base : nil)
-            let spans = KeyedValues.outsideKeys(Detector.resolve(found.spans), in: output).filter { !sparing.contains($0.entity) }
+            let spans = Job.outsideTimeZones(KeyedValues.outsideKeys(Detector.resolve(found.spans), in: output), in: output).filter { !sparing.contains($0.entity) }
             if spans.isEmpty { return (output, marks, unresolved(found.suspects, in: output)) }
             var fakes = Array(repeating: "", count: spans.count)
             var sources = [String?](repeating: nil, count: spans.count)
