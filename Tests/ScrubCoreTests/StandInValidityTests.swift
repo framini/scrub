@@ -52,4 +52,26 @@ struct StandInValidityTests {
             #expect(rows.map { String($0[4]) } == ["49.99", "12.00"])
         }
     }
+
+    @Test func aFictionalLocalNumberStaysOnTheFictionalLines() throws {
+        // "555-0181" became "712-3082": a fictional number made real.
+        let text = "Call the front desk on 555-0181 or Ottoline Wexcombe directly on 555-0147.\n"
+        for seed in UInt64(0)..<6 {
+            let output = String(decoding: try Scrubber.scrub(Data(text.utf8), name: "note.txt", forceFullDetection: false, seed: seed).output, as: UTF8.self)
+            let numbers = output.matches(of: /\b\d{3}-\d{4}\b/).map { String(output[$0.range]) }
+            #expect(numbers.count == 2 && numbers.allSatisfy { $0.hasPrefix("555-01") }, "seed \(seed): \(output)")
+        }
+    }
+
+    @Test func aCityWithNoCapitalsToKeepIsNotShouted() throws {
+        // "上海" was replaced by "NASHVILLE": a script with no case read as written in capitals.
+        let json = "{\"customers\": [{\"name\": \"Ottoline Wexcombe\", \"email\": \"o.wexcombe@example.com\", \"city\": \"\\u4e0a\\u6d77\"}, {\"name\": \"Tobiah Quennell\", \"city\": \"BOSTON\"}]}"
+        for seed in UInt64(0)..<3 {
+            let out = try Self.json(json, seed: seed)
+            let customers = try #require(out["customers"] as? [[String: Any]])
+            let first = try #require(customers[0]["city"] as? String), second = try #require(customers[1]["city"] as? String)
+            #expect(first != "上海" && first != first.uppercased(), "seed \(seed): \(first)")
+            #expect(second != "BOSTON" && second == second.uppercased(), "seed \(seed): \(second)")
+        }
+    }
 }

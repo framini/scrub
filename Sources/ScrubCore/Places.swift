@@ -296,8 +296,8 @@ enum Places {
         let trimmed = original.trimmingCharacters(in: .whitespaces)
         let region = regions.first { $0.country == place.country && ($0.code == place.region || $0.name == place.region) }
         let asName = region.map { trimmed.count > 3 || byName[trimmed.lowercased()] != nil ? $0.name : $0.country == "GB" ? $0.name : $0.code } ?? place.region
-        if trimmed.count > 1, trimmed == trimmed.uppercased() { return asName.uppercased() }
-        if trimmed.count > 1, trimmed == trimmed.lowercased() { return asName.lowercased() }
+        if trimmed.count > 1, StandIns.shouted(trimmed) { return asName.uppercased() }
+        if trimmed.count > 1, StandIns.hushed(trimmed) { return asName.lowercased() }
         return asName
     }
 }

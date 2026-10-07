@@ -69,7 +69,7 @@ final class StandIns {
         let fake = drawn(entity, original, persona: persona, address: address)
         noteSource(entity, original, fake)
         // "ODALYS@KESTREL.EXAMPLE" is the same address as in lowercase, and keeps its capitals.
-        if entity == "EMAIL_ADDRESS", original.contains(where: \.isLetter), original == original.uppercased() { return fake.uppercased() }
+        if entity == "EMAIL_ADDRESS", Self.shouted(original) { return fake.uppercased() }
         // A name written in capitals ("HALVORSEN", as a passport's data page writes it) takes one in capitals.
         if ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(entity), original.filter(\.isLetter).count >= 2, original == original.uppercased(), original != original.lowercased() { return fake.uppercased() }
         return fake
@@ -755,7 +755,7 @@ final class StandIns {
     }
     private static func shape(_ text: String) -> String { String(text.map { $0.isNumber ? "9" : $0.isLetter ? "A" : $0 }) }
     private func city(of place: Place, like original: String) -> String {
-        original == original.uppercased() && original.contains(where: \.isLetter) ? place.city.uppercased() : original == original.lowercased() ? place.city.lowercased() : place.city
+        Self.shouted(original) ? place.city.uppercased() : Self.hushed(original) ? place.city.lowercased() : place.city
     }
     /// A one-line address rewritten piece by piece, all from one place:
     /// "4821 Juniper Hollow Rd, Apt 2B, Tacoma, WA 98402" → "512 Oak Street, Apt 7C, Denver, CO 80205".
@@ -899,7 +899,7 @@ final class StandIns {
         let trimmed = original.trimmingCharacters(in: .whitespaces)
         let fake: String
         switch entity {
-        case "LOCATION": fake = trimmed == trimmed.uppercased() ? city.city.uppercased() : trimmed == trimmed.lowercased() ? city.city.lowercased() : city.city
+        case "LOCATION": fake = Self.shouted(trimmed) ? city.city.uppercased() : Self.hushed(trimmed) ? city.city.lowercased() : city.city
         case "POSTAL_CODE": fake = city.postal(like: trimmed, digit: { self.digit() }, letter: { self.pick(Array("ACDEFHKNPRTVWXY")) ?? "A" })
         default:
             // A province's code takes the city's ("NA" → "TO"); a name it has none for stays.
@@ -925,12 +925,12 @@ final class StandIns {
             // The same postcode in a field of its own takes the same stand-in: "80538" and "Am Gries 3a, 80538 München" agree.
             swap(parts.postal, parts.postal.map { abroadPart("POSTAL_CODE", $0, abroad) })
             swap(parts.region, parts.region.map { abroad.region ?? $0 })
-            swap(parts.city, parts.city.map { $0 == $0.uppercased() ? abroad.city.uppercased() : abroad.city })
+            swap(parts.city, parts.city.map { Self.shouted($0) ? abroad.city.uppercased() : abroad.city })
         } else {
             swap(parts.postal, parts.postal.map { idLike($0) })
             swap(parts.city, parts.city.map { city in
                 let fake = pick(Names.cities.filter { !originals.contains($0.lowercased()) }) ?? "Austin"
-                return city == city.uppercased() ? fake.uppercased() : fake
+                return Self.shouted(city) ? fake.uppercased() : fake
             })
         }
         return result
@@ -1030,7 +1030,7 @@ final class StandIns {
                 words.remove(at: last + 1)
             }
             let first = words[index].trimmingCharacters(in: CharacterSet(charactersIn: "\u{1}"))
-            if first == first.uppercased() && first.count > 1 { made = made.uppercased() }
+            if Self.shouted(first) && first.count > 1 { made = made.uppercased() }
             words.replaceSubrange(index...last, with: [(words[index].hasPrefix("\u{1}") ? "\u{1}" : "") + made])
             index += 1
         }
@@ -1071,7 +1071,7 @@ final class StandIns {
         } else {
             fake = name
         }
-        let written = trimmed == trimmed.uppercased() && trimmed.count > 1 ? fake.uppercased() : fake
+        let written = Self.shouted(trimmed) && trimmed.count > 1 ? fake.uppercased() : fake
         assigned[key] = written
         return written
     }
@@ -1113,13 +1113,17 @@ final class StandIns {
         let run = words.dropFirst(numbered ? 1 : 0).dropLast(kind == last ? 1 : 0).map { $0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".,")) }.joined(separator: " ")
         let name = streetRuns[run] ?? pick(Names.streets.filter { !originals.contains($0.lowercased()) && !original.lowercased().contains($0.lowercased()) }) ?? "Main"
         if !run.isEmpty { streetRuns[run] = name }
-        let shouted = original == original.uppercased() && original.contains(where: \.isLetter)
+        let shouted = Self.shouted(original)
         func written(_ number: String) -> String { let made = "\(number) \(name) \(kind)"; return shouted ? made.uppercased() : made }
         var fake = written(numbered ? addressNumbered(String(words.first!)) : digits(3))
         for _ in 0..<8 where !unused(fake, original) { fake = written(digits(number > 0 ? min(number, 5) : 3)) }
         assigned[key] = fake
         return fake
     }
+    /// Written all in capitals: letters with a case, none of them small. "上海" has no case to keep.
+    static func shouted(_ text: String) -> Bool { text != text.lowercased() && text == text.uppercased() }
+    /// Written all in small letters, as `shouted` is in capitals.
+    static func hushed(_ text: String) -> Bool { text != text.uppercased() && text == text.lowercased() }
     /// A number in the original's own layout: a real area code (the address's,
     /// when there is one) and a line from the fictional 555-0100 to 0199 range.
     /// A number from outside North America keeps its country code.
@@ -1138,6 +1142,9 @@ final class StandIns {
             guard country.count < digits.count else { return "+" + country + self.digits(7) }
             let lead = digits[digits.index(digits.startIndex, offsetBy: country.count)]
             fresh = country + String(lead) + (country.count + 1..<digits.count).map { _ in digit() }.joined()
+        } else if digits.count == 7, digits.hasPrefix("555"), !plus {
+            // A local number on the fictional exchange stays on its reserved lines.
+            fresh = "55501" + String(format: "%02d", Int.random(in: 0...99, using: &rng))
         } else if digits.count >= 7, digits.first == "0" {
             // A national number keeps its trunk zero and the digit after it, which says mobile or landline
             // ("082 …" in South Africa, "07…" in the UK): the rest is drawn.
