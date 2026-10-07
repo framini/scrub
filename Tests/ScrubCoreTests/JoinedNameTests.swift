@@ -3,7 +3,7 @@ import Foundation
 import Testing
 
 /// A person written in prose with an initial, a nickname in quotes, a
-/// surname's particles or a suffix is one person: every part of the name
+/// surname's particles, a suffix or a surname of several words is one person: every part of the name
 /// goes, not only the parts a reader found on its own, the whole name takes
 /// one stand-in, and the words of the sentence around it stay. Checked in a
 /// text file and in a note of a JSON, CSV and XML record.
@@ -22,6 +22,10 @@ import Testing
         ("Spoke with Joost van der Linde and Inés de la Vega about the lease.", "Joost van der Linde", ["joost", "linde", "inés", "vega"], ["spoke", "with", "lease"]),
         ("We met Joost van der Linde today.", "Joost van der Linde", ["joost", "linde"], ["met", "today"]),
         ("Signed by Arthur Wendell King Jr. at the branch.", "Arthur Wendell King", ["arthur", "wendell", "king"], ["signed", "jr", "branch"]),
+        // The rest of a surname after the part a reader found, and a surname's particles no reader found.
+        ("- Example case: applicant Marta Nogueira Pinto (DOB 1973-11-01) failed on address match.", "Marta Nogueira Pinto", ["marta", "nogueira", "pinto"], ["applicant", "failed", "match"]),
+        ("[14:44] odalys: @brisa can you look at the DocCheck failure for Elif Aydın?\n[14:48] brisa: sure, which request id?", "Elif Aydın", ["elif", "aydın"], ["failure", "request"]),
+        ("Attendees: Caio dos Ramos, Venkatesh", "Caio dos Ramos", ["caio", "ramos"], ["attendees"]),
     ]
 
     @Test(arguments: Path.allCases)

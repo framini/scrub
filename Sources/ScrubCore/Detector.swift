@@ -281,6 +281,12 @@ public final class Detector {
             spans.append(contentsOf: ListedNames.hyphenated(in: text, people: spans.filter { $0.entity == "PERSON" }.map(\.range), organisations: organisations, isCancelled: isCancelled).filter { span in
                 !unsaid.contains { $0.overlaps(span.range) }
             })
+            // A given name and a surname with its particles that no reader found ("Caio dos Santos").
+            // It only fills a gap: a person found over any of it is read as found.
+            let found = spans.filter { $0.entity == "PERSON" }.map(\.range)
+            spans.append(contentsOf: JoinedNames.particled(in: text, places: spans.filter { $0.entity == "LOCATION" }.map(\.range), isCancelled: isCancelled).filter { span in
+                !unsaid.contains { $0.overlaps(span.range) } && !found.contains { $0.overlaps(span.range) }
+            })
             // Names in capitals beside a first name or a title ("Julie BEET", "Ms BEET").
             spans.append(contentsOf: CapitalNames.scan(text, isCancelled: isCancelled).filter { span in !unsaid.contains { $0.overlaps(span.range) } })
             // The name model only fills gaps: where anything else found something, that finding stands.
@@ -329,8 +335,16 @@ public final class Detector {
             for span in spans where !(span.entity == "PERSON" && span.score <= NameModel.score) && !span.range.isEmpty { strong.insert(integersIn: span.range) }
             for range in quiet + written.quiet + labelled.labels where !range.isEmpty { strong.insert(integersIn: range) }
             func open(_ range: Range<Int>) -> Bool {
-                guard !organised.intersects(integersIn: range), !strong.intersects(integersIn: range) else { return false }
+                guard !organised.intersects(integersIn: range) || person(range), !strong.intersects(integersIn: range) else { return false }
                 return !weak.contains { $0.overlaps(range) && !(range.lowerBound <= $0.lowerBound && $0.upperBound <= range.upperBound) }
+            }
+            // A listed first name and a surname or more, with no word of an organisation's around them, is a person's
+            // name though the tagger read an organisation there ("Marta Nogueira Pinto"); the scorer still decides.
+            func person(_ range: Range<Int>) -> Bool {
+                let words = NameShape.words(range, in: text)
+                guard words.count >= 2, let first = words.first, NameLists.isFirst(first.bare), !NameLists.isOrdinary(first.bare), !NameLists.isWordlike(first.bare),
+                      words.allSatisfy({ $0.text.first?.isUppercase == true }) else { return false }
+                return !NameTagger.partOfOrganisation(range, in: text)
             }
             // A street or a house the model reads as a place ("on Mill Lane") gets no town's
             // stand-in: like the address model's single pieces, it is asked about instead.
@@ -374,7 +388,7 @@ public final class Detector {
                 var blocked = taken
                 for other in spans where yields(other) { blocked.remove(integersIn: other.range) }
                 guard !blocked.intersects(integersIn: span.range) else { continue }
-                guard span.entity == "EMPLOYER" || !organised.intersects(integersIn: span.range) else { continue }
+                guard span.entity == "EMPLOYER" || !organised.intersects(integersIn: span.range) || person(span.range) else { continue }
                 spans.removeAll(where: yields)
                 spans.append(span)
                 taken.insert(integersIn: span.range)

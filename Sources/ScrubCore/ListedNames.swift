@@ -66,7 +66,8 @@ enum ListedNames {
 
     /// A chat line's speaker, after the time it was sent if any: "sarah: did the
     /// customer reply?", "[09:14] aisha: can someone check…", "<tom> on it".
-    private static let speaker = TextPattern(#"(?m)^[ \t>]*(?:\[[^\]\n]{1,24}\][ \t]*|\d{1,2}:\d{2}(?::\d{2})?(?:[ \t]*(?i:am|pm))?[ \t]+)?(?:<(\p{L}[\p{L}'’]*)>|(\p{L}[\p{L}'’]*):)[ \t]+\S"#)
+    private static let speaker = TextPattern(#"(?m)^[ \t>]*(\[[^\]\n]{1,24}\][ \t]*|\d{1,2}:\d{2}(?::\d{2})?(?:[ \t]*(?i:am|pm))?[ \t]+)?(?:<(\p{L}[\p{L}'’]*)>|(\p{L}[\p{L}'’]*):)[ \t]+\S"#)
+    private static let mention = TextPattern(#"(?<![\p{L}\p{N}.])@(\p{L}[\p{L}'’]*)(?![\p{L}\p{N}@.'’-])"#)
     /// A lowercase name that is also a word, after what names a person in chat
     /// ("spoke to will", "ask grace", "cc mark", "per june", "@rose") or before
     /// a verb only a person does ("grace mentioned").
@@ -86,12 +87,13 @@ enum ListedNames {
         let ns = text as NSString
         if text.contains(":") || text.contains("<") {
             // Each speaker's lines: in a transcript of two speakers or more, one who speaks again is someone.
-            var lines: [String: [Range<Int>]] = [:], order: [String] = []
+            var lines: [String: [Range<Int>]] = [:], order: [String] = [], stamped: Set<String> = []
             for match in TextRanges.matches(speaker, in: text, isCancelled: isCancelled) {
-                let group = match.range(at: 1).location != NSNotFound ? match.range(at: 1) : match.range(at: 2)
+                let group = match.range(at: 2).location != NSNotFound ? match.range(at: 2) : match.range(at: 3)
                 let word = ns.substring(with: group)
                 guard word.count >= 2, !People.isTitle(word), !NameShape.isRole(word) else { continue }
                 if lines[word] == nil { order.append(word) }
+                if match.range(at: 1).location != NSNotFound || match.range(at: 2).location != NSNotFound { stamped.insert(word) }
                 lines[word, default: []].append(group.location..<NSMaxRange(group))
             }
             let transcript = lines.count >= 2
@@ -108,7 +110,17 @@ enum ListedNames {
                     unsure += doubted(spans)
                 } else { sure += spans }
             }
-            if !sure.isEmpty { sure += unknown } else { unsure += doubted(unknown.filter { span in lines[TextRanges.substring(text, span.range)]?.count ?? 0 >= 2 && transcript }) }
+            // A word that speaks again at the times a chat writes, beside a listed speaker, is someone too ("[13:01] fleur:").
+            let worded = order.filter { word in !NameLists.isFirst(word) && NameLists.isOrdinary(word) && stamped.contains(word) && (lines[word]?.count ?? 0) >= 2 }
+            if !sure.isEmpty {
+                sure += unknown + worded.flatMap { lines[$0]!.map { Span(range: $0, entity: "PERSON", score: cuedScore) } }
+                // A speaker mentioned with "@" ("@yaw can you look") is that speaker.
+                let speakers = Set(sure.map { TextRanges.substring(text, $0.range).lowercased() })
+                for match in TextRanges.matches(mention, in: text, isCancelled: isCancelled) where speakers.contains(ns.substring(with: match.range(at: 1)).lowercased()) {
+                    let range = match.range(at: 1).location..<NSMaxRange(match.range(at: 1))
+                    if !sure.contains(where: { $0.range == range }) { sure.append(Span(range: range, entity: "PERSON", score: cuedScore)) }
+                }
+            } else { unsure += doubted(unknown.filter { span in lines[TextRanges.substring(text, span.range)]?.count ?? 0 >= 2 && transcript }) }
         }
         for match in TextRanges.matches(lowerCued, in: text, isCancelled: isCancelled) {
             let group = match.range(at: 1).location != NSNotFound ? match.range(at: 1) : match.range(at: 2)

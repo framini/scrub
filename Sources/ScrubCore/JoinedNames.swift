@@ -24,15 +24,44 @@ enum JoinedNames {
     private static let givenBefore = TextPattern(#"(?<![\p{L}\p{N}'’.@/_-])(\p{Lu}\p{Ll}+)[ \t]+$"#)
     /// Capitalised words between a name and its suffix: " King" of "Martin Luther King Jr.".
     private static let beforeSuffix = TextPattern(#"^((?:[ \t]+\p{Lu}\p{Ll}+){1,2})(?=,?[ \t]+(?:Jr|Sr|II|III|IV)\b)"#)
+    /// A capitalised word after a name, its particles before it: " Aydın", " dos Santos", " Fairweather-Macapagal".
+    private static let surnameAfter = TextPattern(#"^ (?:(?:van|von|der|den|de|del|della|di|da|du|dos|das|la|le|ten|ter|bin|ibn|binti|al|el|abu|ben) ){0,3}(\p{Lu}\p{Ll}[\p{L}'’]*(?:[-‐]\p{Lu}\p{Ll}[\p{L}'’]*)?)(?![\p{L}\p{N}'’@_-])"#)
     /// A lowercase given name before a lowercase surname: "diego " before "maradona".
     private static let lowerBefore = TextPattern(#"(?<![\p{L}\p{N}'’.@/_-])(\p{Ll}+)[ \t]+$"#)
     static let particles: Set<String> = ["van", "von", "der", "den", "de", "del", "della", "di", "da", "du", "dos", "das", "la", "le", "ten", "ter", "bin", "ibn", "binti", "al", "el", "abu", "ben"]
+
+    /// A given name, a surname's particles and the surname: "Caio dos Santos", "Joost van der Linde".
+    private static let particled = TextPattern(#"(?<![\p{L}\p{N}'’.@/_-])(\p{Lu}\p{Ll}+) ((?:(?:van|von|der|den|de|del|della|di|da|du|dos|das|la|le|ten|ter|bin|ibn|binti) ){1,2})(\p{Lu}\p{Ll}+)(?![\p{L}\p{N}'’@/_-])"#)
+
+    /// People written with a surname's particles that no reader found: the
+    /// given name a listed first name, or no word before a listed surname; the
+    /// surname a listed surname or no word; no place a reader found over the
+    /// given name ("Rio de Janeiro"), though the surname may be read as one
+    /// ("Caio das Neves"); and the whole no town and no organisation.
+    static func particled(in text: String, places: [Range<Int>] = [], isCancelled: () -> Bool = { false }) -> [Span] {
+        guard text.contains(" d") || text.contains(" v") || text.contains(" l") || text.contains(" b") || text.contains(" i") || text.contains(" t") else { return [] }
+        let ns = text as NSString
+        var spans: [Span] = []
+        for match in TextRanges.matches(particled, in: text, isCancelled: isCancelled) {
+            let given = ns.substring(with: match.range(at: 1)), surname = ns.substring(with: match.range(at: 3))
+            let range = match.range.location..<NSMaxRange(match.range)
+            guard NameLists.isFirst(given) && !NameLists.isOrdinary(given) && !NameLists.isWordlike(given)
+                    || !NameLists.isWord(given) && !NameLists.isSurname(given) && NameLists.isSurname(surname),
+                  !places.contains(where: { $0.overlaps(match.range(at: 1).location..<NSMaxRange(match.range(at: 1))) }),
+                  NameLists.isSurname(surname) && !NameLists.isOrdinary(surname) && !NameLists.isWordlike(surname) || !NameLists.isWord(surname),
+                  !People.isTitle(given), !NameShape.isRole(given), !NameShape.months.contains(given.lowercased()), !NameShape.weekdays.contains(given.lowercased()),
+                  !Names.citiesFolded.contains(ns.substring(with: match.range).lowercased()), Places.region(ns.substring(with: match.range)) == nil,
+                  !NameTagger.partOfOrganisation(range, in: text) else { continue }
+            spans.append(Span(range: range, entity: "PERSON", score: ListedNames.cuedScore))
+        }
+        return spans
+    }
 
     private struct Piece {
         var range: Range<Int>
         var sure: Bool
         var score: Double
-        /// A place the tagger read that is also a given name ("Rania"): one only beside another piece.
+        /// A place the tagger read that is also a given name, or no word at all ("Rania", "Elif"): one only beside another piece.
         var place: Bool
         let span: Span
     }
@@ -46,7 +75,7 @@ enum JoinedNames {
         var others: [Span] = [], otherDoubts: [Span] = []
         for span in kept {
             if span.entity == "PERSON", span.url == nil { pieces.append(Piece(range: span.range, sure: true, score: span.score, place: false, span: span)) }
-            else if span.entity == "LOCATION", case let value = word(span.range), !value.contains(" "), NameLists.isFirst(value), !NameLists.isOrdinary(value) {
+            else if span.entity == "LOCATION", case let value = word(span.range), !value.contains(" "), NameLists.isFirst(value) && !NameLists.isOrdinary(value) || !NameLists.isWord(value) {
                 pieces.append(Piece(range: span.range, sure: true, score: span.score, place: true, span: span))
                 others.append(span)
             } else { others.append(span) }
@@ -101,8 +130,8 @@ enum JoinedNames {
     /// A person's range taking in the words of their name no reader took:
     /// the surname after a nickname, the given name before one or before
     /// initials, the given name before a surname that opens with its
-    /// particle, the surname before a suffix, and a lowercase given name
-    /// before a lowercase surname.
+    /// particle, the surname before a suffix, the rest of a surname after
+    /// the part found, and a lowercase given name before a lowercase surname.
     /// `nicknamed`: it took in a nickname in quotes.
     static func grown(_ range: Range<Int>, in text: String) -> (range: Range<Int>, nicknamed: Bool) {
         let ns = text as NSString
@@ -124,6 +153,18 @@ enum JoinedNames {
         } else if let match = TextRanges.matches(beforeSuffix, in: after).first,
                   (after as NSString).substring(with: match.range(at: 1)).split(separator: " ").allSatisfy({ given(String($0)) }) {
             upper += NSMaxRange(match.range(at: 1))
+        } else if value.last?.isLetter == true, value.contains(where: \.isLowercase) {
+            // The rest of a surname after the part found: "Elif" then "Aydın", "Leonor Nogueira" then "Pinto".
+            for _ in 0..<2 {
+                let rest = ns.substring(with: NSRange(location: upper, length: min(48, ns.length - upper)))
+                guard let match = TextRanges.matches(surnameAfter, in: rest).first else { break }
+                let word = (rest as NSString).substring(with: match.range(at: 1))
+                let pieces = word.split(whereSeparator: { "-‐".contains($0) }).map(String.init)
+                let end = upper + NSMaxRange(match.range)
+                guard pieces.allSatisfy({ given($0) && !NameLists.isWordlike($0) && (NameLists.isSurname($0) && !NameLists.isOrdinary($0) || !NameLists.isWord($0)) }),
+                      Places.region(word) == nil, !Names.citiesFolded.contains(word.lowercased()), !NameTagger.partOfOrganisation(upper..<end, in: text) else { break }
+                upper = end
+            }
         }
         let firstWord = value.prefix { !$0.isWhitespace && $0 != "-" }
         if let match = TextRanges.matches(nicknameBefore, in: before).first, given((before as NSString).substring(with: match.range(at: 1))) {

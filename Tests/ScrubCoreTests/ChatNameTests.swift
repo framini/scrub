@@ -30,6 +30,8 @@ import Testing
         ("<tomasz> on it\n<leilani> thanks, closing the ticket", ["tomasz", "leilani"], ["closing", "ticket"]),
         // A name that is also a word speaks twice in a transcript, and the one it talks with no list holds.
         ("wren: hey kasimirov did u see the refund?\nkasimirov: yeah, fixing it\nwren: ok thx", ["wren", "kasimirov"], ["refund", "fixing"]),
+        // A word that speaks again at a chat's times beside a listed speaker, and a speaker mentioned with "@".
+        ("[09:01] fleur: @odalys can you look at the refund?\n[09:04] odalys: sure, which one?\n[09:06] fleur: this morning's, thanks", ["fleur", "odalys"], ["refund", "morning"]),
     ]
 
     @Test(arguments: Path.allCases)

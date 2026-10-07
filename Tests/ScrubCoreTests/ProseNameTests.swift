@@ -14,7 +14,7 @@ import Testing
         switch path {
         case .text: return (Data(note.utf8), "note.txt")
         case .json:
-            let escaped = note.replacingOccurrences(of: "\"", with: "\\\"")
+            let escaped = note.replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n")
             return (Data(#"{"ticket":"T-2207","note":"\#(escaped)"}"#.utf8), "ticket.json")
         case .csv: return (Data("ticket,note\nT-2207,\"\(note.replacingOccurrences(of: "\"", with: "\"\""))\"\n".utf8), "ticket.csv")
         case .xml: return (Data("<tickets><ticket><ref>T-2207</ref><note>\(note)</note></ticket></tickets>".utf8), "ticket.xml")
