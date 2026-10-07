@@ -20,6 +20,12 @@ enum Kind: String {
     case recordID
     /// A card's or an identity document's expiry, whole or a part ("exp_month": 6, "expiry": "04/29").
     case expiry
+    /// Identity-check values (see `kycSSN` and the shapes beside it): an ITIN, a
+    /// national number checked by its `scheme`, an IBAN, a device's ID or
+    /// fingerprint, a ZIP's last four, and a whole address on one line. A
+    /// routing number or sort code names a bank branch, so it may stay, but a
+    /// stand-in for one must pass its check.
+    case itin, nationalID, iban, routing, sortCode, deviceID, zip4, fullAddress
     var isName: Bool { [.fullName, .firstName, .lastName, .middleName].contains(self) }
 }
 
@@ -43,6 +49,8 @@ struct PLeaf {
     /// ("p1.dob"), a number and its last digits ("p1.ssn"), or one address's
     /// parts with the time zone and phone number beside it ("a3").
     var links: [String] = []
+    /// The rule a generated national number passes ("nino", "cpf"), which its stand-in must pass too.
+    var scheme: String? = nil
 }
 
 enum PNode {

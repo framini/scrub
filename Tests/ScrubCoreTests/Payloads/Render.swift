@@ -195,7 +195,8 @@ enum Render {
         case .csv: return csv(node, gen: &gen)
         case .pastedJSON: return Rendered(rendering: rendering, text: json(node, indent: "  "))
         case .curl:
-            let body = json(node, indent: gen.int(0...1) == 0 ? nil : "  ")
+            // An apostrophe in the body ("O'Sullivan") is written as a shell writes it in single quotes.
+            let body = json(node, indent: gen.int(0...1) == 0 ? nil : "  ").replacingOccurrences(of: "'", with: "'\\''")
             return Rendered(rendering: rendering, text: "curl -X POST https://api.example.com/v1/records \\\n  -H 'Content-Type: application/json' \\\n  -H 'Authorization: Bearer $API_TOKEN' \\\n  -d '\(body)'\n")
         case .logLine:
             return Rendered(rendering: rendering, text: "2025-11-04T16:21:09.412Z INFO  [http-nio-8080-exec-7] c.e.api.RequestLogger - POST /v1/records status=200 duration_ms=184 body=\(json(node, indent: nil))\n")

@@ -22,6 +22,11 @@ extension PayloadGen {
         case "identity": return identity()
         case "card": return cardRecord()
         case "screening": return screening()
+        case "kycSSN": return kycSSN()
+        case "kycAddress": return kycAddress()
+        case "kycBirth": return kycBirth()
+        case "kycDocument": return kycDocument()
+        case "kycBank": return kycBank()
         default: return bank()
         }
     }
