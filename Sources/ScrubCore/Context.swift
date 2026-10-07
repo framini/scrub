@@ -303,8 +303,8 @@ public enum KeyHints {
     private static let wrapperNotes: Set<String> = ["verified", "isverified", "confirmed", "type", "source", "status", "primary", "isprimary", "label", "updatedat", "confidence", "valid"]
     /// Keys whose sibling says what the value is: form fields, typed identifiers
     /// and FHIR contact points (`{"name": "ssn", "value": …}`, `{"system": "phone", "value": …}`).
-    static let fieldValueKeys: Set<String> = ["value", "values", "data", "text", "val", "answer", "response", "originalvalue", "extractedvalue", "expectedvalue", "actualvalue", "inputvalue", "submittedvalue", "providedvalue", "returnedvalue", "normalizedvalue"]
-    static let fieldNameKeys: Set<String> = ["name", "key", "field", "fieldname", "fieldid", "fieldkey", "id", "label", "type", "system", "attribute", "property", "question", "code"]
+    static let fieldValueKeys: Set<String> = ["value", "values", "data", "text", "val", "v", "answer", "response", "originalvalue", "extractedvalue", "expectedvalue", "actualvalue", "inputvalue", "submittedvalue", "providedvalue", "returnedvalue", "normalizedvalue"]
+    static let fieldNameKeys: Set<String> = ["name", "key", "k", "field", "fieldname", "fieldid", "fieldkey", "id", "label", "type", "system", "attribute", "property", "question", "code"]
     /// The field a record's value-holding key stands for, from its naming sibling.
     static func namedField(_ key: String, siblings: [(String, String)]) -> String? {
         guard fieldValueKeys.contains(words(key).joined()), hint(key) == nil else { return nil }

@@ -396,6 +396,8 @@ enum DocumentPipeline {
         }
         /// Whose a leaf's name, email or username is: its innermost record's that has a person.
         func of(_ leaf: DocumentLeaf) -> Persona? {
+            // Another name a record gives ("aka": ["SANTANGELO, TOSHIM"]) is no name of its own person's.
+            if KeyHints.namesARole(leaf.key) { return nil }
             for record in chain(leaf) where people.indices.contains(record) {
                 if let person = people[record] { return person }
             }
@@ -479,7 +481,7 @@ enum DocumentPipeline {
                 genders[record] = gender
                 continue
             }
-            guard let record = innermost(leaf), let hint = KeyHints.hint(leaf.key), identityHints.contains(hint), !leaf.text.isEmpty else { continue }
+            guard let record = innermost(leaf), let hint = KeyHints.hint(leaf.key), identityHints.contains(hint), !leaf.text.isEmpty, !KeyHints.namesARole(leaf.key) else { continue }
             if recordFields[record] == nil { recordFields[record] = IdentityFields() }
             recordFields[record]?.set(leaf.seen, for: hint)
         }

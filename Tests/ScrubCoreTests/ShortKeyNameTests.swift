@@ -65,4 +65,26 @@ struct ShortKeyNameTests {
             #expect(Set(full.split(separator: " ").map(String.init)) == [given, family], "seed \(seed): \(name)")
         }
     }
+
+    /// {"k": "NAME_FIRST", "v": …}: a field named by a letter's key, its value under another.
+    @Test func aKeyValuePairsValueIsReadAsItsKey() throws {
+        let document = #"{"attributes": [{"k": "NAME_FIRST", "v": "Rangi", "verified": true}, {"k": "NAME_LAST", "v": "Paewai", "verified": false}, {"k": "CHANNEL", "v": "Mobile", "verified": true}]}"#
+        let (_, output, parsed) = try Self.scrub(document)
+        #expect(parsed != nil && !output.contains("Rangi") && !output.contains("Paewai"), "\(output)")
+        #expect(output.contains(#""v": "Mobile""#), "\(output)")
+    }
+
+    /// A credit header's records name one person again and again, each with another name
+    /// they are also known by: the person keeps one stand-in in every record, and each other
+    /// name its own.
+    @Test func aRecordsOtherNamesAreNotItsPersons() throws {
+        let document = #"{"Records": [{"seq": 1, "name": "LUCIA MARCHETTI", "dob": "06/07/1950", "aka": ["MARCHETTI, ORNELLA"]}, {"seq": 2, "name": "LUCIA MARCHETTI", "dob": "19500607"}, {"seq": 3, "name": "Marchetti, Lucia", "dob": "06/07/1950", "aka": ["MARCHETTI, SAVERIA"]}]}"#
+        for seed: UInt64 in 1...4 {
+            let (result, output, _) = try Self.scrub(document, seed: seed)
+            let person = Set(result.findings.filter { $0.original.uppercased().contains("LUCIA") }.map { $0.standIn.uppercased().split(whereSeparator: { !$0.isLetter }).sorted() })
+            #expect(person.count == 1, "seed \(seed): \(output)")
+            let others = result.findings.filter { $0.original.contains("ORNELLA") || $0.original.contains("SAVERIA") }.map { $0.standIn.uppercased().split(whereSeparator: { !$0.isLetter }).sorted() }
+            #expect(others.count == 2 && !others.contains { person.contains($0) }, "seed \(seed): \(output)")
+        }
+    }
 }
