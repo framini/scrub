@@ -325,6 +325,12 @@ enum DocumentPipeline {
         // What each value holds, read first for all of them: a field then decides
         // across its values (see `Fields`) before any is replaced.
         var founds = [[Span]](repeating: [], count: leaves.count)
+        // A unit's key alone says no address: its record, or one inside it, must hold one, or the value is a quantity ("units": "120").
+        var addressed: Set<Int> = []
+        for leaf in leaves where !KeyHints.bareUnitKey(leaf.key) {
+            let part = ["ADDRESS", "LOCATION", "POSTAL_CODE"].contains(hint(leaf.key ?? leaf.addressKey) ?? "")
+            if part || KeyHints.words(leaf.objectPath).contains(where: { $0 == "address" || $0 == "addr" }) { addressed.formUnion(leaf.enclosing) }
+        }
         for index in order {
             try Scrubber.checkCancellation()
             let leaf = leaves[index]
@@ -341,6 +347,7 @@ enum DocumentPipeline {
                !found.contains(where: { $0.entity == "ADDRESS" && $0.range.count * 2 >= (leaf.seen as NSString).length }) {
                 found = [Span(range: 0..<(leaf.seen as NSString).length, entity: KeyHints.hint(leaf.addressKey) == "REGION" ? "REGION" : "ADDRESS", score: 1)]
             }
+            if KeyHints.bareUnitKey(leaf.key), !(leaf.lastRecord.map(addressed.contains) ?? false) { found.removeAll { $0.entity == "ADDRESS" } }
             founds[index] = found
         }
         Fields.decide(leaves, &founds)

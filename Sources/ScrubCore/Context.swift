@@ -556,6 +556,13 @@ public enum KeyHints {
         let parts = words(key)
         return hint(key) == "ADDRESS" && [houseNumberKeys, unitKeys].contains { $0.contains(parts.joined()) || $0.contains(parts.suffix(2).joined()) || $0.contains(parts.last ?? "") }
     }
+    /// A key that names a unit alone ("unit", "units", "apt", "flat"): a sales
+    /// file's quantity or a measure as often as an address's unit.
+    static func bareUnitKey(_ key: String?) -> Bool {
+        let compact = compactKey(key)
+        return hint(key) == "ADDRESS" && bareUnits.contains(singular(compact).flatMap { bareUnits.contains($0) ? $0 : nil } ?? compact)
+    }
+    private static let bareUnits: Set<String> = ["unit", "apt", "flat"]
     // "primary_number": a US address's house number, as address validation splits it.
     static let houseNumberKeys: Set<String> = ["housenumber", "housenum", "houseno", "primarynumber", "buildingnumber", "buildingno", "streetnumber", "streetnum", "streetno", "civicnumber", "premisenumber"]
     static let streetNameKeys: Set<String> = ["streetname", "thoroughfare", "buildingname", "street", "housename"]
