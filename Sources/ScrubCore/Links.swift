@@ -35,9 +35,13 @@ enum Links {
     /// `spans` without the names, handles and places found inside a link. A
     /// value a key names in full ("profile_url") keeps what its key says.
     static func outside(_ spans: [Span], in text: String, links known: [Range<Int>]? = nil) -> [Span] {
-        let length = (text as NSString).length
+        let ns = text as NSString, length = ns.length
+        // A value its key names whole, spaces around it aside, is kept: "user": " jdoe.co ".
+        let lead = (text.prefix { $0 == " " || $0 == "\t" } as Substring).utf16.count
+        let trail = (text.reversed().prefix { $0 == " " || $0 == "\t" }).count
+        let whole = lead..<max(lead, length - trail)
         // A link's own parts read for what they hold (`URLs`) are kept.
-        func judged(_ span: Span) -> Bool { named.contains(span.entity) && span.url == nil && !(span.score == 1 && span.range == 0..<length) }
+        func judged(_ span: Span) -> Bool { named.contains(span.entity) && span.url == nil && !(span.score == 1 && (span.range == 0..<length || span.range == whole)) }
         guard spans.contains(where: judged) else { return spans }
         let links = known ?? ranges(in: text)
         guard !links.isEmpty else { return spans }

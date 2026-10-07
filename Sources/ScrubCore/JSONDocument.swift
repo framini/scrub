@@ -454,13 +454,12 @@ final class JSONDocument {
     /// "2.128675309e9" are all "2128675309e0". No rounding: its significant digits and their power of ten.
     static func numberValue(_ number: String) -> String? {
         guard let parts = numberParts(number) else { return nil }
-        // The exponent as checked arithmetic: one written past a whole number's range is no number to match.
+        // The exponent counted wider than any written: a spelling at either end of the range still matches.
         var digits = (String(parts.whole) + parts.fraction).drop { $0 == "0" }
         guard !digits.isEmpty else { return "0" }
         let zeros = digits.reversed().prefix { $0 == "0" }.count
         digits = digits.dropLast(zeros)
-        let (power, over) = parts.power.addingReportingOverflow(zeros - parts.fraction.count)
-        guard !over else { return nil }
+        let power = Int128(parts.power) + Int128(zeros - parts.fraction.count)
         return (parts.negative ? "-" : "") + digits + "e" + String(power)
     }
     /// The number `value` written in `like`'s shape: its exponent as written, and at least as many
@@ -470,9 +469,10 @@ final class JSONDocument {
         let negative = exact.hasPrefix("-")
         let parts = exact.dropFirst(negative ? 1 : 0).split(separator: "e")
         let digits = String(parts[0])
-        guard let power = parts.count == 2 ? Int(parts[1]) : 0 else { return nil }
-        let (shift, overflow) = power.subtractingReportingOverflow(shape.power)
-        guard !overflow, shift.magnitude <= 400 else { return nil }
+        guard let power = parts.count == 2 ? Int128(String(parts[1])) : 0 else { return nil }
+        let wide = power - Int128(shape.power)
+        guard wide.magnitude <= 400 else { return nil }
+        let shift = Int(wide)
         var whole: String, fraction: String
         if shift >= 0 {
             (whole, fraction) = (digits + String(repeating: "0", count: shift), "")

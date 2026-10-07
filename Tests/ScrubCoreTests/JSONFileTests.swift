@@ -483,3 +483,17 @@ func bareNameKeyNeedsAPersonRecord(_ input: String, _ replaced: Bool) throws {
     let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
     #expect(!output.contains("1.0e-"), "\(output)")
 }
+
+// A handle shaped like a domain, with spaces around it, is replaced under a client's key and a role's.
+@Test func jsonPaddedDomainShapedHandleIsReplaced() throws {
+    let output = String(decoding: try Scrubber.scrub(Data(#"{"user":" jdoe.co ","assignee":" maria.co "}"#.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("jdoe.co") && !output.contains("maria.co"), "\(output)")
+}
+
+// Spellings of one number whose exponents reach past a whole number's range once its zeros are counted still match.
+@Test func jsonNumbersAtEitherEndOfTheExponentMatch() throws {
+    for source in [#"{"password":10e9223372036854775807,"copy":100e9223372036854775806}"#, #"{"password":0.1e-9223372036854775808,"copy":0.10e-9223372036854775808}"#] {
+        let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+        #expect(!output.contains(#""copy":100e"#) && !output.contains(#""copy":0.10e"#), "\(output)")
+    }
+}
