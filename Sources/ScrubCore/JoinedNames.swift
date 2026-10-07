@@ -57,6 +57,17 @@ enum JoinedNames {
         return spans
     }
 
+    /// "Patient: Fairweather, Rosalind    MRN#": "Last, First" alone as a labelled field's
+    /// value, a label before it on its line and the line's end or a column's gap after it.
+    private static func labelledField(_ range: Range<Int>, in text: String) -> Bool {
+        let ns = text as NSString
+        let line = ns.lineRange(for: NSRange(location: range.lowerBound, length: 0))
+        let head = ns.substring(with: NSRange(location: line.location, length: range.lowerBound - line.location))
+        let tail = ns.substring(with: NSRange(location: range.upperBound, length: max(0, NSMaxRange(line) - range.upperBound)))
+        return head.range(of: #"^[ \t]*\p{L}[\p{L} ]{1,24}:[ \t]+$"#, options: .regularExpression) != nil
+            && tail.range(of: #"^(?:[ \t]*[\r\n]*$|\t|  )"#, options: .regularExpression) != nil
+    }
+
     private struct Piece {
         var range: Range<Int>
         var sure: Bool
@@ -85,6 +96,16 @@ enum JoinedNames {
         }
         guard !pieces.isEmpty else { return (kept, doubts) }
         pieces.sort { $0.range.lowerBound != $1.range.lowerBound ? $0.range.lowerBound < $1.range.lowerBound : $0.range.upperBound > $1.range.upperBound }
+        // One piece read twice is one piece: the surer reading.
+        var unique: [Piece] = []
+        for piece in pieces {
+            if let last = unique.last, last.range == piece.range, last.place == piece.place {
+                if !last.sure && piece.sure || last.sure == piece.sure && piece.score > last.score { unique[unique.count - 1] = piece }
+                continue
+            }
+            unique.append(piece)
+        }
+        pieces = unique
         // Pieces side by side on one line, with what may stand inside a name between them.
         // Pieces that overlap are left as they were read, for the findings' own order to settle.
         var groups: [[Piece]] = [], tangled: Set<Int> = []
@@ -94,7 +115,7 @@ enum JoinedNames {
                     last.append(piece); groups[groups.count - 1] = last; tangled.insert(groups.count - 1); continue
                 }
                 let gap = word(end..<piece.range.lowerBound)
-                if !TextRanges.matches(bridge, in: gap).isEmpty {
+                if !TextRanges.matches(bridge, in: gap).isEmpty || gap == ", " && last.count == 1 && labelledField(last[0].range.lowerBound..<piece.range.upperBound, in: text) {
                     last.append(piece); groups[groups.count - 1] = last; continue
                 }
             }

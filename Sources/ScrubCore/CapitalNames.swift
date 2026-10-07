@@ -15,7 +15,7 @@ enum CapitalNames {
         "api", "apis", "sdk", "cli", "ide", "url", "uri", "http", "https", "html", "css", "json", "xml", "csv", "pdf", "sql", "ssh", "ssl", "tls", "dns", "ip", "tcp", "udp",
         "vpn", "lan", "wan", "usb", "cpu", "gpu", "ram", "ssd", "os", "ui", "ux", "qa", "ci", "cd", "id", "ids", "pin", "otp", "sms", "mms", "faq", "crm", "erp",
         "ceo", "cfo", "cto", "coo", "cio", "ciso", "cmo", "vp", "svp", "evp", "hr", "it", "pr", "pa", "pm", "am", "md", "rn", "np", "cpa", "mba", "phd", "dds", "esq",
-        "usa", "us", "uk", "eu", "un", "uae", "nasa", "nato", "nhs", "irs", "fbi", "cia", "dhs", "dmv", "hmrc", "ssn", "dob", "vat", "ein", "tin", "itin", "iban", "bic",
+        "usa", "us", "uk", "eu", "un", "uae", "nasa", "nato", "nhs", "irs", "fbi", "cia", "dhs", "dmv", "hmrc", "ssn", "dob", "mrn", "nhi", "vat", "ein", "tin", "itin", "iban", "bic",
         "gdpr", "hipaa", "ccpa", "pii", "phi", "nda", "sla", "slo", "sow", "rfp", "rfq", "po", "kpi", "okr", "roi", "eta", "eod", "eow", "eom", "tbd", "tba", "tbc",
         "asap", "fyi", "aka", "diy", "rsvp", "ps", "pps", "nb", "re", "fw", "fwd", "cc", "bcc", "ok", "okay", "utc", "gmt", "est", "edt", "pst", "pdt", "cet", "cest",
         "ooo", "wfh", "pto", "lol", "omg", "btw", "imo", "imho", "tldr", "ai", "ml", "llm", "nlp", "dm", "dms", "atm", "vip", "na", "n/a", "aob", "wip", "poc", "mvp",
@@ -37,8 +37,9 @@ enum CapitalNames {
             && !NameCues.verbs.contains(bare)
     }
 
-    /// A known first name, written either way, then a word in capitals.
-    private static let afterFirst = TextPattern(#"(?<![\p{L}\p{N}'’.@/_-])(\p{Lu}\p{Ll}+|\p{Lu}{2,})[ \t]+(\p{Lu}{2,}(?:[-'’]\p{Lu}{2,})?)(?![\p{L}\p{N}'’@/_-])"#)
+    /// A known first name, written either way, then a word in capitals, one space or tab
+    /// between them: a wider gap parts a form's columns ("Rosalind    MRN#").
+    private static let afterFirst = TextPattern(#"(?<![\p{L}\p{N}'’.@/_-])(\p{Lu}\p{Ll}+|\p{Lu}{2,})[ \t](\p{Lu}{2,}(?:[-'’]\p{Lu}{2,})?)(?![\p{L}\p{N}'’@/_-])"#)
     /// A title, then a surname in capitals: "Ms BEET", "Dr. JINX".
     private static let afterTitle = TextPattern(#"(?<![\p{L}\p{N}])(?:Mr|Mrs|Ms|Miss|Mx|Dr|Prof|Sir|Dame)\.?[ \t]+(\p{Lu}{2,}(?:[-'’]\p{Lu}{2,})?)(?![\p{L}\p{N}'’@/_-])"#)
 

@@ -87,6 +87,11 @@ enum NameShape {
         guard span.entity == "PERSON" else { return span }
         var parts = words(span.range, in: text)
         guard !parts.isEmpty else { return span }
+        // "Rosalind    MRN#": a gap of a form's columns ends a name, and a label in capitals after it is none.
+        if let gap = parts.indices.dropFirst().first(where: { index in
+            let between = TextRanges.substring(text, parts[index - 1].range.upperBound..<parts[index].range.lowerBound)
+            return between.contains("\t") || between.contains("  ") || between.contains(where: \.isNewline)
+        }) { parts.removeSubrange(gap...) }
         // "Wing Commander Rodgers": a rank before a name is no part of it, nor a role after one.
         if let role = parts.lastIndex(where: { isRole($0.text) }), role < parts.count - 1, parts[(role + 1)...].contains(where: { !isRole($0.text) && !joining.contains($0.bare) }) {
             parts.removeFirst(role + 1)
