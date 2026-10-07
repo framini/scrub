@@ -44,7 +44,7 @@ enum Context {
 
 public enum KeyHints {
     private static let groups: [(String, String)] = [
-        ("name fullname contactname customername displayname ownername managername authorname reportername assigneename requestername sendername recipientname holdername cardholder cardholdername accountholder accountholdername patientname employeename legalname callername nameoncard nameonaccount payeename beneficiaryname billingname shippingname insuredname guarantorname subscribername policyholdername embossname embossedname chosenname debtorname creditorname receivername originatorname matchedname nameinenglish namelatin aka akas alsoknownas akaname associates nombrecompleto nomecompleto nameline1 nameline2 embossline1 originalscript nativescript namenative nativename localname namelocal nameoriginalscript", "PERSON"),
+        ("name nm fullname contactname customername displayname ownername managername authorname reportername assigneename requestername sendername recipientname holdername cardholder cardholdername accountholder accountholdername patientname employeename legalname callername nameoncard nameonaccount payeename beneficiaryname billingname shippingname insuredname guarantorname subscribername policyholdername embossname embossedname chosenname debtorname creditorname receivername originatorname matchedname nameinenglish namelatin aka akas alsoknownas akaname associates nombrecompleto nomecompleto nameline1 nameline2 embossline1 originalscript nativescript namenative nativename localname namelocal nameoriginalscript", "PERSON"),
         ("firstname givenname middlename fname forename preferredname namefirst namemiddle namegiven forenames firstnames nombre nombres primernombre segundonombre prenom prenoms vorname vornamen nome primeironome", "FIRST_NAME"),
         ("lastname surname familyname lname maidenname namelast namefamily apellido apellidos apellidopaterno apellidomaterno primerapellido segundoapellido nom nomdefamille nomdusage nachname familienname cognome sobrenome", "LAST_NAME"),
         ("email emailaddress emailaddr mail", "EMAIL_ADDRESS"),
@@ -132,7 +132,7 @@ public enum KeyHints {
             let qualifier = parts[start - 1]
             switch field {
             // "primary_name" and "secondary_name": the first and the second person a record names.
-            case "name": if people.contains(qualifier) || roles.contains(qualifier) || ["primary", "secondary"].contains(qualifier) { return entity }
+            case "name", "nm": if people.contains(qualifier) || roles.contains(qualifier) || ["primary", "secondary"].contains(qualifier) { return entity }
             case "address", "addr": if addressQualifiers.contains(qualifier) { return entity }
             // "primary_mobile", "customer_cell": a phone, as "is_mobile" and "mobile_app" are not.
             case "mobile", "cell", "tel": if people.contains(qualifier) || roles.contains(qualifier) || addressQualifiers.contains(qualifier) || phoneQualifiers.contains(qualifier) { return entity }
@@ -179,7 +179,8 @@ public enum KeyHints {
     static func resolve(_ key: String?, parent: String?, listed: Bool = false, value: String? = nil) -> String? {
         // An identity document's own number: "document": {"number": …}, "idDocs": [{"number": …}].
         if hint(key) == nil, documentNumbers.contains(words(key).joined()), let last = words(parent).last, identityDocuments.contains(last) { return "document_number" }
-        guard let parentHint = hint(parent) else { return key }
+        // A name's parts under its letter ("N": {"F": …, "L": …}) are read as under "name".
+        guard let parentHint = hint(parent) ?? (words(parent) == ["n"] && shortNameParts[words(key).joined()] != nil ? "PERSON" : nil) else { return key }
         let own = hint(key)
         let compact = words(key).joined()
         switch parentHint {
@@ -194,6 +195,7 @@ public enum KeyHints {
             if ["middle", "middlenames", "middles"].contains(compact) { return "middle_name" }
             if ["last", "family", "familynames", "lastnames", "surnames"].contains(compact) { return "last_name" }
             if ["full", "display", "formatted", "text"].contains(compact) { return "full_name" }
+            if let part = shortNameParts[compact] { return part }
         case "PHONE_NUMBER" where ["number", "digits", "e164", "national", "nationalnumber", "international", "internationalnumber", "formatted", "raw", "full"].contains(compact): return parent
         case "EMAIL_ADDRESS" where ["address", "addr"].contains(compact): return parent
         case "ADDRESS" where ["line", "lines", "text", "formatted", "full"].contains(compact): return parent
@@ -215,6 +217,9 @@ public enum KeyHints {
         return own == nil && valueKeys.contains(compact) ? parent : key
     }
     private static let valueKeys: Set<String> = ["value", "data"]
+    /// A name's parts by their letters, as a short-keyed payload writes them under the name.
+    private static let shortNameParts: [String: String] = ["f": "first_name", "fn": "first_name", "g": "first_name", "m": "middle_name", "mn": "middle_name", "mi": "middle_name",
+                                                           "l": "last_name", "ln": "last_name", "s": "last_name", "sn": "last_name"]
     private static let writtenForms: Set<String> = ["latin", "cyrillic", "arabic", "greek", "hebrew", "chinese", "japanese", "korean", "kana", "kanji", "hangul", "thai", "native", "local", "localized", "localised",
                                                     "original", "originalstring", "originalvalue", "translit", "transliterated", "transliteration", "romanized", "romanised", "ascii", "english", "en", "raw", "rawvalue"]
     private static let objectReference = TextPattern(#"^[A-Z]{1,5}-[A-Za-z0-9]{5,40}$"#)
@@ -298,7 +303,7 @@ public enum KeyHints {
     private static let wrapperNotes: Set<String> = ["verified", "isverified", "confirmed", "type", "source", "status", "primary", "isprimary", "label", "updatedat", "confidence", "valid"]
     /// Keys whose sibling says what the value is: form fields, typed identifiers
     /// and FHIR contact points (`{"name": "ssn", "value": …}`, `{"system": "phone", "value": …}`).
-    static let fieldValueKeys: Set<String> = ["value", "values", "data", "answer", "response", "originalvalue", "extractedvalue", "expectedvalue", "actualvalue", "inputvalue", "submittedvalue", "providedvalue", "returnedvalue", "normalizedvalue"]
+    static let fieldValueKeys: Set<String> = ["value", "values", "data", "text", "val", "answer", "response", "originalvalue", "extractedvalue", "expectedvalue", "actualvalue", "inputvalue", "submittedvalue", "providedvalue", "returnedvalue", "normalizedvalue"]
     static let fieldNameKeys: Set<String> = ["name", "key", "field", "fieldname", "fieldid", "fieldkey", "id", "label", "type", "system", "attribute", "property", "question", "code"]
     /// The field a record's value-holding key stands for, from its naming sibling.
     static func namedField(_ key: String, siblings: [(String, String)]) -> String? {
@@ -592,9 +597,10 @@ public enum KeyHints {
     static func mayBeBirthPart(_ key: String) -> Bool { birthFields[words(key).joined()] != nil }
     private static let birthFields: [String: String] = ["date": "date_of_birth", "fulldate": "date_of_birth", "value": "date_of_birth", "datetime": "date_of_birth", "datetimevalue": "date_of_birth",
                                                         "datevalue": "date_of_birth", "year": "birth_year", "yyyy": "birth_year", "month": "birth_month", "day": "day_of_birth"]
-    /// A bare "name" key, which names accounts, products and plans as often as people.
+    /// A bare "name" key, or its abbreviation "nm", which names accounts, products and plans as often as people.
     static func isBareName(_ key: String?) -> Bool {
-        words(key) == ["name"]
+        let parts = words(key)
+        return parts == ["name"] || parts == ["nm"]
     }
     private static let personalSiblings: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "PHONE_NUMBER", "DATE_OF_BIRTH", "US_SSN", "ID_NUMBER", "USERNAME"]
     private static let people: Set<String> = ["user", "customer", "contact", "employee", "patient", "person", "people", "member", "owner", "student", "applicant", "candidate", "passenger", "traveler", "traveller", "signer", "signatory", "holder", "accountholder", "cardholder", "author", "profile", "individual", "borrower", "tenant", "buyer", "seller", "payee", "payer", "driver", "worker", "staff", "teammate", "actor", "guest", "debtor", "creditor", "receiver", "originator", "beneficiary", "associate"]
@@ -729,7 +735,7 @@ public enum KeyHints {
     }
     // Keys naming a person's role ("assigned_to", "manager") often hold an ID
     // or an email, so they only mark a value that is written like a name.
-    private static let roles: Set<String> = ["manager", "approver", "reporter", "author", "assignee", "assignedto", "owner", "requester", "requestedby", "reviewer", "reviewedby", "sender", "recipient", "createdby", "updatedby", "modifiedby", "submittedby", "approvedby", "contact", "contactperson", "agent", "rep", "salesrep", "accountmanager", "supervisor", "signedby", "attendee", "guest", "beneficiary", "emergencycontact", "nextofkin", "spouse", "parent", "guardian", "customer", "client", "patient", "applicant", "employee", "member", "guest", "tenant", "borrower", "insured", "policyholder", "passenger", "traveler", "traveller", "attn", "attention", "shipto", "billto", "soldto", "deliverto", "addressee", "cardholder", "accountholder", "signer", "witness", "caller", "visitor", "student", "candidate", "cosigner", "cosignatory", "guarantor", "coapplicant", "coborrower", "cotenant"]
+    private static let roles: Set<String> = ["manager", "approver", "reporter", "author", "assignee", "assignedto", "owner", "requester", "requestedby", "reviewer", "reviewedby", "sender", "recipient", "createdby", "updatedby", "modifiedby", "submittedby", "approvedby", "contact", "contactperson", "agent", "rep", "salesrep", "accountmanager", "supervisor", "signedby", "attendee", "guest", "beneficiary", "emergencycontact", "nextofkin", "spouse", "parent", "guardian", "customer", "client", "patient", "applicant", "employee", "member", "guest", "tenant", "borrower", "insured", "policyholder", "passenger", "traveler", "traveller", "attn", "attention", "shipto", "billto", "soldto", "deliverto", "addressee", "cardholder", "accountholder", "signer", "witness", "caller", "visitor", "student", "candidate", "cosigner", "cosignatory", "guarantor", "coapplicant", "coborrower", "cotenant", "holder"]
     static func isRole(_ key: String?) -> Bool {
         guard let key else { return false }
         let parts = words(key)
