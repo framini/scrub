@@ -212,3 +212,36 @@ private func aHealthRecordBundleKeepsOnePatientAndEveryCode(_ name: String) thro
     let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json").output, as: UTF8.self)
     #expect(!output.contains("Marrow") && !output.contains("Fenwick"), "\(output)")
 }
+
+/// A person's identifier is theirs whatever its system calls it: a record number its system's
+/// path names ("…/mrn"), one no system names, and one a reference to them writes. A visit's,
+/// a device's and an organisation's identifiers name no one, and a UUID is the system's own key.
+@Test(arguments: renderings.map(\.0))
+private func aPersonsIdentifierIsTheirsWhateverItsSystem(_ name: String) throws {
+    let rendering = try #require(renderings.first { $0.0 == name })
+    let json = #"{"resourceType":"Bundle","type":"collection","entry":["#
+        + #"{"resource":{"resourceType":"Patient","id":"pat-7f3a9c","identifier":["#
+        + #"{"use":"usual","system":"http://hospital.example.org/mrn","value":"MRN-00482913"},"#
+        + #"{"system":"https://clinic.example.org/local-ids","value":"A7731902"},"#
+        + #"{"system":"https://records.example.org/patients","value":"0e6f1b2c-3d4a-4b5c-8d9e-0f1a2b3c4d5e"}],"#
+        + #""name":[{"family":"Abernathy","given":["Clementine"]}],"birthDate":"1972-02-29"}},"#
+        + #"{"resource":{"resourceType":"Practitioner","id":"prac-12","identifier":[{"system":"https://clinic.example.org/staff","value":"ST-20931"}],"#
+        + #""name":[{"family":"Teague","given":["Oswin"],"prefix":["Dr."]}]}},"#
+        + #"{"resource":{"resourceType":"Encounter","id":"enc-88","identifier":[{"system":"https://clinic.example.org/visits","value":"V-2026-004417"}],"#
+        + #""subject":{"identifier":{"system":"https://clinic.example.org/local-ids","value":"A7731902"}}}},"#
+        + #"{"resource":{"resourceType":"Device","id":"dev-3","identifier":[{"system":"https://devices.example.org/serial","value":"SN-88213-X"}]}},"#
+        + #"{"resource":{"resourceType":"Organization","id":"org-1","identifier":[{"system":"https://registry.example.org/org","value":"ORG-5512"}],"name":"Saint Brigid Community Hospital"}}]}"#
+    let output = try scrubbed(json, rendering)
+    #expect((try? OrderedJSON.parse(output)) != nil, "[\(name)] no longer parses: \(output)")
+    for original in ["00482913", "A7731902", "20931", "Abernathy", "Clementine", "Teague", "Oswin"] { #expect(!output.contains(original), "[\(name)] \(original) left in \(output)") }
+    // Its stand-in keeps its shape and its type's code, and the reference names the same patient.
+    let mrn = try #require(value(output, at: "/entry/0/resource/identifier/0/value"))
+    #expect(mrn.wholeMatch(of: /MRN-[0-9]{8}/) != nil, "[\(name)] \(mrn)")
+    let local = try #require(value(output, at: "/entry/0/resource/identifier/1/value"))
+    #expect(local.wholeMatch(of: /[A-Z][0-9]{7}/) != nil, "[\(name)] \(local)")
+    #expect(value(output, at: "/entry/2/resource/subject/identifier/value") == local, "[\(name)] \(output)")
+    for kept in ["0e6f1b2c-3d4a-4b5c-8d9e-0f1a2b3c4d5e", "V-2026-004417", "SN-88213-X", "ORG-5512", "Saint Brigid Community Hospital", "http://hospital.example.org/mrn",
+                 "https://clinic.example.org/local-ids", #""use":"usual""#] {
+        #expect(output.contains(kept), "[\(name)] \(kept) changed in \(output)")
+    }
+}

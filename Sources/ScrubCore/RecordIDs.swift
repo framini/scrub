@@ -397,8 +397,10 @@ enum RecordIDs {
         if idKey(key), leaf.contextWords.contains("address"), !leaf.text.contains(" "), leaf.text.split(separator: "_").count >= 4,
            leaf.text.contains(where: \.isNumber), leaf.text.contains(where: \.isLetter), leaf.text.count <= 128 { return true }
         guard shaped(leaf.text), !crossReference(leaf.text) else { return false }
-        // A sample that writes its own field's name ("accountRef": "ACCOUNTREF") holds no one's ID.
-        if KeyHints.words(leaf.text).joined() == KeyHints.words(key).joined() || leaf.text.lowercased().filter(\.isLetter) == (key ?? "").lowercased().filter(\.isLetter) { return false }
+        // A sample that writes its own field's name ("accountRef": "ACCOUNTREF", "user": "USER_1") holds no one's ID;
+        // a number after the field's code is one ("mrn": "MRN-00482913").
+        if KeyHints.words(leaf.text).joined() == KeyHints.words(key).joined()
+            || leaf.text.lowercased().filter(\.isLetter) == (key ?? "").lowercased().filter(\.isLetter) && leaf.text.filter(\.isNumber).count < 3 { return false }
         if identifying(key: key, value: leaf.text) { return true }
         guard idKey(key) else { return false }
         // A flattened column names its object first ("actor.id"): the field is its last part, as a nested key is.

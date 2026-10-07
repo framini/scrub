@@ -135,6 +135,13 @@ final class JSONDocument {
             // So does a coded type ({"type": {"text": "Passport Number"}, "value": …}), as a field's name would.
             let typeNames = Self.typeNames(pairs)
             let referred = Self.referredRole(pairs, parent: keys.last)
+            // A person's own identifiers: those of their record, or of a reference to them.
+            let documentID = ObjectIdentifier(document)
+            if Self.identifiesPerson(pairs, parent: keys.last), let index = pairs.firstIndex(where: { $0.0 == "identifier" }) {
+                personIdentifiers.insert(Place(document: documentID, path: path + "/" + String(index)))
+            }
+            let ownIdentifier = personIdentifiers.contains(Place(document: documentID, path: path))
+                || path.lastIndex(of: "/").map { personIdentifiers.contains(Place(document: documentID, path: String(path[..<$0]))) } == true
             nextRecord += 1
             let ancestry = KeyHints.isWrapper(pairs.map(\.0)) && !records.isEmpty ? records : records + [nextRecord]
             let named = pairs.compactMap { pair in pair.1.stringValue.map { (pair.0, $0) } }
@@ -161,6 +168,9 @@ final class JSONDocument {
                 case .object, .array: inherited = KeyHints.namedField(pair.0, siblings: named) ?? kindField ?? KeyHints.resolveContainer(pair.0, parent: key, listed: listed)
                 default: inherited = KeyHints.namedField(pair.0, siblings: named) ?? kindField ?? KeyHints.resolve(pair.0, parent: key, listed: listed, value: pair.1.stringValue)
                 }
+                // Whatever its system calls it, a person's identifier is theirs; a UUID is the system's own key, kept as every UUID is.
+                if ownIdentifier, pair.0 == "value", KeyHints.hint(inherited) == nil, !RecordIDs.isPersonKey(inherited),
+                   case .string(let text) = pair.1, !RecordIDs.isUUID(text) { inherited = "person_id" }
                 if KeyHints.hint(inherited) == nil, case .string(let text) = pair.1 {
                     // A reference's display names what it points to: a person in a role, or a business or a place.
                     if let referred, pair.0 == "display" { inherited = referred }
@@ -376,6 +386,22 @@ final class JSONDocument {
             "SubstanceDefinition", "SubstanceNucleicAcid", "SubstancePolymer", "SubstanceProtein", "SubstanceReferenceInformation",
             "SubstanceSourceMaterial", "SubstanceSpecification", "SupplyDelivery", "SupplyRequest", "Task", "TerminologyCapabilities", "TestPlan",
             "TestReport", "TestScript", "Transport", "ValueSet", "VerificationResult", "VisionPrescription"]
+        /// Where a person's "identifier" sits: in each document, the path of the object or list it is.
+        private struct Place: Hashable { let document: ObjectIdentifier; let path: String }
+        private var personIdentifiers: Set<Place> = []
+        /// Whether a record's "identifier" names a person: the record is one ("resourceType": "Patient"),
+        /// or a reference to one, by its type ("Patient/…") or, with none, by the key it is under ("subject").
+        static func identifiesPerson(_ pairs: [(String, JSONValue)], parent: String?) -> Bool {
+            if let type = pairs.first(where: { $0.0 == "resourceType" })?.1.stringValue { return people.contains(type) }
+            guard let parent, referringPeople.contains(KeyHints.words(parent).joined()) else { return false }
+            guard let reference = pairs.first(where: { $0.0 == "reference" })?.1.stringValue,
+                  let match = TextRanges.matches(referenceType, in: reference).first else {
+                return pairs.first(where: { $0.0 == "type" })?.1.stringValue.flatMap { $0.split(separator: "/").last }.map { people.contains(String($0)) } ?? true
+            }
+            return people.contains(TextRanges.substring(reference, match.range(at: 1).location..<NSMaxRange(match.range(at: 1))))
+        }
+        /// The record types that are a person, whose identifiers are theirs (a role's are the role's).
+        private static let people: Set<String> = ["Patient", "Practitioner", "RelatedPerson", "Person"]
         /// The record types a reference names a person by.
         private static let personTypes: Set<String> = ["Patient", "Practitioner", "PractitionerRole", "RelatedPerson", "Person"]
         /// Keys whose reference is to a person. A "provider" may be a practice as often as a
