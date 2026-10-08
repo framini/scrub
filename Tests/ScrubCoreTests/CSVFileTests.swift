@@ -201,3 +201,23 @@ func csvReadsAWideHeaderInOnePass(_ shape: String) throws {
     // once per pair of columns, sixteen. A ratio holds on a busy machine where a time would not.
     #expect(wide < narrow * 8 + .seconds(2), "\(shape): \(narrow) then \(wide)")
 }
+
+/// A support export's client column with Spanish names written with their accents, each alone in its
+/// cell and again surname first: the first name and the surname are both the person's, never a place.
+@Test func accentedNamesInAClientColumnAreReplacedWhole() throws {
+    let csv = """
+    id_caso,cliente,correo,mensaje
+    ES-14,Lucía Gómez,lucia.g@example.es,"Sin novedad"
+    ES-15,Rocío Fernández,rfernandez@example.es,"Pide la devolución"
+    ES-16,"Gómez, Lucía",lucia.g@example.es,"Documento caducado"
+    """
+    let result = try Scrubber.scrub(Data(csv.utf8), name: "casos.csv")
+    let output = try #require(String(data: result.output, encoding: .utf8))
+    for original in ["Lucía", "Gómez", "Rocío", "Fernández", "lucia.g", "rfernandez"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    let rows = output.split(separator: "\n").map(String.init)
+    #expect(rows[0] == "id_caso,cliente,correo,mensaje" && rows[1].hasSuffix(#","Sin novedad""#) && rows[3].hasSuffix(#","Documento caducado""#))
+    // One person in both spellings: the surname-first cell is the same stand-in turned around.
+    let name = rows[1].split(separator: ",")[1].split(separator: " ")
+    #expect(name.count == 2 && rows[3].contains("\"\(name[1]), \(name[0])\""), "\(output)")
+    #expect(!result.review!.findings.contains { $0.entity == "LOCATION" }, "\(result.review!.findings.map(\.original))")
+}

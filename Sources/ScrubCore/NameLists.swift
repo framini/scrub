@@ -68,8 +68,16 @@ enum NameLists {
         word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".'’"))
     }
 
-    static func isFirst(_ word: String) -> Bool { shared.first.contains(folded(word)) || Names.firstFolded.contains(folded(word)) }
-    static func isSurname(_ word: String) -> Bool { shared.surname.contains(folded(word)) || Names.lastFolded.contains(folded(word)) }
+    /// The lists write names without accents: "Lucía" and "Fernández" are found as "lucia" and "fernandez".
+    private static func listed(_ word: String, in lists: Set<String>...) -> Bool {
+        let word = folded(word)
+        if lists.contains(where: { $0.contains(word) }) { return true }
+        guard !word.allSatisfy(\.isASCII) else { return false }
+        let plain = word.folding(options: .diacriticInsensitive, locale: nil)
+        return plain != word && plain.allSatisfy(\.isASCII) && lists.contains { $0.contains(plain) }
+    }
+    static func isFirst(_ word: String) -> Bool { listed(word, in: shared.first, Names.firstFolded) }
+    static func isSurname(_ word: String) -> Bool { listed(word, in: shared.surname, Names.lastFolded) }
     /// A name that is also an ordinary word or a date: "Rose", "Will", "June".
     static func isWordlike(_ word: String) -> Bool {
         let word = folded(word)
