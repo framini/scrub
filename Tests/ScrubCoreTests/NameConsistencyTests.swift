@@ -209,4 +209,29 @@ struct NameConsistencyTests {
             #expect(words.count == 4 && words[1] == "&" && words[0] != words[2] && !pair.contains("KEMI") && !pair.contains("DAYO"), "[seed \(seed)] \(output)")
         }
     }
+
+    /// Two people of one first name, each in a record with an email of their own (an applicant and
+    /// a co-applicant), take first names of their own, so each one's first name alone is theirs; one
+    /// person's first name written again with a prior surname still keeps one stand-in.
+    @Test func twoPeopleOfOneFirstNameTakeTheirOwn() throws {
+        let check = """
+        {"application_id": "APP-30417", "applicant": {"first_name": "Marisol", "last_name": "Thornbury", "full_name": "Marisol Thornbury", "email": "marisol.thornbury@example.com", "dob": "1986-04-12"},
+         "co_applicant": {"first_name": "Marisol", "last_name": "Achterberg", "full_name": "Marisol Achterberg", "email": "m.achterberg@example.org", "dob": "1990-11-03"}}
+        """
+        let rows = "role,full_name,first_name,email\napplicant,Marisol Thornbury,Marisol,marisol.thornbury@example.com\nco_applicant,Marisol Achterberg,Marisol,m.achterberg@example.org\n"
+        for (text, file) in [(check, "application.json"), (rows, "applicants.csv")] {
+            for seed: UInt64 in 1...4 {
+                let (result, output) = try Self.scrub(text, file, seed: seed)
+                let one = try #require(Self.standIn(result, "Marisol Thornbury"), "\(output)"), other = try #require(Self.standIn(result, "Marisol Achterberg"), "\(output)")
+                #expect(one.split(separator: " ").first != other.split(separator: " ").first, "[\(file) seed \(seed)] \(one) / \(other)")
+                let firsts = result.findings.filter { $0.original == "Marisol" }.map(\.standIn)
+                #expect(Set(firsts).count == 2 && !output.contains("Marisol"), "[\(file) seed \(seed)] \(firsts)\n\(output)")
+            }
+        }
+        let graph = #"{"person_id": "P-7", "names": [{"first": "Marisol", "last": "Thornbury", "type": "PRIMARY"}, {"first": "Marisol", "last": "Achterberg", "type": "PRIOR_NAME"}], "emails": [{"address": "marisol.thornbury@example.com"}]}"#
+        for seed: UInt64 in 1...4 {
+            let (result, output) = try Self.scrub(graph, "person.json", seed: seed)
+            #expect(Set(result.findings.filter { $0.original == "Marisol" }.map(\.standIn)).count == 1, "[seed \(seed)] \(output)")
+        }
+    }
 }

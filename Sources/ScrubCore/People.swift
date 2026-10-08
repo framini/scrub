@@ -16,6 +16,8 @@ final class Persona {
     /// or "either" once two of them disagree (see `People.fit`).
     var gender: String?
     let last: String
+    /// The person of the same first name whose stand-in first name this one took (see `People.resolve`).
+    var namesake: Persona?
     private var firstEmail: (original: String, fake: String)?
     private var otherEmails: [String: String] = [:]
     func email(for original: String) -> String? {
@@ -384,6 +386,7 @@ final class People {
             ?? freshName(originals: originals, emailSafe: emailSafe, gender: sex)
         let person = Persona(realFirst: f, realLast: l, first: first, last: last)
         person.realMiddle = m
+        if let namesake, fold(first) == fold(namesake.drawn) { person.namesake = namesake }
         add(person)
         return person
     }
@@ -713,7 +716,30 @@ final class People {
         (firstBuckets[Self.fold(first)]?.count ?? 0) > 0 || (lastBuckets[Self.fold(last)]?.count ?? 0) > 0
     }
     func associate(_ person: Persona, email: String?) {
-        if let email { associatedEmails[fold(email)] = person }
+        guard let email else { return }
+        associatedEmails[fold(email)] = person
+        // Two people of one first name, each with an email of their own (an applicant's record and
+        // a spouse's), are no one person under two surnames: the one who took the other's stand-in
+        // first name draws one of their own, as two people of one first name otherwise do.
+        let pairs = person.namesake.map { [(person, $0)] } ?? []
+        for (later, earlier) in pairs + namesakes(of: person).map({ ($0, person) }) {
+            let other = later === person ? earlier : later
+            guard associatedEmails.contains(where: { $0.key != fold(email) && $0.value === other }) else { continue }
+            later.namesake = nil
+            let originals = [later.realFirst, later.realLast].compactMap { $0 }.filter { $0.count >= 3 }
+            let sex = later.gender ?? later.realFirst.flatMap(NameLists.gender(ofFirst:))
+            for _ in 0..<8 {
+                guard let first = freshFirst(last: later.last, originals: originals, gender: sex) else { break }
+                if fold(first) != fold(earlier.drawn) {
+                    usedFullNames.remove(fold(later.drawn + " " + later.last))
+                    later.redraw(first)
+                    break
+                }
+            }
+        }
+    }
+    private func namesakes(of person: Persona) -> [Persona] {
+        (person.realFirst.flatMap { firstBuckets[$0]?.people } ?? []).filter { $0.namesake === person }
     }
     func associate(first: String?, last: String?, email: String?) {
         guard first != nil || last != nil else { return }
