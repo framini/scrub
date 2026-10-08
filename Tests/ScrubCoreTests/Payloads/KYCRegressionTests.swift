@@ -390,3 +390,15 @@ func aSplitAddressAndItsOneLineFormAgree(_ name: String) throws {
         #expect(floor.range(of: #"^\d\. OG$"#, options: .regularExpression) != nil && floor != "3. OG", "seed \(seed): \(floor)")
     }
 }
+
+/// A name under "Name:" beside a street address is the person living there, as it is beside
+/// an email: replaced, not left for review; a business's name beside one stays as written.
+@Test func aLabelledNameBesideAnAddressIsReplaced() throws {
+    func scrubbed(_ text: String, _ name: String) throws -> String {
+        String(decoding: try Scrubber.scrub(Data(text.utf8), name: name, forceFullDetection: false, seed: 5).output, as: UTF8.self)
+    }
+    let record = "Name:    Anđa Tomić\nAddress:     594 Hegedûs Gyula utca 76. Apt. 289 Mogyorósbánya Hungary\n"
+    #expect(!(try scrubbed(record, "Pasted text")).contains("Tomić"))
+    #expect(try scrubbed(#"{"name":"Riverside Clinic","address":"Hegedűs Gyula utca 76, 1136 Budapest"}"#, "record.json").contains("Riverside Clinic"))
+    #expect(try scrubbed("Name: Northwind Traders\nAddress: 12 Harbor Road, Leeds LS6 3HN\n", "Pasted text").contains("Northwind Traders"))
+}

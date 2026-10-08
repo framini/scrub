@@ -642,7 +642,12 @@ public enum KeyHints {
         if spelledByEmail(value, in: values) { return true }
         guard let known = nameEvidence(value) else { return false }
         if isNotPeople(parent) { return ownRecord(siblings, value: value) }
-        return isPersonsRecord(siblings: siblings, parent: parent, inObject: inObject) || known
+        return isPersonsRecord(siblings: siblings, parent: parent, inObject: inObject) || known || housed(value, siblings: siblings, parent: parent)
+    }
+    /// Whether a bare "name" beside a street address is the person living there: written as
+    /// a person's name, none of its words an ordinary one ("Anđa Tomić", not "Riverside Clinic").
+    private static func housed(_ value: String, siblings: [String], parent: String?) -> Bool {
+        siblings.contains { !isBareName($0) && hint($0) == "ADDRESS" } && writtenAsName(value, parent: parent) && onlyNames(value)
     }
     /// `bareNameIsPerson` under no parent, with `isPersonsRecord` of its
     /// siblings read once for every value beside them.
