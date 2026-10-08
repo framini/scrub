@@ -246,4 +246,18 @@ struct ConsistencyTests {
         let (shipped, _, _) = try Correction.run(label, marks: marked(label, [("Theresa Lane", "PERSON")]), job: Job(seed: 1))
         #expect(shipped.hasPrefix("Ship to Theresa Lane, ") && !shipped.contains("Juniper Hollow"), "\(shipped)")
     }
+
+    /// One birth date written ISO first and then day first ("1966-10-04", "04/10/1966") takes one stand-in
+    /// day, each written in its own order: the unmistakable spelling says which way the other reads.
+    @Test func aBirthDateThatReadsEitherWayIsTheDayTheDocumentWritesPlainly() throws {
+        for seed: UInt64 in 0..<8 {
+            let text = #"{"applicant": {"name": "Rosalind Achterberg", "dob": "1966-10-04", "dates_of_birth": ["1966-10-04", "04/10/1966"], "document": {"date_of_birth": "04.10.1966"}}}"#
+            let result = try Scrubber.scrub(Data(text.utf8), name: "check.json", forceFullDetection: false, seed: seed)
+            let output = String(decoding: result.output, as: UTF8.self)
+            let iso = try #require(output.firstMatch(of: /"dob": "(\d{4})-(\d{2})-(\d{2})"/), "\(output)")
+            #expect(output.contains("\"\(iso.3)/\(iso.2)/\(iso.1)\""), "[seed \(seed)] \(output)")
+            #expect(output.contains("\"\(iso.3).\(iso.2).\(iso.1)\""), "[seed \(seed)] \(output)")
+            #expect(!output.contains("1966"), "[seed \(seed)] \(output)")
+        }
+    }
 }

@@ -333,6 +333,9 @@ final class StandIns {
                 let dayFirst = DayPair(real: Day(year: real.year, month: real.second, day: real.first), fake: Day(year: made.year, month: made.second, day: made.first))
                 // Where both read alike ("10.10.1956"), a date written with dots puts its day first.
                 pairs = original.contains(".") ? [dayFirst, monthFirst] : [monthFirst, dayFirst]
+                // Read as the day the document writes plainly elsewhere, it is that day only.
+                let known = pairs.filter { days[$0.real] != nil }
+                if known.count == 1 { pairs = known }
             }
             for pair in pairs {
                 if days[pair.real] == nil { days[pair.real] = pair.fake }
@@ -1801,12 +1804,6 @@ final class StandIns {
         var year = Int.random(in: 1940...1999, using: &rng)
         var month = Int.random(in: 1...12, using: &rng)
         var day = Int.random(in: 1...28, using: &rng)
-        // Which way round a date that reads either way is, where one of its readings is a day already written another way.
-        var monthFirst: Bool?
-        if Self.dateParts(original)?.month == nil, let either = Self.eitherWay(original) {
-            if let known = days[Day(year: either.year, month: either.first, day: either.second)] { (month, day, monthFirst) = (known.month, known.day, true) }
-            else if let known = days[Day(year: either.year, month: either.second, day: either.first)] { (month, day, monthFirst) = (known.month, known.day, false) }
-        }
         // A day already written another way keeps its stand-in day.
         if let real = Self.dateParts(original), let realMonth = real.month, let realDay = real.day {
             if let known = days[Day(year: real.year, month: realMonth, day: realDay)] {
@@ -1815,6 +1812,17 @@ final class StandIns {
                 // Nor its real month or day: a "birth_month" or "birth_day" read off it would write that back.
                 for _ in 0..<8 where month == realMonth { month = Int.random(in: 1...12, using: &rng) }
                 for _ in 0..<8 where day == realDay { day = Int.random(in: 1...28, using: &rng) }
+            }
+        }
+        // "02/11/1971" beside "1971-11-02": a date that reads either way is the day the document writes
+        // unmistakably, when only one of its readings is one, and takes that day's stand-in in its own order.
+        var readsDayFirst: Bool?
+        if let either = Self.eitherWay(original) {
+            let monthFirst = days[Day(year: either.year, month: either.first, day: either.second)]
+            let dayFirst = days[Day(year: either.year, month: either.second, day: either.first)]
+            if let known = monthFirst ?? dayFirst, (monthFirst == nil) != (dayFirst == nil) {
+                (month, day) = (known.month, known.day)
+                readsDayFirst = dayFirst != nil
             }
         }
         let trimmed = original.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1879,9 +1887,9 @@ final class StandIns {
             output[rest[1]] = padded(day, like: runs[rest[1]])
         } else {
             let (a, b) = (Int(runs[rest[0]]) ?? 0, Int(runs[rest[1]]) ?? 0)
-            let dayFirst = monthFirst.map(!) ?? (a > 12)
-            // "11/07/1984" reads either way, so its stand-in must too, unless the day it is was written another way.
-            let day = a <= 12 && b <= 12 && monthFirst == nil ? Int.random(in: 1...12, using: &rng) : day
+            let dayFirst = readsDayFirst ?? (a > 12)
+            // "11/07/1984" reads either way, so its stand-in must too.
+            let day = a <= 12 && b <= 12 && readsDayFirst == nil ? Int.random(in: 1...12, using: &rng) : day
             output[rest[0]] = padded(dayFirst ? day : month, like: runs[rest[0]])
             output[rest[1]] = padded(dayFirst ? month : day, like: runs[rest[1]])
         }
