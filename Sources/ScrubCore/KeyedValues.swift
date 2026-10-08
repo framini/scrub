@@ -217,6 +217,12 @@ enum KeyedValues {
                 for range in level.codes { found.spans.append(Span(range: range, entity: "REGION", score: 1)) }
             }
             for (span, value) in level.names where KeyHints.bareNameIsPerson(value, siblings: level.keys, parent: level.key, inObject: level.id > 0) { found.spans.append(span) }
+            // A name's parts under keys of their own ({"surname": …, "given": …}), or the name written another way ("pinyin"), as in a file.
+            if level.id > 0, case let parts = KeyHints.nameParts(level.fields, parent: level.key), !parts.isEmpty {
+                for field in found.fields where field.level == level.id {
+                    if let part = parts[field.key], let entity = KeyHints.hint(part) { found.spans.append(Span(range: field.range, entity: entity, score: 1)) }
+                }
+            }
             // A person's own object: its "id" is theirs (see `RecordIDs`).
             let named = RecordIDs.isPersonCollection(KeyHints.words(level.key).last) || level.fields.contains(where: { RecordIDs.namesPersonType(key: $0.0, value: $0.1) })
             let beside = level.keys.contains(where: { ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS"].contains(KeyHints.hint($0) ?? "") })

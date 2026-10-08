@@ -1480,6 +1480,29 @@ final class StandIns {
         assigned[key] = kept
         return kept
     }
+    /// A first name's field holding a whole name ("nome": "LUCAS FERREIRA DA SILVA") keeps its
+    /// shape: the first word is the person's
+    /// stand-in first name, another given name takes one of its own, a particle stays, and a
+    /// surname takes the stand-in that surname takes anywhere, so a relative's name beside it agrees.
+    private func shapedFirst(_ original: String, of person: Persona) -> String {
+        let words = original.trimmingCharacters(in: .whitespaces).split(separator: " ").map(String.init)
+        guard words.count >= 2, words.count <= 6, words.allSatisfy({ $0.count >= 2 && $0.allSatisfy { $0.isLetter || "-'’".contains($0) } }) else { return person.first }
+        let particle = words.dropFirst().firstIndex { JoinedNames.particles.contains($0.lowercased()) }
+        // A whole name: three words or more, or a particle after the first; the last word is its surname.
+        // Two given names ("Ana Lucía") are the person's first name, as their whole name writes it.
+        guard words.count >= 3 || particle != nil, person.first.split(separator: " ").count < words.count else { return person.first }
+        var made = [person.first.split(separator: " ").first.map(String.init) ?? person.first]
+        for (index, word) in words.enumerated().dropFirst() {
+            if JoinedNames.particles.contains(word.lowercased()) { made.append(word); continue }
+            let surname = (index == words.count - 1 || particle.map { index > $0 } == true || NameLists.isSurname(word) && !NameLists.isFirst(word))
+            if surname {
+                made.append(person.realLast?.compare(word, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame ? person.last : people.register(nil, word).last)
+            } else {
+                made.append(people.otherGiven(word, of: person) ?? people.register(word, nil).first)
+            }
+        }
+        return made.joined(separator: " ")
+    }
     /// A post office box keeps its kind and the length of its number.
     private static let boxes = ["po box", "p.o. box", "p.o.box", "p o box", "post office box", "postfach", "apartado", "private bag", "gpo box", "locked bag", "postbus", "postboks",
                                 "bp ", "b.p. ", "cs ", "casella postale", "caixa postal", "box ", "c.p. ", "cp "]
@@ -1559,7 +1582,7 @@ final class StandIns {
             if let persona, let other = people.otherGiven(original, of: persona) { return other }
             let person = persona ?? people.register(original, nil)
             owner = person
-            return person.first
+            return shapedFirst(original, of: person)
         case "LAST_NAME":
             let person = persona ?? people.register(nil, original)
             owner = person

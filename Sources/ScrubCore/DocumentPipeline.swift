@@ -153,12 +153,28 @@ enum DocumentPipeline {
         /// "guarantor_name" are two people, so the record is no one person's.
         /// A middle name, a display name or a nickname beside a name is still one.
         var several = false
+        /// The script a name's first letter is written in: Latin 0, or the start of another's block.
+        static func script(_ name: String) -> UInt32 {
+            guard let letter = name.unicodeScalars.first(where: \.properties.isAlphabetic) else { return 0 }
+            switch letter.value {
+            case ..<0x0250: return 0
+            case 0x3040...0x30FF, 0x31F0...0x31FF, 0xFF66...0xFF9F: return 0x3040
+            case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF: return 0x4E00
+            case 0x1100...0x11FF, 0x3130...0x318F, 0xAC00...0xD7AF: return 0xAC00
+            default: return letter.value & ~0x7F
+            }
+        }
         mutating func set(_ value: String, for hint: String) {
             switch hint {
             case "FIRST_NAME": first = value
             case "LAST_NAME": last = value
             case "PERSON":
                 func words(_ name: String) -> Set<String> { Set(name.lowercased().split { !$0.isLetter }.map(String.init)) }
+                // One name written in two scripts ("佐藤 美咲" and "SATO MISAKI") is one person, known by the Latin one.
+                if let full, Self.script(full) != Self.script(value) {
+                    if Self.script(full) != 0 && Self.script(value) == 0 { self.full = value }
+                    return
+                }
                 if let full, words(full).count >= 2, words(value).count >= 2, words(full).isDisjoint(with: words(value)) { several = true }
                 full = value
             case "EMAIL_ADDRESS": email = value

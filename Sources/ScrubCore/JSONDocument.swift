@@ -147,7 +147,7 @@ final class JSONDocument {
             let ancestry = KeyHints.isWrapper(pairs.map(\.0)) && !records.isEmpty ? records : records + [nextRecord]
             let named = pairs.compactMap { pair in pair.1.stringValue.map { (pair.0, $0) } }
             // A name's parts side by side under keys of their own ({"fn": "TOMASZ", "ln": "WISNIEWSKI"}).
-            let nameParts = KeyHints.nameParts(named)
+            let nameParts = KeyHints.nameParts(named, parent: key)
             // A name's given names beside its family name ({"family": "Lind", "given": ["Ama", "Rose"]})
             // are one person's, not several people's: the first is the record's first name.
             let surnamed = pairs.contains { if case .array = $0.1 { true } else { false } } && named.contains { pair in

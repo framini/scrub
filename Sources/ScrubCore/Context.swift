@@ -52,7 +52,10 @@ public enum KeyHints {
         ("ssn socialsecuritynumber socialsecurity ssnnumber", "US_SSN"),
         ("address streetaddress street addressline1 addressline2 addressline line1 line2 addr address1 street1 addr1 streetline1 street2 address2 addr2 streetline2 addressline3 line3 address3 addr3 street3 extendedaddress streetaddress2 aptsuite apartmentnumber aptnumber suitenumber unitnumber flatnumber unit apt apartment housenumber housenum houseno primarynumber housename flat flatno buildingnumber buildingno streetnumber streetnum streetno civicnumber premisenumber streetname thoroughfare buildingname formattedaddress fulladdress physicaladdress mailingaddress homeaddress residentialaddress billingaddress shippingaddress addressupdates addresshistory", "ADDRESS"),
         // The same fields as forms in other languages label them, written without their accents.
-        ("geboortedatum geburtsdatum datedenaissance fechadenacimiento fechanacimiento datadinascita fodelsedatum datadenascimento datanascimento fodselsdato", "DATE_OF_BIRTH"),
+        ("geboortedatum geburtsdatum datedenaissance fechadenacimiento fechanacimiento datadinascita fodelsedatum datadenascimento datanascimento fodselsdato ngaysinh", "DATE_OF_BIRTH"),
+        ("hoten naam", "PERSON"),
+        ("diachi", "ADDRESS"),
+        ("noisinh", "LOCATION"),
         ("codepostal codigopostal codicepostale postnummer postnr", "POSTAL_CODE"),
         ("passwort wachtwoord motdepasse contrasena senha losenord kennwort veiligheidscode creditcardveiligheidscode beveiligingscode sicherheitscode kartensicherheitscode kartenprufnummer prufnummer codedesecurite cryptogramme cryptogrammevisuel codigodeseguridad codicedisicurezza sakerhetskod kreditkortssakerhetskod codigodeseguranca pincode pinnummer pinkod pinkode codigopin codicepin codepin pinnumber accountpin cardpin atmpin currentpin newpin", "SECRET"),
         ("gebruikersnaam benutzername nomdutilisateur nombredeusuario nomeutente anvandarnamn nomedeusuario", "USERNAME"),
@@ -120,8 +123,25 @@ public enum KeyHints {
         if parts.count >= 2, displayWords.contains(last), let field = hint(parts.dropLast().joined(separator: "_")) { return field }
         // A birth date written in parts holds them: "dob_parts": {"day": …}, "dateOfBirthComponents".
         if parts.count >= 2, ["parts", "components", "breakdown", "split"].contains(last), hint(parts.dropLast().joined(separator: "_")) == "DATE_OF_BIRTH" { return "DATE_OF_BIRTH" }
-        return qualified(parts)
+        if let relative = relativesName(parts) { return relative }
+        if let field = qualified(parts) { return field }
+        // A field's name abbreviated ("natId", "doc_no", "birth_dt") hints as the field written out.
+        let expanded = parts.map { abbreviations[$0] ?? $0 }
+        return expanded != parts ? hints[expanded.joined()] : nil
     }
+    private static let abbreviations: [String: String] = ["nat": "national", "natl": "national", "doc": "document", "no": "number", "nr": "number", "num": "number", "nbr": "number", "dt": "date"]
+    /// A relative's name, in either order and in other languages ("mother_name", "mothersMaidenName",
+    /// "nome_mae", "pita_ka_naam"): a person's name, the record's own person's never (see `namesARole`).
+    /// A bare word for a name ("nome", "naam") is the relative's whole name.
+    private static func relativesName(_ parts: [String]) -> String? {
+        guard parts.count >= 2, parts.count <= 6, parts.contains(where: relatives.contains) else { return nil }
+        let rest = parts.filter { !relatives.contains($0) && !linkingWords.contains($0) }
+        guard !rest.isEmpty, rest.count < parts.count, let field = hint(rest.joined(separator: "_")), ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(field) else { return nil }
+        return ["name", "nm", "nome", "nombre", "nom", "naam", "names", "nomes", "nombres"].contains(rest.joined()) ? "PERSON" : field
+    }
+    private static let relatives: Set<String> = ["mother", "mothers", "father", "fathers", "mom", "moms", "dad", "dads", "parent", "parents", "spouse", "spouses", "husband", "husbands", "wife", "wifes",
+                                                 "mae", "pai", "madre", "padre", "mere", "pere", "mutter", "vater", "moeder", "vader", "pita", "mata", "pati", "patni"]
+    private static let linkingWords: Set<String> = ["of", "ka", "ki", "ke", "de", "do", "da", "del", "la", "du", "des", "der", "van", "von", "s"]
     /// A field named with a qualifier in front ("billing_email", "home_phone",
     /// "applicant_dob") hints like the field. Only fields that mean the same
     /// whatever qualifies them: a "company_name" is no person and a "mac_address"
@@ -138,8 +158,9 @@ public enum KeyHints {
             let qualifier = parts[start - 1]
             switch field {
             // "primary_name" and "secondary_name": the first and the second person a record names.
-            case "name", "nm": if people.contains(qualifier) || roles.contains(qualifier) || ["primary", "secondary"].contains(qualifier) { return entity }
-            case "address", "addr": if addressQualifiers.contains(qualifier) { return entity }
+            // "altName", "nativeName", "latin_name", "kanjiName": the name written another way.
+            case "name", "nm": if people.contains(qualifier) || roles.contains(qualifier) || ["primary", "secondary"].contains(qualifier) || writtenQualifiers.contains(qualifier) { return entity }
+            case "address", "addr": if addressQualifiers.contains(qualifier) || writtenQualifiers.contains(qualifier) && qualifier != "local" { return entity }
             // "primary_mobile", "customer_cell": a phone, as "is_mobile" and "mobile_app" are not.
             case "mobile", "cell", "tel", "ph": if people.contains(qualifier) || roles.contains(qualifier) || addressQualifiers.contains(qualifier) || phoneQualifiers.contains(qualifier) { return entity }
             case "mail", "handle", "login", "pin", "otp", "cookie", "authorization", "passport", "credential", "credentials", "secret", "token": continue
@@ -148,6 +169,8 @@ public enum KeyHints {
         }
         return nil
     }
+    private static let writtenQualifiers: Set<String> = ["alt", "alternate", "alternative", "other", "native", "local", "latin", "original", "english", "romanized", "romanised", "transliterated", "translit",
+                                                         "kanji", "kana", "katakana", "hiragana", "romaji", "hangul", "pinyin", "cyrillic", "arabic", "greek", "hebrew", "chinese", "japanese", "korean"]
     private static let digestWords: Set<String> = ["md5", "sha1", "sha256", "sha512", "hash", "hashed", "digest"]
     static let digestKinds: Set<String> = ["EMAIL_ADDRESS", "PHONE_NUMBER", "USERNAME", "PERSON", "FIRST_NAME", "LAST_NAME", "US_SSN", "ID_NUMBER", "ADDRESS", "DATE_OF_BIRTH", "IP_ADDRESS", "CREDIT_CARD"]
     private static let digest = TextPattern(#"^(?:[0-9a-f]{32}|[0-9a-f]{40}|[0-9a-f]{64}|[0-9a-f]{128}|[0-9A-F]{32}|[0-9A-F]{40}|[0-9A-F]{64})$"#)
@@ -155,7 +178,13 @@ public enum KeyHints {
     static func isDigest(_ value: String) -> Bool { !TextRanges.matches(digest, in: value).isEmpty }
     private static let displayWords: Set<String> = ["display", "displayed", "formatted", "full", "pretty", "readable", "text", "string", "str", "iso",
                                                       // A field as a document writes it in a script or a language: "last_name_en", "firstNameLatin".
-                                                      "en", "eng", "english", "latin", "local", "native", "translit", "transliterated", "romanized", "romanised", "ascii", "original"]
+                                                      "en", "eng", "english", "latin", "local", "native", "translit", "transliterated", "romanized", "romanised", "ascii", "original",
+                                                      // …by the script's or the language's code or name ("nameKo", "nameLatn", "addressJP", "nameKanji"), or as an alternative ("name_alt").
+                                                      "latn", "cyrl", "arab", "grek", "hebr", "deva", "hans", "hant", "jpan", "kore", "hira", "hrkt", "thai",
+                                                      "ko", "kr", "kor", "ar", "ara", "ru", "rus", "ja", "jp", "jpn", "zh", "cn", "chn", "zho", "tw", "hk", "he", "heb", "el", "gr", "ell", "hi", "hin", "th", "tha",
+                                                      "vi", "vn", "vie", "fa", "ur", "bn", "ta", "uk", "ua", "ukr", "bg", "sr", "hy", "ka", "fr", "de", "es", "pt", "nl", "pl", "tr", "gb", "us",
+                                                      "kanji", "kana", "katakana", "hiragana", "furigana", "romaji", "hangul", "pinyin", "roman", "romanization", "romanisation", "transliteration",
+                                                      "cyrillic", "arabic", "greek", "hebrew", "chinese", "japanese", "korean", "devanagari", "hindi", "russian", "alt", "alternate", "alternative", "other"]
     private static let phoneQualifiers: Set<String> = ["secondary", "alternate", "alt", "other", "personal", "private", "business", "emergency", "direct", "day", "evening", "night"]
     private static let countWords: Set<String> = ["num", "number", "count", "counts", "total", "has", "is", "max", "min", "avg", "sum", "qty", "len", "length", "size", "match", "matches", "score", "verified", "valid", "exists", "present", "changed", "updated", "type", "status", "source", "flag", "enabled", "required", "last4", "hash", "hashed", "format", "domain", "risk"]
     static let addressQualifiers: Set<String> = ["home", "mailing", "billing", "shipping", "residential", "street", "physical", "postal", "current", "previous", "permanent", "primary", "customer", "user", "applicant", "contact", "work", "residence", "legal", "delivery", "registered"]
@@ -231,14 +260,33 @@ public enum KeyHints {
     /// "first"/"last", "fn"/"ln", "given"/"family", "first_nm"/"last_nm". Either alone may be a
     /// list's or a page's end, so only the pair, both holding a word or two of a name, reads as
     /// one person's first and last names. Keys the table already names are left to it.
-    static func nameParts(_ siblings: [(String, String)]) -> [String: String] {
+    /// A part the table names beside it counts as its own ({"surname": …, "given": …}).
+    ///
+    /// A name written another way under a key of its own ("pinyin", "romaji", "kana",
+    /// "transliteration") is the person's whole name, beside one of their names or
+    /// under a person ("applicant": {"romaji": …}).
+    static func nameParts(_ siblings: [(String, String)], parent: String? = nil) -> [String: String] {
         var found: [String: String] = [:]
+        let named = siblings.compactMap { pair in hint(pair.0).flatMap { ["FIRST_NAME", "LAST_NAME"].contains($0) && namePartShaped(pair.1) ? $0.lowercased() : nil } }
         for (key, value) in siblings where hint(key) == nil {
             guard let part = namePartKey(key), namePartShaped(value) else { continue }
             found[key] = part
         }
-        let parts = Set(found.values)
-        return parts.contains("first_name") && parts.contains("last_name") ? found : [:]
+        let parts = Set(found.values).union(named)
+        if !(parts.contains("first_name") && parts.contains("last_name")) { found = [:] }
+        let beside = siblings.contains { ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(hint($0.0) ?? "") && !namesARole($0.0) }
+        if beside || isPersonsRecord(siblings: [], parent: parent) {
+            for (key, value) in siblings where hint(key) == nil && transliterations.contains(words(key).joined()) && writtenAsAnyName(value) { found[key] = "full_name" }
+        }
+        return found
+    }
+    private static let transliterations: Set<String> = ["pinyin", "romaji", "kana", "kanji", "katakana", "hiragana", "furigana", "hangul", "latin", "romanized", "romanised", "romanization", "romanisation",
+                                                        "transliteration", "transliterated", "translit", "transcription"]
+    /// One to five words of letters in any script, as a name is written: no digit, no sentence's punctuation.
+    private static func writtenAsAnyName(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        return (1...5).contains(trimmed.split(whereSeparator: { $0 == " " || $0 == "\u{3000}" }).count) && trimmed.filter(\.isLetter).count >= 2
+            && trimmed.allSatisfy { $0.isLetter || " \u{3000}'’-.,・·".contains($0) } && !isCommonValue(trimmed)
     }
     /// The part of a name a key names on its own, when a sibling names the other part (see `nameParts`).
     static func namePartKey(_ key: String?) -> String? {
@@ -281,8 +329,11 @@ public enum KeyHints {
     /// that is one is replaced where it was found, never in every other place.
     /// Whether a person key names someone in a role the record only mentions ("receiver_name",
     /// "emboss_name", "matched_name", "aka"), not the record's own person ("name", "last_name").
+    /// A relative's name, or a maiden name, is someone else's too.
     static func namesARole(_ key: String?) -> Bool {
-        let compact = words(key).joined()
+        let parts = words(key), compact = parts.joined()
+        // One a flat key's qualifier names ("spouse_name", "mother_email") is a person of their own there (see `personPrefix`).
+        if parts.contains(where: { relatives.contains($0) || $0 == "maiden" }), ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(hint(key) ?? ""), personPrefix(key) == nil { return true }
         return roleNames.contains(compact) || roleNames.contains(singular(compact) ?? "")
     }
     private static let roleNames: Set<String> = ["embossname", "embossedname", "debtorname", "creditorname", "receivername", "originatorname", "matchedname", "aka", "alsoknownas",
@@ -824,7 +875,7 @@ public enum KeyHints {
     }
     // Keys naming a person's role ("assigned_to", "manager") often hold an ID
     // or an email, so they only mark a value that is written like a name.
-    private static let roles: Set<String> = ["manager", "approver", "reporter", "author", "assignee", "assignedto", "owner", "requester", "requestedby", "reviewer", "reviewedby", "sender", "recipient", "createdby", "updatedby", "modifiedby", "submittedby", "approvedby", "contact", "contactperson", "agent", "rep", "salesrep", "accountmanager", "supervisor", "signedby", "attendee", "guest", "beneficiary", "emergencycontact", "nextofkin", "spouse", "parent", "guardian", "customer", "client", "patient", "applicant", "employee", "member", "guest", "tenant", "borrower", "insured", "policyholder", "passenger", "traveler", "traveller", "attn", "attention", "shipto", "billto", "soldto", "deliverto", "addressee", "cardholder", "accountholder", "signer", "witness", "caller", "visitor", "student", "candidate", "cosigner", "cosignatory", "guarantor", "coapplicant", "coborrower", "cotenant", "holder"]
+    private static let roles: Set<String> = ["manager", "approver", "reporter", "author", "assignee", "assignedto", "owner", "requester", "requestedby", "reviewer", "reviewedby", "sender", "recipient", "createdby", "updatedby", "modifiedby", "submittedby", "approvedby", "contact", "contactperson", "agent", "rep", "salesrep", "accountmanager", "supervisor", "signedby", "attendee", "guest", "beneficiary", "emergencycontact", "nextofkin", "spouse", "parent", "guardian", "customer", "client", "patient", "applicant", "employee", "member", "guest", "tenant", "borrower", "insured", "policyholder", "passenger", "traveler", "traveller", "attn", "attention", "shipto", "billto", "soldto", "deliverto", "addressee", "cardholder", "accountholder", "signer", "witness", "caller", "visitor", "student", "candidate", "cosigner", "cosignatory", "guarantor", "coapplicant", "coborrower", "cotenant", "holder", "mother", "father"]
     static func isRole(_ key: String?) -> Bool {
         guard let key else { return false }
         let parts = words(key)
