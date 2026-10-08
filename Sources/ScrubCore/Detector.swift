@@ -800,9 +800,14 @@ public final class Detector {
         // A sentence after the postcode ("…, NY 11215. Done in admin", "…, NY 70544 failed ID-SYN-3") is no part of the address.
         // So is one after the town that follows it ("…, 72194 Regensburg failed WL_FUZZY_HIT").
         let written = ns.substring(with: range)
-        // In an address written with capitals, a word in small letters after its postcode or its town is the sentence's.
+        // In an address written with capitals, a word in small letters after its postcode or its town is the sentence's;
+        // the postcode comes after a comma, never as the house number that opens the address ("4250 North Fairfax Dr. suite 1410").
         let cased = written.contains(where: \.isUppercase)
-        if let stop = TextRanges.matches(sentenceAfterPostcode, in: written).first ?? (cased ? TextRanges.matches(wordAfterPostcode, in: written).first ?? TextRanges.matches(sentenceAfterTown, in: written).first : nil) { range.length = stop.range.location }
+        let afterComma = { (match: NSTextCheckingResult) in (written as NSString).substring(to: match.range.location).contains(",") }
+        if let stop = TextRanges.matches(sentenceAfterPostcode, in: written).first
+            ?? (cased ? (TextRanges.matches(wordAfterPostcode, in: written) + TextRanges.matches(sentenceAfterTown, in: written)).filter(afterComma).min(by: { $0.range.location < $1.range.location }) : nil) {
+            range.length = stop.range.location
+        }
         return range.location..<NSMaxRange(range)
     }
     private static let sentenceAfterTown = TextPattern(#"(?<=(?:\d{4,5}|\d[A-Z]{2})(?:[ \t]{1,3}\p{Lu}[\p{L}'’.-]{0,30}){1,3})(?=[ \t]+(?!(?:upon|unter|sous|over)\b)\p{Ll}{4,}\b)"#)

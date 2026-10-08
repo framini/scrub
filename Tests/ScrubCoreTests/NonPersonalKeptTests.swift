@@ -247,6 +247,9 @@ struct NonPersonalKeptTests {
             let output = try Self.scrub(notes, name: "notes.txt", seed: seed)
             for kept in ["APP-95146469", "Brackwater Telecom", "(ONB-1693)", "failed ID-SYN-3\n", "failed WL_FUZZY_HIT\n"] { #expect(output.contains(kept), "\(kept): \(output)") }
             for gone in ["Wexcombe", "0610949", "Larchmont", "Lindenauerring"] { #expect(!output.contains(gone), "\(gone): \(output)") }
+            // A house number is no postcode: the unit written in small letters after the street is still the address's.
+            let lives = try Self.scrub("She lives at 4821 Juniper Hollow Dr. suite 210, Tacoma, WA 98402 since May.\n", name: "note.txt", seed: seed)
+            #expect(!lives.contains("Juniper") && !lives.contains("suite 210"), "\(lives)")
         }
     }
 
