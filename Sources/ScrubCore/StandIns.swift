@@ -1288,18 +1288,20 @@ final class StandIns {
         let preferred = identifier(original)?.recognizer
         // Every kind its words name that it passes ("nit": a Colombian's check and a Guatemalan's alike): a stand-in passing them all where a few draws find one.
         let named = naming.isEmpty ? [] : Recognizers.candidates(original).filter { $0.verifies && Recognizers.drawn.contains($0.entity) && Recognizers.named($0.context, among: naming) }
-        // Nine digits no word names as a kind may be a US SSN: an area the SSA issues stays one.
+        // Nine digits no word names as a kind may be a US SSN: an area the SSA issues stays one,
+        // and its stand-in one the SSA could issue whole, no group of 00 nor serial of 0000.
         func issuable(_ digits: String) -> Bool { digits.count == 9 && Int(digits.prefix(3)).map { $0 != 0 && $0 != 666 && $0 < 900 } == true }
+        func issued(_ digits: String) -> Bool { issuable(digits) && digits.dropFirst(3).prefix(2) != "00" && digits.suffix(4) != "0000" }
         let social = named.isEmpty && original.allSatisfy({ $0.isNumber || $0 == "-" || $0 == " " }) && issuable(real)
         for attempt in 0..<48 {
             made = Recognizers.standIn(for: original, preferring: preferred, using: &rng)
             guard let drawn = made else { break }
             if bare, drawn.filter({ $0.isASCII && $0.isNumber }).dropLast(3).last == "0" { continue }
-            if attempt < 40, !named.allSatisfy({ Self.fits(drawn, $0) }) || social && !issuable(drawn.filter { $0.isASCII && $0.isNumber }) { continue }
+            if attempt < 40, !named.allSatisfy({ Self.fits(drawn, $0) }) || social && !issued(drawn.filter { $0.isASCII && $0.isNumber }) { continue }
             if layout(drawn) == layout(original) { break }
         }
         // Nine digits no kind's check passes, as an SSN is written, are drawn as one: an area the SSA issues stays one.
-        if social, made == nil { return make("US_SSN", original, nil) }
+        if social, made.map({ !issued($0.filter { $0.isASCII && $0.isNumber }) }) ?? true { return make("US_SSN", original, nil) }
         // Digits alone stay digits: a passport's nine digits that pass another kind's check by chance take no check letter.
         if let drawn = made, !original.contains(where: \.isLetter), drawn.contains(where: \.isLetter) { return nil }
         return made

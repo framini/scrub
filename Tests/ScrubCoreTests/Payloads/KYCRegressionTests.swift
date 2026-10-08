@@ -402,3 +402,19 @@ func aSplitAddressAndItsOneLineFormAgree(_ name: String) throws {
     #expect(try scrubbed(#"{"name":"Riverside Clinic","address":"Hegedűs Gyula utca 76, 1136 Budapest"}"#, "record.json").contains("Riverside Clinic"))
     #expect(try scrubbed("Name: Northwind Traders\nAddress: 12 Harbor Road, Leeds LS6 3HN\n", "Pasted text").contains("Northwind Traders"))
 }
+
+/// An SSN's stand-in is one the SSA could issue whole: no area of 000, 666
+/// or 9xx, no group of 00 and no serial of 0000, in each way it is written.
+@Test(arguments: renderings)
+func ssnStandInIsIssuableWhole(_ name: String) throws {
+    let response = #"{"request_id":"req_FYJSHYZqytMESg5K","subject":{"first_name":"Leilani","last_name":"Kowalczyk","tax_id":114232855,"ssn_last4":2855,"ssn_display":"***-**-2855","identifiers":[{"type":"US_SSN","value":"114 23 2855"},{"type":"ITIN","value":"996-92-9800"}]},"results":{"ssn_match":"MATCH","name_match":"PARTIAL","dob_match":"MATCH","reason_codes":["R137"],"score":685,"confidence":0.07,"ssn_issued_start_year":1982,"deceased":"false"},"notes":["SSN on file ends in 2855; customer read back 114-23-2855."],"created_at":"2023-02-22 03:19:33"}"#
+    for seed in [4514971557829735021] + Array(UInt64(1)...60) {
+        // A stand-in name with an apostrophe ("O'Brien") is escaped for the shell in a curl command.
+        let output = try scrub(response, as: name, seed: seed).replacingOccurrences(of: #"'\''"#, with: "'")
+        for written in [try value(output, "subject", "tax_id"), try value(output, "subject", "identifiers", "0", "value")] {
+            let d = written.filter(\.isNumber)
+            let area = Int(d.prefix(3)) ?? 0
+            #expect(d.count == 9 && area != 0 && area != 666 && area < 900 && d.dropFirst(3).prefix(2) != "00" && d.suffix(4) != "0000", "seed \(seed): \(written)")
+        }
+    }
+}
