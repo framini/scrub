@@ -298,3 +298,20 @@ func primaryNumberIsAHouseNumber(_ name: String) throws {
         #expect(de[5].contains(de[1] + ", " + de[2]), "\(de)")
     }
 }
+
+/// Last four digits named by their kind in a sentence are replaced, with no
+/// whole number anywhere to read them off; a year after "ends in" is no one's.
+@Test func lastFourInProseAreReplaced() throws {
+    let ticket = """
+    Hi team, the applicant's date of birth on file is 11/18/1951 and the SSN we submitted ends in 6413.
+    Customer Ottilie Brannagh called in, says her card ending 8806 was declined twice.
+    Spoke to Ottilie again, verified the last four of SSN (3159).
+    The promotion ends in 2027, and the invoice total was 1250.
+    """
+    for (name, text) in [("ticket", ticket), ("json", #"{"comments":[{"body":"Customer Ottilie Brannagh called in, says her card ending 8806 was declined twice."},{"body":"Spoke to Ottilie again, verified the last four of SSN (3159)."}]}"#)] {
+        let output = try name == "json" ? scrub(text, as: "ticket.json") : scrubText(text)
+        for digits in ["6413", "8806", "3159"] where text.contains(digits) { #expect(!output.contains(digits), "\(name): \(output)") }
+        if name == "ticket" { #expect(output.contains("ends in 2027") && output.contains("1250"), "\(output)") }
+    }
+}
+

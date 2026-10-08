@@ -529,6 +529,14 @@ enum FormFields {
                 return [Span(range: found.range.location..<NSMaxRange(found.range), entity: "POSTAL_CODE", score: 0.9)]
             }),
     ]
+    /// The last four digits of a number named by its kind, before or after the words for an
+    /// ending: "card ending 5562", "the SSN we submitted ends in 7285", "the last four of SSN (4122)".
+    private static let endingKind = #"(?:card|visa|mastercard|amex|debit card|credit card|ssn|social security(?: number)?|social|itin|tin|account|acct|iban|phone|mobile|cell|passport|licen[cs]e)"#
+    private static let endingWords = #"(?:ending(?:[ \t]+(?:in|with))?|ends?[ \t]+(?:in|with)|last[ \t-]*(?:4|four)(?:[ \t]+(?:digits?|numbers?))?)"#
+    private static let lastDigits = [
+        TextPattern(#"(?i)\b"# + endingKind + #"\b(?:[ \t]+[\p{L}'’]+){0,4}?[ \t]+"# + endingWords + #"[ \t]*[:#=(]?[ \t]*(\d{4})(?![\d\p{L}]|[.,]\d)"#),
+        TextPattern(#"(?i)\b"# + endingWords + #"[ \t]+(?:of|on|from)[ \t]+(?:(?:the|her|his|their|your|my)[ \t]+)?"# + endingKind + #"\b[ \t]*(?:number[ \t]*)?[:#=(]?[ \t]*(\d{4})(?![\d\p{L}]|[.,]\d)"#),
+    ]
     /// A first or last name after the words for one: "the last name Wellborn", "**Last Name** Testa".
     private static let nameCue = cue(#"(first|given|middle|last|family)[ -]?name|(surname|forename)"#)
     private static let nameValue = TextPattern(#"\p{Lu}[\p{L}'’-]*\p{Ll}[\p{L}'’-]*(?![\p{L}\p{N}_@-])"#)
@@ -578,6 +586,12 @@ enum FormFields {
                 guard !spans.isEmpty else { continue }
                 if quiets(spans) { found.labels.append(hit.range.location..<NSMaxRange(hit.range)) }
                 found.spans.append(contentsOf: spans)
+            }
+        }
+        for pattern in lastDigits {
+            for hit in TextRanges.matches(pattern, in: text, isCancelled: isCancelled) {
+                let digits = hit.range(at: 1)
+                found.spans.append(Span(range: digits.location..<NSMaxRange(digits), entity: "LAST_DIGITS", score: 0.9))
             }
         }
         for hit in TextRanges.matches(handleCue, in: text, isCancelled: isCancelled) {

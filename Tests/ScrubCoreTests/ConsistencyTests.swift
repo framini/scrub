@@ -239,7 +239,9 @@ struct ConsistencyTests {
         }
         let line = "2025-04-25T00:48:36.528Z WARN  payment retry 3 for Theresa Lane <theresa.lane@example.com> card ending 1528\n"
         let (output, _, _) = try Correction.run(line, marks: marked(line, [("Theresa Lane", "PERSON"), ("theresa.lane@example.com", "EMAIL_ADDRESS")]), job: Job(seed: 1))
-        #expect(output == line)
+        // The card's last four are the holder's own and go; the name and its address stay as marked.
+        let kept = "2025-04-25T00:48:36.528Z WARN  payment retry 3 for Theresa Lane <theresa.lane@example.com> card ending "
+        #expect(output.hasPrefix(kept) && !output.contains("1528") && output.dropFirst(kept.count).prefix(4).allSatisfy(\.isNumber), "\(output)")
         let label = "Ship to Theresa Lane, 4821 Juniper Hollow Rd, Boise, ID 83702 by Friday.\n"
         let (shipped, _, _) = try Correction.run(label, marks: marked(label, [("Theresa Lane", "PERSON")]), job: Job(seed: 1))
         #expect(shipped.hasPrefix("Ship to Theresa Lane, ") && !shipped.contains("Juniper Hollow"), "\(shipped)")
