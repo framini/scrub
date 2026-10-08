@@ -312,7 +312,9 @@ struct AddressBlock {
             return Locality(postal: postal, city: nil, region: side)
         } else if let last = side.split(separator: " ").last.map(String.init), side.contains(" "),
                   Places.region(last) != nil && last == last.uppercased() || Places.regionAbroad(last) != nil
-                    || last.count >= 2 && last.count <= 4 && last == last.uppercased() && last.allSatisfy(\.isLetter) && side.dropLast(last.count) != side.dropLast(last.count).uppercased() {
+                    || last.count >= 2 && last.count <= 4 && last == last.uppercased() && last.allSatisfy(\.isLetter) && side.dropLast(last.count) != side.dropLast(last.count).uppercased()
+                    // In capitals, a province's code after a city Scrub knows: "TORINO TO".
+                    || last.count == 2 && last == last.uppercased() && last.allSatisfy(\.isLetter) && knownCountry(city: String(side.dropLast(last.count)).trimmingCharacters(in: edges)) != nil {
             region = last
             side = String(side.dropLast(last.count)).trimmingCharacters(in: edges)
         }

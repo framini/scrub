@@ -330,3 +330,50 @@ func primaryNumberIsAHouseNumber(_ name: String) throws {
     let output = try scrub(#"{"referrer_customer_id":"ref_9876","request_ref":"ref-55af36d14d","status":"approved"}"#, as: "decision.json")
     #expect(!output.contains("ref_9876") && output.contains(#""request_ref":"ref-55af36d14d""#), "\(output)")
 }
+
+/// An address split into fields and written again on one line, in capitals
+/// or not, in a country that writes the street first or the number first:
+/// the line is the split parts' stand-ins joined as the original joined them,
+/// and no word of the real street is left in it.
+@Test(arguments: renderings)
+func aSplitAddressAndItsOneLineFormAgree(_ name: String) throws {
+    let addresses: [[(String, String)]] = [
+        [("address1", "AM GRIES 57a"), ("city", "MÜNCHEN"), ("postalCode", "80538"), ("countryCode", "DE"), ("singleLine", "AM GRIES 57a, 80538 MÜNCHEN")],
+        [("address1", "Am Gries 57a"), ("city", "München"), ("postalCode", "80538"), ("countryCode", "DE"), ("singleLine", "Am Gries 57a, 80538 München")],
+        [("addressLine1", "GOETHESTRASSE 640"), ("town", "MÜNCHEN"), ("zipCode", "80538"), ("countryCode", "DE"), ("singleLine", "GOETHESTRASSE 640, 80538 MÜNCHEN, Germany")],
+        [("line1", "CORSO CAVOUR 83"), ("city", "TORINO"), ("region", "TO"), ("zipCode", "10128"), ("countryCode", "IT"), ("fullAddress", "CORSO CAVOUR 83, 10128 TORINO TO")],
+        [("streetName", "RUA XV DE NOVEMBRO"), ("buildingNumber", "29a"), ("town", "CURITIBA"), ("region", "PR"), ("zip", "80010-010"), ("countryCode", "BRA"), ("singleLine", "RUA XV DE NOVEMBRO 29a, 80010-010 CURITIBA, PR")],
+        [("street", "OUDEGRACHT 112"), ("city", "UTRECHT"), ("postcode", "3511 LX"), ("country", "NL"), ("singleLine", "OUDEGRACHT 112, 3511 LX UTRECHT")],
+        [("street", "CALLE MAYOR 14"), ("city", "SEVILLA"), ("postcode", "41004"), ("country", "ES"), ("singleLine", "CALLE MAYOR 14, 41004 SEVILLA, Spain")],
+        [("address1", "12 RUE DES ACACIAS"), ("city", "LYON"), ("postalCode", "69003"), ("country", "FR"), ("singleLine", "12 RUE DES ACACIAS, 69003 LYON")],
+        [("address1", "6a KINGSLEY ROAD"), ("city", "LEEDS"), ("postalCode", "LS6 3HN"), ("countryCode", "GB"), ("singleLine", "6a KINGSLEY ROAD, LEEDS LS6 3HN")],
+    ]
+    for seed in UInt64(1)...4 {
+        for fields in addresses {
+            let json = "{\"subject\":{\"fullName\":\"Odalys Ferriter\"},\"address\":{" + fields.map { "\"\($0.0)\":\"\($0.1)\"" }.joined(separator: ",") + "}}"
+            let output = try scrub(json, as: name, seed: seed)
+            let (lineKey, line) = fields.last!
+            var expected = line
+            // Longest first, each where it is a word of its own: "TORINO" before the "TO" after it.
+            for (key, original) in fields.dropLast().sorted(by: { $0.1.count > $1.1.count }) {
+                let pattern = #"(?<![\p{L}\d])"# + NSRegularExpression.escapedPattern(for: original) + #"(?![\p{L}\d])"#
+                expected = expected.replacingOccurrences(of: pattern, with: NSRegularExpression.escapedTemplate(for: try value(output, "address", key)), options: .regularExpression)
+            }
+            let written = try value(output, "address", lineKey)
+            #expect(written == expected, "seed \(seed): \(line) → \(written), parts give \(expected)")
+            for word in fields[0].1.split(separator: " ") where word.count >= 4 && word.allSatisfy(\.isLetter) && !["CALLE", "CORSO", "ROAD", "RUE"].contains(word.uppercased()) {
+                #expect(!output.uppercased().contains(word.uppercased()), "seed \(seed): \(word) left in \(output)")
+            }
+        }
+    }
+}
+
+/// A German street opening with "Am" or "An der" keeps those words, in the
+/// original's case, and takes another name after them.
+@Test func aGermanStreetKeepsItsOpeningWords() throws {
+    for (street, lead) in [("Am Gries 57a", "Am "), ("AM GRIES 57a", "AM "), ("An der Alster 4", "An der ")] {
+        let output = try scrub(#"{"address":{"street":"\#(street)","city":"Hamburg","zip":"20095","country":"DE"}}"#, as: "check.json")
+        let written = try value(output, "address", "street")
+        #expect(written.hasPrefix(lead) && !written.lowercased().contains("gries") && !written.lowercased().contains("alster"), "\(street) → \(written)")
+    }
+}

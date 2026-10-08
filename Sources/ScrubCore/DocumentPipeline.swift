@@ -246,6 +246,14 @@ enum DocumentPipeline {
 
     /// `bases`: each value's spans in the text as seen (`DocumentLeaf.seen`), its key's where detection left it to the key.
     private static func prepare(_ leaves: [DocumentLeaf], bases: [[Span]], doubts: [[Span]], job: Job) throws -> (GazetteerMatcher, [DocumentValue]) {
+        var addresses = associateAddresses(leaves)
+        try Scrubber.checkCancellation()
+        // A value that writes its record's address out on one line is that address whole, read before anything is learned from it.
+        var bases = bases
+        for (index, parts) in writtenOut(leaves, addresses) {
+            bases[index] = [Span(range: 0..<(leaves[index].seen as NSString).length, entity: "ADDRESS", score: 1)]
+            addresses[index] = parts
+        }
         job.reserveNames(zip(leaves, bases).flatMap { leaf, base in
             base.compactMap { span -> String? in
                 if nameEntities.contains(span.entity) { return TextRanges.substring(leaf.seen, span.range) }
@@ -264,7 +272,6 @@ enum DocumentPipeline {
         // These steps stop early when cancelled; the check after each one throws
         // before anything partial is used.
         let owners = associateOwners(leaves, job: job)
-        let addresses = associateAddresses(leaves)
         try Scrubber.checkCancellation()
         observeInitial(leaves, bases: bases, job: job)
         try Scrubber.checkCancellation()
@@ -566,6 +573,40 @@ enum DocumentPipeline {
     /// read under their keys in one record ("billing_city" and "billing_zip"
     /// apart from "shipping_city"), so their stand-ins come from one place.
     private static let addressKinds: Set<String> = ["billing", "shipping", "mailing", "home", "work", "delivery", "residential", "physical", "previous", "current", "permanent", "legal", "registered", "business", "office", "pickup", "dropoff", "origin", "destination"]
+    /// Values no key names that write out, on one line, an address their record
+    /// holds in parts ("singleLine": "AM GRIES 57a, 80538 MÜNCHEN" beside "city"
+    /// and "postalCode"): each with those parts, so its pieces take the stand-ins
+    /// the parts take, however the detectors read it.
+    static func writtenOut(_ leaves: [DocumentLeaf], _ addresses: [AddressParts?]) -> [(Int, AddressParts)] {
+        var held: [Int: [AddressParts]] = [:]
+        for (index, leaf) in leaves.enumerated() where ["LOCATION", "POSTAL_CODE"].contains(KeyHints.hint(leaf.key) ?? "") {
+            guard let record = leaf.lastRecord, let parts = addresses[index], !(held[record]?.contains(parts) ?? false) else { continue }
+            held[record, default: []].append(parts)
+        }
+        guard !held.isEmpty else { return [] }
+        func same(_ a: String?, _ b: String?) -> Bool {
+            guard let a, let b else { return false }
+            return a.trimmingCharacters(in: .whitespaces).compare(b.trimmingCharacters(in: .whitespaces), options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }
+        var result: [(Int, AddressParts)] = []
+        for (index, leaf) in leaves.enumerated() {
+            if index.isMultiple(of: 1024) && Task.isCancelled { return [] }
+            guard KeyHints.hint(leaf.key ?? leaf.addressKey) == nil, leaf.numericEntity == nil, !leaf.fieldName, !leaf.nonPersonal, leaf.seen.contains(","),
+                  let candidates = leaf.enclosing.lazy.compactMap({ held[$0] }).first,
+                  let block = AddressBlock.read(leaf.seen), block.roles.contains(.street), block.roles.contains(.locality) else { continue }
+            // Every piece is part of an address: a district or a region's code may be, a name never.
+            let pieces = zip(block.pieces, block.roles).allSatisfy { piece, role in
+                let trimmed = piece.trimmingCharacters(in: .whitespaces)
+                return role != .place || Places.region(trimmed) != nil || Places.regionAbroad(trimmed) != nil || AddressBlock.isKnownPlace(trimmed)
+            }
+            guard pieces, let parts = candidates.first(where: { parts in
+                block.localities.contains { same($0.locality.postal, parts.postal) || same($0.locality.city, parts.city) }
+            }) else { continue }
+            result.append((index, parts))
+        }
+        return result
+    }
+
     static func associateAddresses(_ leaves: [DocumentLeaf]) -> [AddressParts?] {
         var groups: [String: AddressParts] = [:]
         var member = [String?](repeating: nil, count: leaves.count)

@@ -913,9 +913,16 @@ final class StandIns {
     /// A locality piece with its postcode, city and region rewritten where they stand.
     private func locality(_ piece: String, _ parts: AddressBlock.Locality, place: Place?, abroad: Places.Abroad?) -> String {
         var result = piece
+        // Each part where it stands as a word of its own: "TO" of "10128 TORINO TO", not of "TORINO".
         func swap(_ old: String?, _ new: String?) {
-            guard let old, let new, let range = result.range(of: old) else { return }
-            result.replaceSubrange(range, with: new)
+            guard let old, let new, !old.isEmpty else { return }
+            var from = result.startIndex
+            while let range = result.range(of: old, range: from..<result.endIndex) {
+                let before = range.lowerBound > result.startIndex ? result[result.index(before: range.lowerBound)] : " "
+                let after = range.upperBound < result.endIndex ? result[range.upperBound] : " "
+                if !(before.isLetter || before.isNumber) && !(after.isLetter || after.isNumber) { result.replaceSubrange(range, with: new); return }
+                from = result.index(after: range.lowerBound)
+            }
         }
         if let place {
             swap(parts.postal, parts.postal.map { postal(of: place, like: $0, bare: false) != nil ? placedPostal(place, $0, bare: false) : anyPostal(of: place, like: $0) })
@@ -983,7 +990,8 @@ final class StandIns {
     /// its numbers keep their length, its kind of street and every lowercase
     /// word ("de la", "ul.", "m.") stay, and its capitalised name becomes another.
     private func foreignStreet(like original: String, country: String?) -> String {
-        let key = "STREET\u{0}" + original.lowercased()
+        // Written in its own case: "AM GRIES 57a" and "Am Gries 57a" share their name and number, each in its case.
+        let key = "STREET\u{0}" + original
         if let known = assigned[key] { return known }
         // A Quebec street ("rue Saint-Denis") is named as a French one is.
         let pool = names(for: Self.french(original) && country == "CA" ? "FR" : country).filter { !original.lowercased().contains($0.lowercased()) }
@@ -1004,7 +1012,10 @@ final class StandIns {
         let kindNamed = words.lastIndex { capitalWord($0) && kind($0) }.flatMap { index in
             index > 0 && !words.contains { capitalWord($0) && !kind($0) } ? words[index] : nil
         }
-        func capital(_ word: String) -> Bool { capitalWord(word) && (!kind(word) || word == kindNamed) }
+        // "Am Gries", "An der Alster": a German street's opening words stay, and the name after them changes.
+        let german = ["DE", "AT", "CH"].contains(country ?? "")
+        func lead(_ word: String) -> Bool { german && Self.germanLeads.contains(bare(word)) }
+        func capital(_ word: String) -> Bool { capitalWord(word) && (!kind(word) || word == kindNamed) && !lead(word) }
         // Each name is a run of capitalised words with the small joining words inside it
         // ("Calçada do Mirante"); every run takes another name.
         var index = 0, used: [String] = []
@@ -1028,6 +1039,9 @@ final class StandIns {
                 // "Lindenhofer Straße" → "Ahornstraße".
                 made += words[last + 1].lowercased()
                 words.remove(at: last + 1)
+            } else if index > 0, lead(words[index - 1]), !Self.germanPlaces.contains(name) {
+                // "Am Gries" → "Am Lindenhof": after "Am" a place, not a tree's name alone.
+                made += ["hof", "feld", "grund", "weg"][name.count % 4]
             }
             let first = words[index].trimmingCharacters(in: CharacterSet(charactersIn: "\u{1}"))
             if Self.shouted(first) && first.count > 1 { made = made.uppercased() }
@@ -1044,6 +1058,10 @@ final class StandIns {
         return fake
     }
 
+    /// Words a German street's name opens with: "Am Gries", "An der Alster", "Unter den Linden".
+    private static let germanLeads: Set<String> = ["am", "an", "im", "in", "auf", "zum", "zur", "unter", "hinter", "vor", "bei", "beim", "der", "dem", "den", "die", "des"]
+    /// Street words that name a place on their own: "Am Markt", "Am Hafen".
+    private static let germanPlaces: Set<String> = ["Berg", "Wald", "Garten", "Bahnhof", "Markt", "Brunnen", "Hafen"]
     /// A district, county, building or street name without a number: another
     /// of the same kind ("Corrib House" → "Maple House", "Wexley Lane" → "Cedar Lane").
     private func placeName(like original: String, country: String?) -> String {
