@@ -109,6 +109,7 @@ public enum CSVFile: FileFormat {
                 case .none:
                     var leaf = DocumentLeaf(rows[row][column], key: key, records: [row], objectPath: header.contains(".") ? String(header[..<header.lastIndex(of: ".")!]).lowercased() : "")
                     leaf.unsureName = unsure && key == nil
+                    leaf.reading = .line(key: header, siblings: Array(columns.prefix(15)))
                     leaves.append(leaf)
                 }
             }

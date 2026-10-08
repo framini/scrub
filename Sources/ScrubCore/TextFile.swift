@@ -19,7 +19,9 @@ public enum TextFile: FileFormat {
         let regions = JSONSource.regions(in: text)
         if !regions.isEmpty { return try process(text, regions: regions, job: job, progress: progress, forceFullDetection: forceFullDetection) }
         progress(.finding, 0, 1)
-        let values = try DocumentPipeline.run([DocumentLeaf(text)], job: job, forceFullDetection: forceFullDetection, progress: progress)
+        var leaf = DocumentLeaf(text)
+        leaf.reading = .prose
+        let values = try DocumentPipeline.run([leaf], job: job, forceFullDetection: forceFullDetection, progress: progress)
         try Scrubber.checkCancellation()
         progress(.finding, 1, 1)
         progress(.checking, 0, 1)
@@ -72,7 +74,9 @@ public enum TextFile: FileFormat {
         var leaves = collector.leaves
         for (part, piece) in gaps {
             parts[part] = .text(leaves.count)
-            leaves.append(DocumentLeaf(piece))
+            var leaf = DocumentLeaf(piece)
+            leaf.reading = .prose
+            leaves.append(leaf)
         }
         let drawn = JSONFile.drawDigits(collector.names, job: job)
         progress(.finding, 0, leaves.count)

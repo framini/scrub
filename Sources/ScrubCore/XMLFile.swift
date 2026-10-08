@@ -22,6 +22,12 @@ public enum XMLFile: FileFormat {
         var nameIDs: [Int] = []
         var nextRecord = 0
         func local(_ name: String?) -> String? { name?.split(separator: ":").last.map(String.init) }
+        /// A value's element or attribute name and those beside it, for the span tagger.
+        func reading(_ node: XMLNode) -> TaggerReading {
+            let element = node.kind == .text ? node.parent : node
+            let siblings = (element?.parent?.children ?? []).compactMap { local($0.name) }
+            return .line(key: local(element?.name) ?? "", siblings: Array(siblings.prefix(15)))
+        }
         /// `unsure`: a bare name written as a person's that nothing says is one (see `KeyHints.writtenAsName`).
         func add(_ node: XMLNode, key: String?, records: [Int], words: Set<String>, unsure: Bool = false) {
             guard let value = node.stringValue, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -29,6 +35,7 @@ public enum XMLFile: FileFormat {
             valueIDs.append(leaves.count)
             var leaf = DocumentLeaf(value, key: key, records: records, contextWords: words)
             leaf.unsureName = unsure
+            leaf.reading = reading(node)
             leaves.append(leaf)
         }
         /// Text split by inline elements ("<i>Odal</i>ys Ferriter wrote…") read as one value: its
@@ -40,6 +47,7 @@ public enum XMLFile: FileFormat {
             valueIDs.append(leaves.count)
             var leaf = DocumentLeaf(values.joined(separator: Visible.joint), key: key, records: records, contextWords: words)
             leaf.unsureName = unsure
+            leaf.reading = texts.first.map(reading)
             leaves.append(leaf)
         }
         func addName(_ node: XMLNode, records: [Int]) {

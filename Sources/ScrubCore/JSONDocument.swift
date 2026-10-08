@@ -67,6 +67,8 @@ final class JSONDocument {
         }
         var names: [String] = []
         var nextRecord = 0
+        /// The key the next value sits under and the keys of its object, for the span tagger (see `TaggerReading.line`).
+        private var place = (key: "", siblings: [String]())
 
         /// `key`: what the text around a body calls it (`credentials = {…}`).
         func add(_ source: JSONSource, records: [Int] = [], key: String? = nil) -> JSONDocument {
@@ -234,6 +236,7 @@ final class JSONDocument {
                 default: reaches = true
                 }
                 let reached = Self.kindKeys.contains(KeyHints.words(pair.0).joined()) || !reaches ? [] : kind.union(typed)
+                place = (pair.0, Array(pairs.map(\.0).prefix(15)))
                 if surnamed, case .array(let values) = pair.1, KeyHints.hint(inherited) == "FIRST_NAME" {
                     collectArray(document, values, key: inherited, path: childPath, records: ancestry, keys: keys + [pair.0], depth: depth, typed: reached, given: true)
                 } else {
@@ -259,6 +262,7 @@ final class JSONDocument {
             }
             for (index, child) in values.enumerated() {
                 // Several names or emails in one list may be several people's; one is the record's own.
+                place = ((keys.last ?? "") + "[]", [])
                 let several = values.count > 1 && KeyHints.hint(key).map({ ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "USERNAME"].contains($0) }) == true
                 collect(document, child, key: pair?[index] ?? key, path: path + "/" + String(index), records: several && !(given && index == 0) ? [] : records, keys: keys, depth: depth, listed: true, typed: typed)
             }
@@ -266,6 +270,7 @@ final class JSONDocument {
         @inline(never)
         private func collectString(_ document: JSONDocument, _ string: String, key: String?, path: String, records: [Int], keys: [String], depth: Int, typed: Set<String>) {
             guard !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            let reading = TaggerReading.line(key: place.key, siblings: place.siblings)
             switch embed(string, level: document.level + path.utf8.lazy.filter { $0 == 47 }.count, key: key, records: records, keys: keys, depth: depth, typed: typed) {
             case .document(let child, let base64):
                 document.nested[path] = child
@@ -283,6 +288,7 @@ final class JSONDocument {
             leaf.field = keys.joined(separator: ".")
             leaf.unsureName = unsureNames.contains(path)
             leaf.doubtedName = doubtedNames.contains(path)
+            leaf.reading = reading
             population[leaf.field ?? "", default: []].append(leaf.seen)
             fieldStrings[leaf.field ?? "", default: []].append(items.count)
             items.append(leaf)
@@ -303,6 +309,7 @@ final class JSONDocument {
             }
             document.valueIDs[path] = items.count
             var leaf = DocumentLeaf(number, key: key, records: records, numericEntity: entity)
+            leaf.reading = .line(key: place.key, siblings: place.siblings)
             // Its stand-in is of the kind its record names, as a string's is ({"type":"ABA","number":111900659}).
             leaf.namingWords = Self.naming(keys, typed)
             leaf.field = keys.joined(separator: ".")

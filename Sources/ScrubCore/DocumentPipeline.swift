@@ -53,6 +53,8 @@ struct DocumentLeaf: Sendable {
     /// One written only of names under a business's or an account's key ("account": {"name": …}):
     /// never replaced on the name model's word, but never kept unseen either.
     var doubtedName = false
+    /// How the span tagger reads the value once the rules are done; nil where it never does (keys, headers).
+    var reading: TaggerReading?
     private static let nonPersonalWords: Set<String> = ["status", "state", "type", "kind", "result", "outcome", "decision", "amount", "currency", "total", "balance", "fee",
                                                         "price", "count", "quantity", "at", "time", "timestamp", "date", "created", "updated", "version", "method", "code", "level", "score", "reason", "category", "channel", "mode"]
 
@@ -241,6 +243,13 @@ enum DocumentPipeline {
                     guard !value.marks.contains(where: { $0.range == 0..<(value.text as NSString).length }) else { continue }
                     if !newMatcher.matches(in: value.text).isEmpty || !newGate.isEmpty && newGate.hits(value.text) { active[index] = true }
                 }
+            }
+        }
+        // The span tagger's suspects join what review asks about; nothing it reads is replaced.
+        if let tagger = Escalation.tagger {
+            for (index, suspects) in try Escalation.suspects(leaves, values, tagger: tagger) {
+                let value = values[index]
+                values[index] = DocumentValue(text: value.text, marks: value.marks, unresolved: value.unresolved + suspects, proposals: value.proposals, held: value.held)
             }
         }
         // What is left as written gets the stand-in it would take, drawn in
