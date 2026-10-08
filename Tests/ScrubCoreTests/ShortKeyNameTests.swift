@@ -112,6 +112,22 @@ struct ShortKeyNameTests {
         }
     }
 
+    /// The same pairs as an XML subject's attributes or elements and as a bureau export's columns.
+    @Test func aNamesTwoPartsSideBySideAreReplacedInXMLAndCSV() throws {
+        let documents: [(String, String, [String])] = [
+            (#"<inquiry ref="Q-20417"><subj fn="RADOSLAW" ln="KOWALCZYK" dob="19811203"/></inquiry>"#, "inquiry.xml", ["RADOSLAW", "KOWALCZYK"]),
+            (#"<case id="HH-881"><spouse><gn>Breandan</gn><sur>Dunphy</sur></spouse></case>"#, "case.xml", ["Breandan", "Dunphy"]),
+            ("ref,fn,ln,dob,ph\nQ-20417,RADOSLAW,KOWALCZYK,19811203,3125550147\nQ-20418,Sigrun,Haldorsen,19840509,3125550162\n", "export.csv", ["RADOSLAW", "KOWALCZYK", "3125550147", "Sigrun", "Haldorsen", "3125550162"]),
+        ]
+        for (document, file, originals) in documents {
+            let (_, output, _) = try Self.scrub(document, file)
+            for original in originals { #expect(!output.contains(original), "[\(file)] \(original) kept: \(output)") }
+        }
+        // A report's first and last pages stay.
+        let pages = "report,first,last\nR-1,1,9\nR-2,10,14\n"
+        #expect(try Self.scrub(pages, "pages.csv").1 == pages)
+    }
+
     /// "first" and "last" say where a page, a range or a week starts and ends as often:
     /// what they hold there is no name, and stays.
     @Test func aPagesOrAWeeksFirstAndLastStay() throws {

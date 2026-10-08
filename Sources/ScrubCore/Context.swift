@@ -232,12 +232,15 @@ public enum KeyHints {
     static func nameParts(_ siblings: [(String, String)]) -> [String: String] {
         var found: [String: String] = [:]
         for (key, value) in siblings where hint(key) == nil {
-            let core = words(key).filter { !["name", "nm", "nme", "n"].contains($0) }.joined()
-            guard let part = pairedNameParts[core], namePartShaped(value) else { continue }
+            guard let part = namePartKey(key), namePartShaped(value) else { continue }
             found[key] = part
         }
         let parts = Set(found.values)
         return parts.contains("first_name") && parts.contains("last_name") ? found : [:]
+    }
+    /// The part of a name a key names on its own, when a sibling names the other part (see `nameParts`).
+    static func namePartKey(_ key: String?) -> String? {
+        pairedNameParts[words(key).filter { !["name", "nm", "nme", "n"].contains($0) }.joined()]
     }
     private static let pairedNameParts: [String: String] = ["first": "first_name", "given": "first_name", "fn": "first_name", "fnm": "first_name", "gn": "first_name",
                                                             "middle": "middle_name", "mn": "middle_name",

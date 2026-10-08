@@ -77,6 +77,8 @@ public enum CSVFile: FileFormat {
         var position = -1
         for row in rows.indices {
             if row.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
+            // A name's parts in columns of their own ("fn", "ln"), read as in a JSON record.
+            let nameParts = KeyHints.nameParts(keys.indices.compactMap { $0 < rows[row].count ? (keys[$0], rows[row][$0]) : nil })
             for column in rows[row].indices {
                 position += 1
                 var key = column < keys.count ? keys[column] : nil
@@ -93,6 +95,7 @@ public enum CSVFile: FileFormat {
                     unsure = KeyHints.writtenAsName(cell, parent: column < parents.count ? parents[column].joined(separator: "_") : nil)
                 }
                 if let fields = owned[column], KeyHints.ownRecord(fields, value: rows[row][column]) { key = "name" }
+                if KeyHints.hint(key) == nil, column < keys.count, let part = nameParts[keys[column]] { key = part }
                 if let siblings = named[column] {
                     let texts = siblings.compactMap { $0 < rows[row].count ? (KeyHints.words(columns[$0]).last!, rows[row][$0]) : nil }
                     key = KeyHints.namedField("value", siblings: texts) ?? key

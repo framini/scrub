@@ -109,7 +109,9 @@ public enum XMLFile: FileFormat {
                 for attribute in element.attributes ?? [] {
                     addName(attribute, records: ancestry)
                     let attributeTexts = (element.attributes ?? []).compactMap { a in local(a.name).map { ($0, a.stringValue ?? "") } }
-                    let resolved = local(attribute.name).flatMap { KeyHints.namedField($0, siblings: attributeTexts) } ?? KeyHints.resolve(local(attribute.name), parent: elementKey)
+                    var resolved = local(attribute.name).flatMap { KeyHints.namedField($0, siblings: attributeTexts) } ?? KeyHints.resolve(local(attribute.name), parent: elementKey)
+                    // A name's parts side by side as attributes (<subject fn="…" ln="…"/>).
+                    if KeyHints.hint(resolved) == nil, let name = local(attribute.name), let part = KeyHints.nameParts(attributeTexts)[name] { resolved = part }
                     let attributeKey = key(local(attribute.name), resolved: resolved, parent: local(element.name), value: attribute.stringValue, siblings: names(element), values: fieldTexts(element))
                     add(attribute, key: attributeKey, records: ancestry, words: words, unsure: unsure(local(attribute.name), key: attributeKey, parent: local(element.name), value: attribute.stringValue))
                 }
@@ -423,7 +425,7 @@ public enum XMLFile: FileFormat {
     static func namePart(_ element: XMLElement) -> String? {
         func local(_ name: String?) -> String? { name?.split(separator: ":").last.map(String.init) }
         func part(_ element: XMLElement) -> String? {
-            local(element.name).flatMap { namePartKeys[KeyHints.words($0).joined()] }
+            local(element.name).flatMap { KeyHints.hint($0) == nil ? KeyHints.namePartKey($0) : nil }
         }
         func value(_ element: XMLElement) -> String? {
             guard element.childCount == 1, element.children?.first?.kind == .text else { return nil }
@@ -442,7 +444,6 @@ public enum XMLFile: FileFormat {
         let known = written.lowercased().split { !$0.isLetter }.contains { Names.firstFolded.contains(String($0)) || Names.lastFolded.contains(String($0)) }
         return known ? own : nil
     }
-    private static let namePartKeys = ["first": "first_name", "given": "first_name", "middle": "middle_name", "last": "last_name", "family": "last_name"]
     static func parses(_ data: Data) throws -> Bool {
         guard let source = try? decodeXML(data) else { return false }
         let text = normalizedDeclaration(source)
