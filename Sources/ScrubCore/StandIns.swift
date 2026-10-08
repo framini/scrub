@@ -826,6 +826,14 @@ final class StandIns {
 
     /// Its digits drawn afresh, the rest as written: "3º Esq." → "7º Esq.".
     private func renumbered(_ original: String) -> String {
+        // "8º C" in a letter's address block and again in its body is one flat.
+        let key = "RENUMBERED\u{0}" + original
+        if let known = assigned[key] { return known }
+        let made = freshlyRenumbered(original)
+        assigned[key] = made
+        return made
+    }
+    private func freshlyRenumbered(_ original: String) -> String {
         // "12th Floor" → "7th Floor": an ordinal keeps its ending.
         if let match = original.range(of: #"^\d+(?=th\b)"#, options: .regularExpression) {
             return String(Int.random(in: 4...19, using: &rng)) + original[match.upperBound...]
@@ -943,6 +951,8 @@ final class StandIns {
     private func abroadCity(country: String, original: String, besides: [String] = [], bare: Bool = false) -> Places.Abroad? {
         let key = country + "\u{0}" + original.lowercased()
         if let known = abroadCities[key] { return known }
+        // The same city read as another country's elsewhere ("12825 Rostock" under "Germany", then beside a "-gasse") stays the one it became.
+        if let known = abroadCities.first(where: { $0.key.hasSuffix("\u{0}" + original.lowercased()) })?.value { abroadCities[key] = known; return known }
         let taken = Set(abroadCities.values.map(\.city))
         // Not the same city under another district: "København N" never becomes "København K", nor "Dublin 24" "Dublin".
         let stems = ([original] + besides).map { $0.lowercased().split(separator: " ").first.map(String.init) ?? $0.lowercased() }
@@ -981,10 +991,16 @@ final class StandIns {
             } else { words.append(word) }
         }
         func bare(_ word: String) -> String { word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".,\u{1}")) }
-        func capital(_ word: String) -> Bool {
+        func capitalWord(_ word: String) -> Bool {
             let text = word.trimmingCharacters(in: CharacterSet(charactersIn: "\u{1}"))
-            return text.first.map { $0.isLetter && $0.isUppercase } == true && !text.contains(where: \.isNumber) && !AddressBlock.streetKinds.contains(bare(text)) && !AddressBlock.englishKinds.contains(bare(text))
+            return text.first.map { $0.isLetter && $0.isUppercase } == true && !text.contains(where: \.isNumber)
         }
+        func kind(_ word: String) -> Bool { AddressBlock.streetKinds.contains(bare(word)) || AddressBlock.englishKinds.contains(bare(word)) }
+        // "Paseo de la Alameda": where every capitalised word is a kind of street, the last one after the first is its name.
+        let kindNamed = words.lastIndex { capitalWord($0) && kind($0) }.flatMap { index in
+            index > 0 && !words.contains { capitalWord($0) && !kind($0) } ? words[index] : nil
+        }
+        func capital(_ word: String) -> Bool { capitalWord(word) && (!kind(word) || word == kindNamed) }
         // Each name is a run of capitalised words with the small joining words inside it
         // ("Calçada do Mirante"); every run takes another name.
         var index = 0, used: [String] = []
@@ -1652,6 +1668,10 @@ final class StandIns {
     /// The same birth year always moves to the same stand-in year, so a
     /// "birth_year" or "age" beside the date still agrees with it.
     private func dateLike(_ original: String) -> String {
+        // "1975-11-22T00:00:00Z": the date takes a stand-in, its time and zone stay as written.
+        if let time = original.range(of: #"(?<=^\d{4}-\d{2}-\d{2})[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$"#, options: .regularExpression) {
+            return dateLike(String(original[..<time.lowerBound])) + original[time]
+        }
         var year = Int.random(in: 1940...1999, using: &rng)
         var month = Int.random(in: 1...12, using: &rng)
         var day = Int.random(in: 1...28, using: &rng)

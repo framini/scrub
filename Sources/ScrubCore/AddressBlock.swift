@@ -368,12 +368,6 @@ struct AddressBlock {
             if upper.range(of: #"^\d{2}-\d{3}$"#, options: .regularExpression) != nil { return "PL" }
             if upper.range(of: #"^[AC-FHKNPRTV-Y]\d[\dW] ?[0-9AC-FHKNPRTV-Y]{4}$"#, options: .regularExpression) != nil { return "IE" }
         }
-        for locality in localities {
-            // "VIC 3065", "WA 6050" (Western Australia, by its postcode), "TX 78701".
-            if let region = locality.region, let postal = locality.postal, let country = Places.country(postal: postal), Places.region(region, in: country)?.country == country { return country }
-            if let region = locality.region.flatMap(Places.regionAbroad) { return region }
-            if let city = locality.city, let country = knownCountry(city: city) { return country }
-        }
         let words = " " + (streets + units).joined(separator: " ").lowercased() + " "
         let hints: [(String, String)] = [("straße", "DE"), ("strasse", "CH"), ("str. ", "DE"), ("gasse", "AT"), (" rue ", "FR"), (" allée ", "FR"), (" chemin ", "FR"),
                                          (" quai ", "FR"), (" impasse ", "FR"), (" boulevard ", "FR"), (" avenue de ", "FR"), (" bis ", "FR"), (" cedex", "FR"), (" via ", "IT"), (" piazza ", "IT"), (" viale ", "IT"), (" corso ", "IT"), (" strada ", "IT"), (" contrada ", "IT"), (" vicolo ", "IT"), (" largo ", "IT"), (" calle ", "ES"), (" avda", "ES"), (" c/", "ES"), (" avenida ", "ES"),
@@ -383,6 +377,14 @@ struct AddressBlock {
                                          ("vej ", "DK"), ("veien ", "NO"), (" gate ", "NO"), ("katu ", "FI"), ("straat ", "NL"), ("gracht ", "NL"), ("laan ", "NL"), ("weg ", "DE"),
                                          (" postfach ", "DE"), (" postbus ", "NL"), (" postboks ", "NO"), (" apartado ", "ES"), (" casella postale ", "IT"),
                                          (" caixa postal ", "BR"), (" bp ", "FR"), (" b.p. ", "FR")]
-        return hints.first { words.contains($0.0) }?.1
+        let streetCountry = hints.first { words.contains($0.0) }?.1
+        for locality in localities {
+            // "VIC 3065", "WA 6050" (Western Australia, by its postcode), "TX 78701".
+            if let region = locality.region, let postal = locality.postal, let country = Places.country(postal: postal), Places.region(region, in: country)?.country == country { return country }
+            // A province's two letters on a "Viale" are Italian ("41500 Padova (BA)"), not a Brazilian state's.
+            if let region = locality.region.flatMap(Places.regionAbroad), streetCountry == nil || streetCountry == region { return region }
+            if let city = locality.city, let country = knownCountry(city: city) { return country }
+        }
+        return streetCountry
     }
 }

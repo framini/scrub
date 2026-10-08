@@ -480,6 +480,7 @@ enum FormFields {
     private static let digits4to8 = TextPattern(#"\d{4,8}(?!\d|[.,]\d|[\p{L}%$€£])"#)
     private static let deviceValue = TextPattern(#"[A-Za-z0-9][A-Za-z0-9:-]{6,62}[A-Za-z0-9](?![\w-])"#)
     private static let postcodeValue = TextPattern(#"(?:\d{4,6}(?:-\d{4})?|[A-Z]\d[A-Z] ?\d[A-Z]\d|[A-Z]{1,2}\d[A-Z\d]? ?\d[A-Z]{2}|\d{4} ?[A-Z]{2})(?![\w-]|[.,]\d)"#)
+    private static let phoneValue = TextPattern(#"(?:\+\d{1,3}[ .-]?)?(?:\(\d{1,4}\)[ .-]?)?\d{1,10}(?:[ .-]\d{1,8}){0,5}(?![\w@-]|[.,]\d)"#)
     private static let handleValue = TextPattern(#"[A-Za-z0-9][A-Za-z0-9._-]{0,38}[A-Za-z0-9](?![\w@-]|\.\w)"#)
     private static let idValue = TextPattern(#"[A-Za-z0-9][A-Za-z0-9_-]{1,30}[A-Za-z0-9](?![\w-]|\.\w)"#)
 
@@ -508,6 +509,15 @@ enum FormFields {
             value: { ns, start, _ in
                 guard let found = match(deviceValue, ns, at: start), ns.substring(with: found.range).contains(where: \.isNumber) else { return [] }
                 return [Span(range: found.range.location..<NSMaxRange(found.range), entity: "RECORD_ID", score: 0.9)]
+            }),
+        // A phone number named as one, in any country's grouping: "phone +39 393 068 0434", "mobile 323 1798382".
+        Cue(pattern: cue(#"(?:tele)?phone(?: number| no\.?)?|mobile(?: number| no\.?)?|cell(?: ?phone)?|tel\.?|whatsapp|handy(?:nummer)?|telefono|tel[ée]fono|t[ée]l[ée]phone|portable|cellulare|celular|telefoon(?:nummer)?|mobiel(?:nummer)?|telefon(?:nummer)?"#),
+            value: { ns, start, _ in
+                guard let found = match(phoneValue, ns, at: start) else { return [] }
+                let value = ns.substring(with: found.range), digits = value.filter(\.isNumber).count
+                // Not a date ("2026-01-02") nor a time.
+                guard (7...15).contains(digits), value.range(of: #"^\d{4}[-./]\d{1,2}[-./]\d{1,2}$|^\d{1,2}[-./]\d{1,2}[-./]\d{2,4}$"#, options: .regularExpression) == nil else { return [] }
+                return [Span(range: found.range.location..<NSMaxRange(found.range), entity: "PHONE_NUMBER", score: 0.9)]
             }),
         // A point named as one: "the coordinates 40.7128, -74.0060", "Location: 41.4989, -81.6944".
         Cue(pattern: cue(#"co-?ordinates?|gps(?: co-?ordinates?| location| position)?|lat(?:itude)?[ \t]*(?:[/,&-]|and)?[ \t]*long?(?:itude)?|latlng|location|position|located at|koordinaten|koordinater|coordonn[ée]es(?: gps)?|coordenadas|coordinate gps|co[oö]rdinaten"#),

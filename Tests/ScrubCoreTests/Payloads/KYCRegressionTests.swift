@@ -219,3 +219,82 @@ func sameDayAndMonthAndGermanFloors(_ name: String) throws {
     }
     #expect(made.isEmpty, "not SSNs the SSA issues: \(made)")
 }
+
+private func scrubText(_ text: String, seed: UInt64 = 5) throws -> String {
+    String(decoding: try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: seed).output, as: UTF8.self)
+}
+
+/// A phone number named as one in a sentence is replaced in any country's
+/// grouping, after an IBAN or not.
+@Test func phonesNamedInProseAreReplaced() throws {
+    for (note, phone) in [("Mail sent to Via delle Rose 12, 40121 Bologna (BO) was returned. Her IBAN is GB82WEST12345698765432 and phone 323 1798382. Escalated to tier 2.", "1798382"),
+                          ("The address on the application was Viale Mazzini 7, 10121 Torino (TO). Her IBAN is GB82WEST12345698765432 and phone +39 347 112 0583. Escalated to tier 2.", "112 0583")] {
+        let output = try scrubText(note)
+        #expect(!output.contains(phone) && output.contains("tier 2"), "\(output)")
+    }
+}
+
+/// A birth date written with a time ("1975-11-22T00:00:00Z") keeps its time
+/// and zone; only the date changes.
+@Test(arguments: renderings)
+func birthDateWithTimeKeepsItsTime(_ name: String) throws {
+    let output = try scrub(#"{"rows":[{"input":{"nm":"Odalys Ferriter","dob":"1975-11-22T00:00:00Z"}}]}"#, as: name)
+    let dob = try value(output, "rows", "0", "input", "dob")
+    #expect(dob != "1975-11-22T00:00:00Z" && dob.range(of: #"^\d{4}-\d{2}-\d{2}T00:00:00Z$"#, options: .regularExpression) != nil, "\(dob)")
+}
+
+/// An address validator's split house number ("primary_number") is replaced.
+@Test(arguments: renderings)
+func primaryNumberIsAHouseNumber(_ name: String) throws {
+    let output = try scrub(#"{"subject":{"firstName":"Ottilie","address":{"primaryNumber":"4387","streetName":"Kingsbridge Ct","cityName":"Cedar Rapids"}},"components":{"primary_number":"3961","street_name":"Larchmont","street_suffix":"Ln"}}"#, as: name)
+    #expect(try value(output, "subject", "address", "primaryNumber") != "4387")
+    #expect(try value(output, "components", "primary_number") != "3961")
+    #expect(try value(output, "components", "street_suffix") == "Ln")
+}
+
+/// A street's whole name goes in a log line: an Australian one the model reads
+/// from its kind on ("Tce, …"), a Spanish one whose name is a kind of street too.
+@Test func streetNamesInLogLinesAreReplaced() throws {
+    let log = """
+    {"ts":"2026-04-08T02:11:09.402Z","level":"info","msg":"address normalized","input":"317 Coolabah Tce, Fremantle WA 2601"}
+    {"ts":"2026-04-08T02:11:10.118Z","level":"info","msg":"address normalized","input":"Paseo de la Alameda, 128, 52198 Bilbao"}
+    """
+    let output = try scrubText(log)
+    for part in ["317", "Coolabah", "Alameda", "128,", "Bilbao"] { #expect(!output.contains(part), "\(part): \(output)") }
+}
+
+/// An Italian address written in a letter's block and again in its body is
+/// one address: the same stand-in, in Italy, though its province ("BA") is
+/// also a Brazilian state's code.
+@Test func italianAddressInALetterIsOneAddress() throws {
+    let letter = """
+    Ottilie Brannagh
+    Viale Bracciano 188
+    41500 Padova (BA)
+    Italy
+
+    Dear Ms Brannagh,
+
+    Please send a recent utility bill showing Viale Bracciano 188, 41500 Padova (BA).
+    """
+    for seed in UInt64(1)...4 {
+        let output = try scrubText(letter, seed: seed)
+        let lines = output.components(separatedBy: "\n")
+        let block = lines[1] + ", " + lines[2]
+        #expect(output.contains("showing \(block)."), "\(output)")
+        #expect(lines[2].range(of: #"^\d{5} [\p{L} ]+ \([A-Z]{2}\)$"#, options: .regularExpression) != nil && !output.contains("Padova"), "\(output)")
+    }
+}
+
+/// A letter's address abroad, in its block and again in its body, is one
+/// address: one flat ("8º C") and one city, though only the block names the country.
+@Test func addressAbroadInALetterKeepsOneFlatAndOneCity() throws {
+    let spanish = "Ottilie Brannagh\nAvenida de los Almendros, 16, 8º C\n43269 Murcia\nSpain\n\nPlease send a bill showing Avenida de los Almendros, 16, 8º C, 43269 Murcia.\n"
+    let german = "Ottilie Brannagh\nMühlbachgasse 8a\n12825 Rostock\nGermany\n\nPlease send a bill showing Mühlbachgasse 8a, 12825 Rostock.\n"
+    for seed in UInt64(1)...4 {
+        let es = try scrubText(spanish, seed: seed).components(separatedBy: "\n")
+        #expect(es[5].contains(es[1] + ", " + es[2]), "\(es)")
+        let de = try scrubText(german, seed: seed).components(separatedBy: "\n")
+        #expect(de[5].contains(de[1] + ", " + de[2]), "\(de)")
+    }
+}

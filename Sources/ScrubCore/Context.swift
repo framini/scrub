@@ -50,7 +50,7 @@ public enum KeyHints {
         ("email emailaddress emailaddr mail", "EMAIL_ADDRESS"),
         ("phone phonenumber mobile cell telephone tel fax mobilenumber mobilephone cellphone cellnumber phoneno telno telephonenumber contactnumber msisdn nationalformat internationalformat e164", "PHONE_NUMBER"),
         ("ssn socialsecuritynumber socialsecurity ssnnumber", "US_SSN"),
-        ("address streetaddress street addressline1 addressline2 addressline line1 line2 addr address1 street1 addr1 streetline1 street2 address2 addr2 streetline2 addressline3 line3 address3 addr3 street3 extendedaddress streetaddress2 aptsuite apartmentnumber aptnumber suitenumber unitnumber flatnumber unit apt apartment housenumber housenum houseno housename flat flatno buildingnumber buildingno streetnumber streetnum streetno civicnumber premisenumber streetname thoroughfare buildingname formattedaddress fulladdress physicaladdress mailingaddress homeaddress residentialaddress billingaddress shippingaddress addressupdates addresshistory", "ADDRESS"),
+        ("address streetaddress street addressline1 addressline2 addressline line1 line2 addr address1 street1 addr1 streetline1 street2 address2 addr2 streetline2 addressline3 line3 address3 addr3 street3 extendedaddress streetaddress2 aptsuite apartmentnumber aptnumber suitenumber unitnumber flatnumber unit apt apartment housenumber housenum houseno primarynumber housename flat flatno buildingnumber buildingno streetnumber streetnum streetno civicnumber premisenumber streetname thoroughfare buildingname formattedaddress fulladdress physicaladdress mailingaddress homeaddress residentialaddress billingaddress shippingaddress addressupdates addresshistory", "ADDRESS"),
         // The same fields as forms in other languages label them, written without their accents.
         ("geboortedatum geburtsdatum datedenaissance fechadenacimiento fechanacimiento datadinascita fodelsedatum datadenascimento datanascimento fodselsdato", "DATE_OF_BIRTH"),
         ("codepostal codigopostal codicepostale postnummer postnr", "POSTAL_CODE"),
@@ -556,7 +556,8 @@ public enum KeyHints {
         let parts = words(key)
         return hint(key) == "ADDRESS" && [houseNumberKeys, unitKeys].contains { $0.contains(parts.joined()) || $0.contains(parts.suffix(2).joined()) || $0.contains(parts.last ?? "") }
     }
-    static let houseNumberKeys: Set<String> = ["housenumber", "housenum", "houseno", "buildingnumber", "buildingno", "streetnumber", "streetnum", "streetno", "civicnumber", "premisenumber"]
+    // "primary_number": a US address's house number, as address validation splits it.
+    static let houseNumberKeys: Set<String> = ["housenumber", "housenum", "houseno", "primarynumber", "buildingnumber", "buildingno", "streetnumber", "streetnum", "streetno", "civicnumber", "premisenumber"]
     static let streetNameKeys: Set<String> = ["streetname", "thoroughfare", "buildingname", "street", "housename"]
     private static let unitKeys: Set<String> = ["unit", "apt", "apartment", "street2", "address2", "addr2", "line2", "addressline2", "streetline2", "aptsuite", "apartmentnumber", "aptnumber", "suitenumber", "unitnumber", "flatnumber", "addressline3", "line3", "flat", "flatno", "address3", "addr3", "street3"]
     private static let lineKeys: Set<String> = ["street2", "address2", "addr2", "line2", "addressline2", "streetline2", "addressline3", "line3", "address3", "addr3", "street3", "extendedaddress", "streetaddress2"]

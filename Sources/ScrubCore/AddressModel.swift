@@ -417,6 +417,12 @@ final class AddressModel: Sendable {
                 if end < last, (end + 1...last).contains(where: { tokens[$0].isWord && tailWords.contains(text($0)) }) { last = end }
             }
         }
+        // One that opens on its street's kind ("Tce, Fremantle WA 2601") takes the name and house number before it: "289 Coolabah Tce".
+        if AddressBlock.englishKinds.contains(text(first).lowercased()) {
+            var start = first, names = 0
+            while start - 1 >= 0, names < 3, tokens[start - 1].isWord, tokens[start - 1].scalars.first?.properties.isUppercase == true, !tokens[start - 1].scalars.contains(where: isDigit) { start -= 1; names += 1 }
+            if names > 0, start - 1 >= 0, !tokens[start - 1].scalars.isEmpty, tokens[start - 1].scalars.allSatisfy(isDigit) { first = start - 1 }
+        }
         let words = tokens[first...last].filter { $0.scalars.contains(where: isLetter) }
         guard words.count >= 2, tokens[first...last].contains(where: { $0.scalars.contains(where: isDigit) }) || parted(tokens[first...last]) else { return nil }
         return tokens[first].range.lowerBound..<tokens[last].range.upperBound
