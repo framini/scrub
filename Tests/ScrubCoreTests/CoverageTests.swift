@@ -45,14 +45,21 @@ func aModelThatDoesNotLoadIsNamedInTheResult(_ name: String) throws {
 @Test func moreScrubsAtOnceThanCoresAllFinish() {
     let count = ProcessInfo.processInfo.activeProcessorCount + 2
     // For each scrub, when it started and whether it finished with a result.
-    let runs = Mutex([(started: ContinuousClock.Instant?, scrubbed: Bool?)](repeating: (nil, nil), count: count))
+    let runs = Mutex([(started: ContinuousClock.Instant?, scrubbed: Bool?, took: Duration)](repeating: (nil, nil, .zero), count: count))
+    let launched = ContinuousClock.now
     for index in 0..<count {
         Task.detached {
-            runs.withLock { $0[index].started = .now }
+            let start = ContinuousClock.now
+            runs.withLock { $0[index].started = start }
             let text = "Odalys Ferriter (odalys@kestrel.example) asked Teodoro Quillan to call her on 415-867-2290, ticket \(index)."
             let scrubbed = (try? Scrubber.scrub(Data(text.utf8), name: "note.txt", forceFullDetection: false, seed: UInt64(index))) != nil
-            runs.withLock { $0[index].scrubbed = scrubbed }
+            runs.withLock { $0[index].scrubbed = scrubbed; $0[index].took = start.duration(to: .now) }
         }
+    }
+    defer {
+        let current = runs.withLock { $0 }
+        let waited = current.compactMap { $0.started.map { launched.duration(to: $0) } }
+        print("scrubs at once debug: longest wait to start \(waited.max() ?? .zero), longest scrub \(current.map(\.took).max() ?? .zero)")
     }
     while true {
         let now = ContinuousClock.now, current = runs.withLock { $0 }
