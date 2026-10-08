@@ -29,7 +29,9 @@ enum RecordIDs {
     /// Keys that hold one person's identifier on their own.
     private static let whole: Set<String> = ["uid", "userid", "customerid", "accountid", "patientid", "memberid", "clientid", "mrn", "medicalrecordnumber", "employeeid", "personid", "subscriberid", "studentid",
                                              "deviceid", "visitorid", "globaldeviceid", "devicefingerprint", "linkedid", "browserid", "blackbox", "deviceblackbox",
-                                             "loyaltyprogramid", "loyaltyprogramnumber", "frequentflyernumber", "membershipnumber"]
+                                             "loyaltyprogramid", "loyaltyprogramnumber", "frequentflyernumber", "membershipnumber",
+                                             // A phone's own identifier and the one its advertisers know it by: a vendor's, an app's, an OS's.
+                                             "idfa", "idfv", "gaid", "adid", "aaid", "androidid", "advertisingid", "advertisingidentifier", "udid", "deviceuuid"]
 
     /// What a person has rather than is: their ID only right before an ID's word ("device_id", "loyalty_number"), never a key alone ("browser": "FIREFOX10").
     private static let belongings: Set<String> = ["device", "devices", "browser", "anonymous", "social", "socials", "loyalty", "membership", "flyer", "rewards"]
@@ -47,6 +49,8 @@ enum RecordIDs {
         guard let last = words.last else { return false }
         // A device's fingerprint blob under its vendor's name ("acme_blackbox").
         if last == "blackbox" { return true }
+        // The device itself, written as its identifier ("device": "d3f1c9a2-7b44-…", "device=9774d56d682e549c"); "device": "iPhone16,2" is a model.
+        if words == ["device"], isUUID(value) || hexIdentifier(value) { return true }
         // The person names the ID right before it: "customer_id", "patientNumber", not "applicant_address_country_id".
         if idWords.contains(last), words.count >= 2, people.contains(words[words.count - 2]) { return true }
         // A person's ID in one of their systems: "customer_web_id", "user_external_id".
@@ -64,7 +68,7 @@ enum RecordIDs {
         let words = KeyHints.words(key)
         guard let last = words.last else { return false }
         return whole.contains(words.joined()) || words.count == 1 && people.contains(last) && !belongings.contains(last) || KeyHints.isRole(key)
-            || idWords.contains(last) || last == "slug" || last == "handle" || last == "blackbox"
+            || idWords.contains(last) || last == "slug" || last == "handle" || last == "blackbox" || words == ["device"]
     }
 
     /// Whether a key names a person's identifier by itself: "customer_id", "patientNumber", "uid".
@@ -312,6 +316,10 @@ enum RecordIDs {
     private static let uuid = TextPattern(#"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"#)
     /// A UUID names whatever the system made it for; only what is around it says that was a person.
     static func isUUID(_ value: String) -> Bool { !TextRanges.matches(uuid, in: value).isEmpty }
+    /// Sixteen hex digits or more with a digit and a letter among them, as a device's identifier or fingerprint is written ("9774d56d682e549c").
+    static func hexIdentifier(_ value: String) -> Bool {
+        (16...64).contains(value.count) && value.allSatisfy(\.isHexDigit) && value.contains(where: \.isNumber) && value.contains(where: \.isLetter)
+    }
 
     /// The names, email local parts and phone numbers a document holds.
     struct Known {

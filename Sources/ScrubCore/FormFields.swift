@@ -505,9 +505,16 @@ enum FormFields {
         Cue(pattern: cue(#"licen[cs]e[ -]?plates?(?:[ -]?(?:number|no\.?|#))?|number[ -]?plates?|registration[ -]?plates?|plate[ -]?(?:number|no\.?)|vehicle registration(?: number| no\.?)?|kenteken(?:nummer)?|kfz-kennzeichen|kennzeichen|nummernschild|plaque d['’]immatriculation|immatriculation|n[uú]mero de matr[ií]cula|matr[ií]cula|placa(?: do ve[ií]culo| del veh[ií]culo)?|targa|registreringsnummer|regnr"#),
             value: { ns, start, _ in plate(ns, at: start) }),
         // A device's own identifier, a UUID among them: named, it is someone's.
-        Cue(pattern: cue(#"device[ -]?(?:id|identifiers?|serial(?: number| no\.?)?|udid|fingerprint|number)|device with the identifier|udid|imei(?: number)?|meid|ger[aä]te-?(?:id|kennung|nummer)|identifiant (?:de l['’]appareil|d['’]appareil|du terminal)|id(?:entificador)? del dispositivo|id(?:entificativo)? (?:del )?dispositivo|identificador do dispositivo|id do dispositivo|apparaat-?id|enhets-?id"#),
+        // A log's pair is one too ("device_id=…", "idfa=…", "android_id=…"), as is the identifier advertisers know a phone by.
+        Cue(pattern: cue(#"device[ _-]?(?:id|identifiers?|serial(?: number| no\.?)?|udid|uuid|fingerprint|number)|device with the identifier|udid|imei(?: number)?|meid|idf[av]|gaid|g?adid|aaid|android[ _-]?id|advertising[ _-]?(?:id|identifier)|ad(?:vertising)? identifier|ger[aä]te-?(?:id|kennung|nummer)|identifiant (?:de l['’]appareil|d['’]appareil|du terminal)|id(?:entificador)? del dispositivo|id(?:entificativo)? (?:del )?dispositivo|identificador do dispositivo|id do dispositivo|apparaat-?id|enhets-?id"#),
             value: { ns, start, _ in
                 guard let found = match(deviceValue, ns, at: start), ns.substring(with: found.range).contains(where: \.isNumber) else { return [] }
+                return [Span(range: found.range.location..<NSMaxRange(found.range), entity: "RECORD_ID", score: 0.9)]
+            }),
+        // A device named alone, then its identifier: "device=d3f1c9a2-7b44-…", "the device 9774d56d682e549c"; "device: iPhone16,2" is a model.
+        Cue(pattern: cue(#"device"#),
+            value: { ns, start, bridged in
+                guard !bridged, let found = match(deviceValue, ns, at: start), case let value = ns.substring(with: found.range), RecordIDs.isUUID(value) || RecordIDs.hexIdentifier(value) else { return [] }
                 return [Span(range: found.range.location..<NSMaxRange(found.range), entity: "RECORD_ID", score: 0.9)]
             }),
         // A phone number named as one, in any country's grouping: "phone +39 393 068 0434", "mobile 323 1798382".

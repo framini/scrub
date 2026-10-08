@@ -234,6 +234,50 @@ struct IdentifierLeakTests {
         let output = String(decoding: try Scrubber.scrub(Data(plain.joined(separator: "\n").utf8), name: "a.txt", forceFullDetection: false, seed: 1).output, as: UTF8.self)
         for link in plain { #expect(output.contains(link), "\(link) changed: \(output)") }
     }
+
+    /// A device-intelligence lookup as each route carries it: a vendor's JSON response, a service's log line, an export's
+    /// row and an XML feed. A phone's identifiers and the ones its advertisers know it by are the person's who holds it.
+    static func renderDevice(_ path: Path) -> (Data, String) {
+        let ids = [("device", "d3f1c9a2-7b44-4e0e-9a1f-5c2b8e6d4a10"), ("idfa", "EA7583CD-A667-48BC-B806-42ECB2B48606"), ("idfv", "6F9619FF-8B86-D011-B42D-00C04FC964FF"),
+                   ("gaid", "38400000-8cf0-11bd-b23e-10b96e40000d"), ("android_id", "9774d56d682e549c"), ("device_fingerprint", "8c1f2e9ab07d4c63")]
+        switch path {
+        case .text:
+            let pairs = ids.map { "\($0.0)=\($0.1)" }.joined(separator: " ")
+            return (Data("2026-09-14T10:22:32.007Z INFO [risk] lookup \(pairs) os=iOS-19.0.1 model=iPhone16,2 score=0.83\n2026-09-14T10:22:32.110Z INFO [risk] decision=review\n".utf8), "risk.log")
+        case .json:
+            let fields = ids.map { #""\#($0.0)": "\#($0.1)""# }.joined(separator: ", ")
+            return (Data(#"{"event_id": "evt_5c1f0a77e2", "account": {"email": "ottoline.w@example.com"}, "device": {\#(fields), "os": "iOS 19.0.1", "model": "iPhone16,2"}, "risk_score": 23}"#.utf8), "device.json")
+        case .csv:
+            return (Data((["event_id"] + ids.map(\.0) + ["model"]).joined(separator: ",").appending("\n").appending((["evt_5c1f0a77e2"] + ids.map(\.1) + ["iPhone16"]).joined(separator: ",")).appending("\n").utf8), "devices.csv")
+        case .xml:
+            let fields = ids.map { "<\($0.0)>\($0.1)</\($0.0)>" }.joined()
+            return (Data("<lookup><event_id>evt_5c1f0a77e2</event_id><signals>\(fields)<model>iPhone16,2</model></signals></lookup>".utf8), "lookup.xml")
+        }
+    }
+
+    @Test(arguments: Path.allCases)
+    func aPhonesIdentifiersAreReplacedInEveryRoute(_ path: Path) throws {
+        let originals = ["d3f1c9a2-7b44-4e0e-9a1f-5c2b8e6d4a10", "EA7583CD-A667-48BC-B806-42ECB2B48606", "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+                         "38400000-8cf0-11bd-b23e-10b96e40000d", "9774d56d682e549c", "8c1f2e9ab07d4c63"]
+        let (data, name) = Self.renderDevice(path)
+        let result = try Scrubber.scrub(data, name: name, forceFullDetection: false, seed: 3)
+        let output = String(decoding: result.output, as: UTF8.self)
+        for id in originals {
+            #expect(!output.contains(id), "[\(path)] \(id) left: \(output)")
+            // Each takes a stand-in of its own shape: a UUID stays a UUID in its case, sixteen hex digits stay sixteen.
+            let finding = try #require(result.findings.first { $0.original == id }, "[\(path)] \(id) not found")
+            #expect(IdentifierLeakTests.shaped(finding.standIn, like: id), "[\(path)] \(id) -> \(finding.standIn)")
+        }
+        // The event, the model and the score name no one.
+        #expect(output.contains("iPhone16"), "[\(path)] \(output)")
+        #expect(path == .text || output.contains("evt_5c1f0a77e2"), "[\(path)] \(output)")
+    }
+
+    @Test func aDeviceModelOrARequestBesideADeviceStays() throws {
+        let log = "2026-09-14 10:31:02,118 INFO device-intel - lookup request=4b9e2a1c-55d0-4f7e-8c3a-2e1f0d9b7a66 device: iPhone16,2 os: 19.0.1 took 41ms\n"
+        let result = try Scrubber.scrub(Data(log.utf8), name: "service.log", forceFullDetection: false, seed: 1)
+        #expect(String(decoding: result.output, as: UTF8.self) == log)
+    }
 }
 
 /// IDs made of a word and a number, written in a sentence with nothing to
