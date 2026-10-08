@@ -123,3 +123,25 @@ func streetAddressesInFreeText(_ address: String) throws {
     #expect(text.range(of: #""latitude": -?\d{1,2}\.\d{7}, "longitude": -?\d{1,3}\.\d{4}, "metroCode": 819"#, options: .regularExpression) != nil, "\(text)")
     #expect(text.contains("(PEM)"))
 }
+
+/// A log line quoting a request whose body is itself a string of JSON: the person inside it,
+/// two levels of escapes deep and their surname written with a `\u` escape, is read as one level is.
+@Test(arguments: ["service.log", "Pasted text"])
+func doublyEscapedBodyInALogLineIsReadInside(_ name: String) throws {
+    let log = #"""
+    2026-03-02 09:41:07,552 [pool-3] ERROR CheckClient - upstream 422 payload="{\"body\": \"{\\\"applicant\\\": {\\\"givenName\\\": \\\"Annelise\\\", \\\"surname\\\": \\\"Kj\\\\u00e6rgaard\\\", \\\"phone\\\": \\\"+45 55 50 01 42\\\"}}\"}" trace=7c1e0d9a44b24f0f9e3a
+    2026-03-02 09:41:07,560 [pool-3] WARN  CheckClient - retry body="{\"body\": \"{\\\"surname\\\": \\\"Kj\\\\u00e6rgaard\\\"}\"}"
+    2026-03-02 09:41:07,561 [pool-3] INFO  CheckClient - queued for manual review
+    """#
+    let result = try Scrubber.scrub(Data(log.utf8), name: name)
+    let output = try #require(String(data: result.output, encoding: .utf8))
+    for original in ["Annelise", #"Kj\\\\u00e6rgaard"#, "rgaard", "55 50 01 42"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    #expect(output.contains("trace=7c1e0d9a44b24f0f9e3a") && output.hasSuffix("INFO  CheckClient - queued for manual review"))
+    // Each body still reads as the string of JSON it was, two levels down.
+    for line in output.split(separator: "\n").prefix(2) {
+        let quoted = try #require(line.range(of: #""\{(?:[^"\\]|\\.)*\}""#, options: .regularExpression))
+        let outer = try #require(try JSONSerialization.jsonObject(with: Data(line[quoted].utf8), options: .fragmentsAllowed) as? String)
+        let body = try #require(try JSONSerialization.jsonObject(with: Data(outer.utf8)) as? [String: String])["body"]
+        #expect(try JSONSerialization.jsonObject(with: Data(try #require(body).utf8)) is [String: Any])
+    }
+}

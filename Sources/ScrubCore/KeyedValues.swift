@@ -63,6 +63,38 @@ enum KeyedValues {
     /// Unquoted words that are literals, not values.
     private static let literals: Set<String> = ["true", "false", "null", "none", "nil", "undefined", "yes", "no", "~"]
 
+    /// A string's inside with its JSON escapes read, and where each decoded unit's escape
+    /// starts and ends in `units`; nil where one is no JSON escape.
+    private static func decoded(_ units: ArraySlice<UInt16>) -> (units: [UInt16], starts: [Int], ends: [Int])? {
+        var out: [UInt16] = [], starts: [Int] = [], ends: [Int] = []
+        var at = units.startIndex
+        while at < units.endIndex {
+            var length = 1, unit = units[at]
+            if unit == backslash {
+                guard at + 1 < units.endIndex else { return nil }
+                length = 2
+                switch units[at + 1] {
+                case doubleQuote, backslash, slash: unit = units[at + 1]
+                case UInt16(UInt8(ascii: "b")): unit = 8
+                case UInt16(UInt8(ascii: "f")): unit = 12
+                case UInt16(UInt8(ascii: "n")): unit = newline
+                case UInt16(UInt8(ascii: "r")): unit = carriageReturn
+                case UInt16(UInt8(ascii: "t")): unit = tab
+                case UInt16(UInt8(ascii: "u")):
+                    guard at + 6 <= units.endIndex, let value = UInt16(String(utf16CodeUnits: Array(units[(at + 2)..<(at + 6)]), count: 4), radix: 16) else { return nil }
+                    (unit, length) = (value, 6)
+                default: return nil
+                }
+            }
+            out.append(unit)
+            starts.append(at - units.startIndex)
+            ends.append(at - units.startIndex + length)
+            at += length
+        }
+        starts.append(units.count)
+        return (out, starts, ends)
+    }
+
     private static func identifier(_ unit: UInt16, first: Bool) -> Bool {
         (65...90).contains(unit) || (97...122).contains(unit) || unit == 95 || unit == 36 || !first && (48...57).contains(unit)
     }
@@ -557,8 +589,18 @@ enum KeyedValues {
             }
         }
         levels.reversed().forEach(close)
-        // Each escaped quote becomes a space and a quote, so the body keeps its length and every offset.
         for range in nested {
+            // The body read as its string decodes, each unit knowing the escape it was written with, so a body
+            // escaped again inside it (a log's payload holding a response's body) is read as one level is.
+            if let (body, starts, ends) = decoded(units[range]) {
+                let inner = scan(String(utf16CodeUnits: body, count: body.count), isCancelled: isCancelled)
+                func moved(_ r: Range<Int>) -> Range<Int> { (range.lowerBound + starts[r.lowerBound])..<(range.lowerBound + (r.isEmpty ? starts[r.lowerBound] : ends[r.upperBound - 1])) }
+                found.spans += inner.spans.map { Span(range: moved($0.range), entity: $0.entity, score: $0.score) }
+                found.structural += inner.structural.map(moved)
+                found.keys += inner.keys.map(moved)
+                continue
+            }
+            // Escapes JSON has no reading for: each escaped quote becomes a space and a quote, so the body keeps its length and every offset.
             var body = Array(units[range])
             var at = 0
             while at + 1 < body.count {
