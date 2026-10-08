@@ -511,6 +511,8 @@ public final class Detector {
         return before.range(of: #"(?:^|\s)(?:-H|--header)[ \t]+['"]?[A-Za-z0-9-]*$"#, options: .regularExpression) != nil
             && after.range(of: #"^[A-Za-z0-9-]*:"#, options: .regularExpression) != nil
     }
+    /// Ladies and gentlemen, as a letter in German, Dutch, French, Spanish or Italian greets them.
+    private static let everyone = TextPattern(#"\b(?:Damen und Herren|Dames en Heren|Mesdames(?:,)? Messieurs|Mesdames et Messieurs|Señoras y Señores|Signore e Signori)\b"#)
     private static func namesNoOne(_ span: Span, in text: String) -> Bool {
         guard span.entity == "PERSON" || span.entity == "LOCATION" else { return false }
         if inHeaderName(span.range, in: text) { return true }
@@ -523,6 +525,12 @@ public final class Detector {
         // An identifier's scheme named as its label ("Her Aadhaar is 2345…") is no one, though no list knows the word.
         if words.count == 1, let kind = KeyHints.hint(String(words[0])), ["ID_NUMBER", "US_SSN"].contains(kind),
            !NameLists.isFirst(String(words[0])), !NameLists.isSurname(String(words[0])) { return true }
+        // A letter's "Sehr geehrte Damen und Herren" greets whoever reads it.
+        if text.contains(" ") {
+            let ns = text as NSString, from = max(0, span.range.lowerBound - 24)
+            let around = ns.substring(with: NSRange(location: from, length: min(ns.length, span.range.upperBound + 24) - from))
+            for match in TextRanges.matches(Self.everyone, in: around) where match.range.location + from <= span.range.lowerBound && span.range.upperBound <= NSMaxRange(match.range) + from { return true }
+        }
         return words.allSatisfy { word in
             let bare = word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ". "))
             return titles.contains(bare) || WrittenNames.isRole(bare) || WrittenNames.wordRanks.contains(bare) && word.first?.isUppercase == true

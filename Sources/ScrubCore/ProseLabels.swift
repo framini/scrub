@@ -20,7 +20,7 @@ enum ProseLabels {
     private static let birth = TextPattern(
         #"\b(born(?:[ \t]+on|[ \t]+in)?|dob|d\.o\.b\.?|date[ \t]+of[ \t]+birth|birth[ \t]*date|birthday(?:[ \t]+is)?"#
         // The same cue in the other languages forms are written in: "Geboortedatum", "geboren am", "né le", "fecha de nacimiento".
-        + #"|geboortedatum|geburtsdatum|geboren(?:[ \t]+(?:am|op))?|date[ \t]+de[ \t]+naissance|n[ée]e?[ \t]+le|fecha[ \t]+de[ \t]+nacimiento|nacid[oa][ \t]+el|data[ \t]+di[ \t]+nascita|nat[oa][ \t]+il|f[öo]delsedatum|f[öo]dd(?:[ \t]+den)?|data[ \t]+de[ \t]+nascimento|nascid[oa][ \t]+em|f[øo]dselsdato)(?:[ \t\u00A0]*[:\-]|[ \t]+(?:is|was))?[ \t\u00A0]*("#
+        + #"|geboortedatum|geburtsdatum|geboren(?:[ \t]+(?:am|op))?|geb\.|date[ \t]+de[ \t]+naissance|n[ée]e?[ \t]+le|fecha[ \t]+de[ \t]+nacimiento|nacid[oa][ \t]+el|data[ \t]+di[ \t]+nascita|nat[oa][ \t]+il|f[öo]delsedatum|f[öo]dd(?:[ \t]+den)?|data[ \t]+de[ \t]+nascimento|nascid[oa][ \t]+em|f[øo]dselsdato)(?:[ \t\u00A0]*[:\-]|[ \t]+(?:is|was))?[ \t\u00A0]*("#
         + "\(month)[ \\t]+\(day),?[ \\t]+\(year)|\(day)[ \\t]+\(month),?[ \\t]+\(year)|\(month)[ \\t]+\(year)|\(month)[ \\t]+\(day)\\b|\(day)[ \\t]+\(month)"
         + #"|\d{1,2}[/.\-]\d{1,2}[/.\-](?:\d{4}|\d{2})|\d{4}-\d{1,2}-\d{1,2})(?![\w/.\-]*\d)"#,
         options: [.caseInsensitive])

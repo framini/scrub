@@ -151,7 +151,14 @@ enum JoinedNames {
             if group.allSatisfy(\.place) { continue }
             if group.count > 1 { joinedPlaces += group.filter(\.place).map(\.range) }
             let joined = group.map(\.range.lowerBound).min()!..<group.map(\.range.upperBound).max()!
-            let (range, nicknamed) = grown(joined, in: text, besides: found)
+            var (range, nicknamed) = grown(joined, in: text, besides: found)
+            // Pieces joined over a sentence's small words up to a form of address ("Sie den Antrag von Frau Petra Schönberger")
+            // are cut back to the name after it, as each piece was: a stand-in never takes the words around a name.
+            if group.count > 1, NameShape.words(range, in: text).dropFirst().contains(where: { NameShape.addresses.contains($0.bare) && $0.text.first?.isUppercase == true }),
+               let cut = NameShape.trimmed(Span(range: range, entity: "PERSON", score: 0.5), in: text), cut.range != range,
+               group.contains(where: { $0.sure && cut.range.overlaps($0.range) }) || !group.contains(where: \.sure) {
+                range = cut.range
+            }
             // A nickname in quotes between a given name and a surname writes a person, whatever any model doubts.
             let sure = group.contains(where: \.sure) || nicknamed || TextRanges.matches(nicknameBetween, in: word(joined)).count > 0
             let score = group.filter { $0.sure == sure }.map(\.score).max() ?? 0

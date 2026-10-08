@@ -96,6 +96,12 @@ enum NameShape {
         if let role = parts.lastIndex(where: { isRole($0.text) }), role < parts.count - 1, parts[(role + 1)...].contains(where: { !isRole($0.text) && !joining.contains($0.bare) }) {
             parts.removeFirst(role + 1)
         }
+        // "Antrag von Frau Petra Schönberger": a form of address in another language opens the name after it,
+        // and what came before it is the sentence's; nothing after it is no one.
+        if let address = parts.lastIndex(where: { addresses.contains($0.bare) && $0.text.first?.isUppercase == true }), address > 0 || parts.count == 1 {
+            guard address + 1 < parts.count else { return nil }
+            parts.removeFirst(address + 1)
+        }
         // A rank goes before a name, so one after a first name or a word no
         // list calls ordinary is a surname: "Evan Ensign", "Germini Major".
         func surnamed(_ index: Int) -> Bool {
@@ -185,9 +191,20 @@ enum NameShape {
     /// that is no word, and with nothing around it that marks a name. The
     /// model reads shape and context, not vocabulary, so a capitalised word
     /// before a number or at a line's start looks to it like a name.
+    /// How German, Dutch, French, Spanish and Italian address a person before their name: no part of it.
+    static let addresses: Set<String> = ["frau", "herr", "herrn", "fräulein", "mevrouw", "meneer", "madame", "mademoiselle", "monsieur", "mme", "mlle",
+                                         "señora", "señor", "señorita", "signora", "signor", "signorina"]
+    /// A German article or determiner, after which a capitalised word is the noun it goes with ("eine Frage"),
+    /// and the salutation's "geehrte" before the "Damen und Herren" it greets.
+    private static let determiners: Set<String> = ["ein", "eine", "einen", "einem", "einer", "eines", "der", "die", "das", "dem", "des", "kein", "keine", "keinen",
+                                                   "mein", "meine", "meinen", "meinem", "meiner", "meines", "ihre", "ihren", "ihrem", "ihrer", "ihres", "unsere", "unseren", "unserem", "unserer",
+                                                   "seine", "seinen", "seinem", "seiner", "seines", "geehrte", "geehrten", "liebe"]
+
     static func ordinaryGuess(_ span: Span, in text: String) -> Bool {
         guard span.entity == "PERSON" else { return false }
         let parts = words(span.range, in: text)
+        if parts.count == 1, !NameLists.isFirst(parts[0].bare), !NameCues.strong(span.range, in: text), determiners.contains(parts[0].bare)
+            || Context.words(before: span.range.lowerBound, in: text, limit: 1).first.map({ determiners.contains($0.lowercased()) }) == true { return true }
         // A word opening a sentence in another language ("Zorg ervoor dat u …", "Hierzu zählen …") is
         // that language's word: only the lists, or a cue, make it someone there.
         if parts.count == 1, !NameLists.isFirst(parts[0].bare), !NameLists.isSurname(parts[0].bare), !NameCues.strong(span.range, in: text),

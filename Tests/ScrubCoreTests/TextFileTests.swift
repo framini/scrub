@@ -145,3 +145,27 @@ func doublyEscapedBodyInALogLineIsReadInside(_ name: String) throws {
         #expect(try JSONSerialization.jsonObject(with: Data(try #require(body).utf8)) is [String: Any])
     }
 }
+
+/// A German customer's letter: its salutation, its nouns after an article and the request around the
+/// applicant's name stay word for word; only the name, the birth date after "geb." and the tax ID go.
+@Test func aGermanLetterKeepsItsWordsAndLosesItsPerson() throws {
+    let letter = """
+    Betreff: Prüfung meines Kontos
+
+    Sehr geehrte Damen und Herren,
+
+    ich habe eine Frage zu meinem Konto. Bitte prüfen Sie den Antrag von Frau Wiebke Austermann, geb. 17.03.1984, wohnhaft in Bielefeld. Meine Steuer-ID ist 47136280512.
+
+    Mit freundlichen Grüßen
+    Wiebke Austermann
+    """
+    let (output, _) = try scrubText(letter)
+    for original in ["Wiebke", "Austermann", "17.03.1984", "47136280512"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    for kept in ["Betreff: Prüfung meines Kontos\n\nSehr geehrte Damen und Herren,\n\nich habe eine Frage zu meinem Konto. Bitte prüfen Sie den Antrag von Frau ",
+                 ", geb. ", ", wohnhaft in ", ". Meine Steuer-ID ist ", "\n\nMit freundlichen Grüßen\n"] {
+        #expect(output.contains(kept), "\(kept) not in \(output)")
+    }
+    // The stand-in takes the name's place and nothing around it: two words after "Frau", as the sign-off writes them.
+    let after = try #require(output.components(separatedBy: "Antrag von Frau ").last?.components(separatedBy: ", geb.").first)
+    #expect(after.split(separator: " ").count == 2 && output.hasSuffix("\n" + after), "\(output)")
+}

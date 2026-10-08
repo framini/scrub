@@ -244,7 +244,7 @@ enum Recognizers {
             .init(#"\b[1-9]\d{10}\b"#, 0.05),
             .init(#"\b[1-9]\d \d{3} \d{3} \d{3}\b"#, 0.1),
             .init(#"\b[1-9]\d{9} \d\b"#, 0.05),
-        ], context: ["steuerid", "steueridentifikationsnummer", "idnr", "identifikationsnummer"], check: { characters in
+        ], context: ["steuerid", "steueridentifikationsnummer", "idnr", "identifikationsnummer", "steuer"], check: { characters in
             guard let d = numbers(characters), d.count == 11, d[0] != 0 else { return false }
             // Exactly one digit written twice or three times, the three never all side by side (the BZSt's rule).
             let counts = Dictionary(grouping: d[0..<10], by: { $0 }).mapValues(\.count)
