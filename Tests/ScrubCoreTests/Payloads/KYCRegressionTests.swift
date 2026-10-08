@@ -486,3 +486,20 @@ func aUnitNeverDrawsAnotherAddresssUnit(_ name: String) throws {
         }
     }
 }
+
+/// A driver's licence under its initials ("dl": {"number": …}), inside a
+/// payload a check stores as escaped JSON, is replaced, and so is the same
+/// number where a note names it by "DL" alone.
+@Test(arguments: renderings)
+func driversLicenceByItsInitialsIsReplaced(_ name: String) throws {
+    let payload = #"{\"applicant\":{\"name\":\"Ottoline Wexcombe\"},\"dl\":{\"number\":\"N4829175\",\"state\":\"CA\",\"expires\":\"2025-11-30\"}}"#
+    let response = #"{"check_id":"chk_9Tq3Vx7B","payload":"\#(payload)","note":"prior DL N4829175 expired","status":"review"}"#
+    let output = try scrub(response, as: name)
+    #expect(!output.contains("N4829175"), "\(output)")
+    let note = try value(output, "note")
+    #expect(note.hasPrefix("prior DL ") && note.hasSuffix(" expired"), "\(note)")
+    let standIn = String(note.dropFirst("prior DL ".count).dropLast(" expired".count))
+    #expect(standIn.count == 8 && standIn.first!.isLetter && standIn.dropFirst().allSatisfy(\.isNumber), "\(standIn)")
+    #expect(try value(output, "payload").contains(#""number":"\#(standIn)""#), "\(output)")
+    #expect(try value(output, "status") == "review" && value(output, "check_id") == "chk_9Tq3Vx7B")
+}

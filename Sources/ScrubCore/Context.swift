@@ -80,7 +80,7 @@ public enum KeyHints {
         ("username login handle screenname nickname", "USERNAME"),
         // A ZIP code's four extra digits in a field of their own name a block or a building.
         ("zip4 plus4 zipplus4code zipext zipextension zipcodeext zipcodeextension zipaddon", "ID_NUMBER"),
-        ("nationalid nationalidnumber nationalidentifier nationalinsurancenumber nino personalnumber personalidnumber personnummer idnumber identitynumber identitycard idcard idcardnumber governmentid identitydocument passport passportnumber passportno passportid taxid taxnumber taxpayerid tin sin socialinsurancenumber driverlicense driverslicense driverlicensenumber licensenumber driverlicence driverslicence drivinglicence drivinglicense licencenumber driverlicencenumber nif nie dni cpf curp pesel bsn aadhaar documentnumber accountnumber bankaccountnumber acctnumber accountno acctno acctnum routingnumber ein creditfilenumber cpfnumber nis nisnumber cic electorkey electornumber docnumber documentno licenseplate platenumber identificationnumber idno photoid photoidnumber imsi ocr mxine ine", "ID_NUMBER")
+        ("nationalid nationalidnumber nationalidentifier nationalinsurancenumber nino personalnumber personalidnumber personnummer idnumber identitynumber identitycard idcard idcardnumber governmentid identitydocument passport passportnumber passportno passportid taxid taxnumber taxpayerid tin sin socialinsurancenumber driverlicense driverslicense driverlicensenumber dlnumber dlno dlnum licensenumber driverlicence driverslicence drivinglicence drivinglicense licencenumber driverlicencenumber nif nie dni cpf curp pesel bsn aadhaar documentnumber accountnumber bankaccountnumber acctnumber accountno acctno acctnum routingnumber ein creditfilenumber cpfnumber nis nisnumber cic electorkey electornumber docnumber documentno licenseplate platenumber identificationnumber idno photoid photoidnumber imsi ocr mxine ine", "ID_NUMBER")
     ]
     /// Every key name and the kind it hints, the registry's identifiers' keys among them (see `Recognizers`).
     private static let hints = Dictionary(uniqueKeysWithValues: groups.flatMap { names, entity in
@@ -182,7 +182,8 @@ public enum KeyHints {
     /// or a `value` written as a token is ("primary": "t7Pq9mN2sV4bX6kL").
     static func resolve(_ key: String?, parent: String?, listed: Bool = false, value: String? = nil) -> String? {
         // An identity document's own number: "document": {"number": …}, "idDocs": [{"number": …}].
-        if hint(key) == nil, documentNumbers.contains(words(key).joined()), let last = words(parent).last, identityDocuments.contains(last) { return "document_number" }
+        // A driver's licence by its initials: "dl": {"number": …}.
+        if hint(key) == nil, documentNumbers.contains(words(key).joined()), let last = words(parent).last, identityDocuments.contains(last) || ["dl", "dls"].contains(last) { return "document_number" }
         // A name's parts under its letter ("N": {"F": …, "L": …}) are read as under "name".
         guard let parentHint = hint(parent) ?? (words(parent) == ["n"] && shortNameParts[words(key).joined()] != nil ? "PERSON" : nil) else { return key }
         let own = hint(key)

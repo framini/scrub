@@ -46,8 +46,8 @@ enum Patterns {
         // A passport's, ID card's or visa's machine-readable zone: all its lines, or one (see `MachineZone`).
         ("MRZ", #"(?<![A-Za-z0-9<])(?:[A-Z0-9<]{30}(?:\r?\n|\\n|\\r\\n| )[A-Z0-9<]{30}(?:\r?\n|\\n|\\r\\n| )[A-Z0-9<]{30}|[A-Z0-9<]{44}(?:\r?\n|\\n|\\r\\n| )[A-Z0-9<]{44}|[A-Z0-9<]{36}(?:\r?\n|\\n|\\r\\n| )[A-Z0-9<]{36}|[A-Z0-9<]{44}|[A-Z0-9<]{36}|[A-Z0-9<]{30})(?![A-Za-z0-9<])"#, 0.97, [], []),
         ("US_BANK_NUMBER", #"\b\d{8,17}\b"#, 0.05, ["check", "account", "acct", "bank", "save", "debit"], []),
-        ("US_DRIVER_LICENSE", #"\b(?:[A-Z]\d{1,12}|[A-Z]{1,2}\d{5,6}|[A-Z]{2}\d{3,7}|\d{2}[A-Z]{3}\d{5,6}|[A-Z]\d{13,14}|[A-Z]\d{18}|[A-Z]\d{6}R|\d{9}[A-Z]|[A-Z]{2}\d{6}[A-Z]|\d{8}[A-Z]{2}|\d{3}[A-Z]{2}\d{4}|[A-Z]\d[A-Z]\d[A-Z]|\d{7,8}[A-Z])\b"#, 0.3, ["driver", "license", "permit", "lic", "identification", "dls", "cdls", "driving"], []),
-        ("US_DRIVER_LICENSE", #"\b(?:\d{6,14}|\d{16})\b"#, 0.01, ["driver", "license", "permit", "lic", "identification", "dls", "cdls", "driving"], []),
+        ("US_DRIVER_LICENSE", #"\b(?:[A-Z]\d{1,12}|[A-Z]{1,2}\d{5,6}|[A-Z]{2}\d{3,7}|\d{2}[A-Z]{3}\d{5,6}|[A-Z]\d{13,14}|[A-Z]\d{18}|[A-Z]\d{6}R|\d{9}[A-Z]|[A-Z]{2}\d{6}[A-Z]|\d{8}[A-Z]{2}|\d{3}[A-Z]{2}\d{4}|[A-Z]\d[A-Z]\d[A-Z]|\d{7,8}[A-Z])\b"#, 0.3, ["driver", "license", "permit", "lic", "identification", "dl", "dls", "cdls", "driving"], []),
+        ("US_DRIVER_LICENSE", #"\b(?:\d{6,14}|\d{16})\b"#, 0.01, ["driver", "license", "permit", "lic", "identification", "dl", "dls", "cdls", "driving"], []),
         ("US_PASSPORT", #"\b\d{9}\b"#, 0.05, ["passport"], []),
         ("US_PASSPORT", #"\b[A-Z]\d{8}\b"#, 0.1, ["passport"], []),
         ("US_ITIN", #"\b9\d{2}(?:[- ](?:5\d|6[0-5]|7\d|8[0-8]|9(?:[0-2]|[4-9]))\d{4}|(?:5\d|6[0-5]|7\d|8[0-8]|9(?:[0-2]|[4-9]))[- ]\d{4})\b"#, 0.05, ["individual", "taxpayer", "itin", "tax", "payer", "taxid", "tin"], []),
