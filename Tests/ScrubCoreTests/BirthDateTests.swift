@@ -33,3 +33,28 @@ func birthDatesInFreeText(_ sentence: String, _ original: String, _ shape: Strin
     #expect(a.range(of: #"^\d{2}/\d{2}/\d{4}$"#, options: .regularExpression) != nil && a != "03/14/1985")
     #expect(b.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil && b != "1985-03-14")
 }
+
+/// A support ticket that quotes the birth date two ways round, and again in
+/// words: each is the one day, its stand-in the same day in that spelling.
+@Test func aBirthDateWrittenAnotherWayInATicketIsTheSameDay() throws {
+    let ticket = """
+    Ticket #48213 - Identity check stuck in review
+    Priority: High   Assignee: support-tier2   Created: 2026-09-14 10:41 UTC
+
+    Hi Ottoline,
+
+    Your verification was flagged because the date of birth you entered, 03/07/1984, didn't match the bureau's 07/03/1984. \
+    The old card on file reads 7 March 1984. Could you confirm which is right?
+
+    Best,
+    Verification Ops
+
+    """
+    let result = try Scrubber.scrub(Data(ticket.utf8), name: "Pasted text")
+    let text = String(decoding: result.output, as: UTF8.self)
+    for original in ["03/07/1984", "07/03/1984", "7 March 1984"] { #expect(!text.contains(original), "\(original) left: \(text)") }
+    #expect(text.contains("Created: 2026-09-14 10:41 UTC"), "\(text)")
+    let entered = try #require(text.firstMatch(of: /entered, (\d{2})\/(\d{2})\/(\d{4})/))
+    let bureau = try #require(text.firstMatch(of: /bureau's (\d{2})\/(\d{2})\/(\d{4})/))
+    #expect(entered.1 == bureau.2 && entered.2 == bureau.1 && entered.3 == bureau.3, "\(text)")
+}

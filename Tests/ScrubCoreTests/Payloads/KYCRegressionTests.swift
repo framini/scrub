@@ -487,6 +487,28 @@ func aUnitNeverDrawsAnotherAddresssUnit(_ name: String) throws {
     }
 }
 
+/// A birth date a check echoes back in other spellings ("dob_variants") is the
+/// same day in each: every spelling takes the one stand-in day, written as the
+/// original was, its month's name and its year of two digits among them.
+@Test(arguments: renderings)
+func birthDateSpellingsFollowTheDate(_ name: String) throws {
+    let response = #"{"check_id":"chk_4Rz8Lm2Q","subject":{"given_name":"Ottoline","family_name":"Wexcombe","date_of_birth":"1984-03-07","dob_variants":["03/07/1984","March 7, 1984","7 March 1984","07-Mar-1984","07MAR1984","7/3/84"]},"result":{"dob_match":"PARTIAL","note":"bureau holds 07/03/1984"}}"#
+    for seed in UInt64(1)...4 {
+        let output = try scrub(response, as: name, seed: seed)
+        for original in ["1984", "March 7", "7 March", "07-Mar", "07MAR", "7/3/84"] { #expect(!output.contains(original), "\(original) left: \(output)") }
+        let iso = try value(output, "subject", "date_of_birth").split(separator: "-").compactMap { Int($0) }
+        try #require(iso.count == 3)
+        let (year, month, day) = (iso[0], iso[1], iso[2])
+        let names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+        let full = names[month - 1], short = String(full.prefix(3))
+        let expected = [String(format: "%02d/%02d/%d", month, day, year), "\(full) \(day), \(year)", "\(day) \(full) \(year)", String(format: "%02d-%@-%d", day, short, year),
+                        String(format: "%02d%@%d", day, short.uppercased(), year), "\(day)/\(month)/\(String(format: "%02d", year % 100))"]
+        let variants = try (0..<6).map { try value(output, "subject", "dob_variants", String($0)) }
+        #expect(variants == expected, "seed \(seed): \(variants) for \(iso)")
+        #expect(try value(output, "result", "note") == String(format: "bureau holds %02d/%02d/%d", day, month, year))
+    }
+}
+
 /// A driver's licence under its initials ("dl": {"number": …}), inside a
 /// payload a check stores as escaped JSON, is replaced, and so is the same
 /// number where a note names it by "DL" alone.

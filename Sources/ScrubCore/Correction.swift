@@ -226,13 +226,16 @@ struct OriginalMatcher {
         // A masked number ("*********7731") is as specific as its mask and digits together.
         if original.filter({ "*•●Xx#".contains($0) }).count >= 3, original.filter(\.isNumber).count >= 4 { return true }
         let significant = original.filter { $0.isLetter || $0.isNumber }
+        // A birth date with a year of two digits ("7/3/84") is a day, month and year, however few its digits.
+        if entity == "DATE_OF_BIRTH", original.filter({ "/-.".contains($0) }).count == 2, significant.count >= 4 { return true }
         return significant.count >= (significant.allSatisfy(\.isNumber) ? 5 : 2)
     }
     mutating func add(_ replacements: ArraySlice<Replacement>) {
         let originals = replacements.filter { Self.spreads($0.original, entity: $0.entity) }
         guard !originals.isEmpty else { return }
-        let literals = originals.map(\.original)
-        let labels = originals.map(\.entity)
+        let spelled = originals.filter { $0.entity == "DATE_OF_BIRTH" }.flatMap { BirthSpellings.of($0.original) }
+        let literals = originals.map(\.original) + spelled
+        let labels = originals.map(\.entity) + spelled.map { _ in "DATE_OF_BIRTH" }
         supplements.append((Matcher(literals, isCancelled: { Task.isCancelled }), labels))
     }
     private static func entries(_ job: Job) -> ([String], [String]) {
@@ -255,6 +258,9 @@ struct OriginalMatcher {
         for replacement in job.replacements {
             add(SensitiveOriginal(original: replacement.original, entity: replacement.entity))
         }
+        // A birth date is the person's in any spelling: "1984-03-07" written again as "March 7, 1984" or "07MAR1984".
+        let births = literals.indices.filter { labels[$0] == "DATE_OF_BIRTH" }.map { literals[$0] }
+        for birth in births { for spelling in BirthSpellings.of(birth) { add(SensitiveOriginal(original: spelling, entity: "DATE_OF_BIRTH")) } }
         return (literals, labels)
     }
     func spans(in text: String) -> [Span] {
@@ -272,6 +278,47 @@ struct OriginalMatcher {
             guard GazetteerMatcher.ordinaryWord(word) else { return true }
             return NameLists.isUnlistedWord(word) ? NameCues.namedWord(span.range, in: text) : NameCues.position(span.range, in: text)
         }
+    }
+}
+
+/// The ways one birth date is written: in numbers with its day or its month first, a year of four or two
+/// digits, padded or not; year first; and with its month's name, in full or short ("March 7, 1984",
+/// "7 Mar 1984", "07-Mar-1984", "07MAR1984"). A date that reads either way round ("03/07/1984") is spelled
+/// both ways: the other reading, written elsewhere, is the same eight digits of the same person.
+enum BirthSpellings {
+    private static let months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+    static func of(_ original: String) -> [String] {
+        let trimmed = original.trimmingCharacters(in: .whitespaces)
+        var readings: [(year: Int, month: Int, day: Int)] = []
+        if let parts = StandIns.dateParts(trimmed), let month = parts.month, let day = parts.day { readings = [(parts.year, month, day)] }
+        else if let either = StandIns.eitherWay(trimmed) { readings = [(either.year, either.first, either.second), (either.year, either.second, either.first)] }
+        var spellings: [String] = []
+        for (year, month, day) in readings where (1...12).contains(month) && (1...31).contains(day) {
+            let yy = String(format: "%02d", year % 100), mm = String(format: "%02d", month), dd = String(format: "%02d", day)
+            let full = months[month - 1], short = String(full.prefix(3))
+            let ordinal = String(day) + ((11...13).contains(day % 100) ? "th" : [1: "st", 2: "nd", 3: "rd"][day % 10] ?? "th")
+            for separator in ["/", "-", "."] {
+                spellings += ["\(year)\(separator)\(mm)\(separator)\(dd)", "\(year)\(separator)\(month)\(separator)\(day)"]
+                for y in [String(year), yy] {
+                    spellings += ["\(mm)\(separator)\(dd)\(separator)\(y)", "\(month)\(separator)\(day)\(separator)\(y)",
+                                  "\(dd)\(separator)\(mm)\(separator)\(y)", "\(day)\(separator)\(month)\(separator)\(y)"]
+                }
+            }
+            spellings += ["\(year)\(mm)\(dd)", "\(dd)\(mm)\(year)", "\(mm)\(dd)\(year)"]
+            for name in [full, short, short + "."] {
+                for d in [String(day), dd, ordinal] {
+                    spellings += ["\(name) \(d), \(year)", "\(name) \(d) \(year)", "\(d) \(name) \(year)", "\(d) \(name), \(year)"]
+                }
+                spellings += ["\(ordinal) of \(name) \(year)", "\(ordinal) of \(name), \(year)"]
+            }
+            for y in [String(year), yy] {
+                spellings += ["\(dd)-\(short)-\(y)", "\(day)-\(short)-\(y)", "\(dd)\(short)\(y)", "\(dd) \(short) \(y)"]
+            }
+            spellings += ["\(year)-\(short)-\(dd)"]
+        }
+        let folded = trimmed.lowercased()
+        var seen: Set<String> = []
+        return spellings.filter { $0.lowercased() != folded && seen.insert($0.lowercased()).inserted }
     }
 }
 

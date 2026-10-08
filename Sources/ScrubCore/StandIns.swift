@@ -1748,9 +1748,24 @@ final class StandIns {
                 return zip(pieces.map(dateLike), between + [""]).map { $0 + $1 }.joined()
             }
         }
+        // "7/3/84", "07-Mar-84": a year of two digits is drawn as its four, and written back in two.
+        if let short = original.range(of: #"(?<=^|[^\d])\d{2}(?=\s*$)"#, options: .regularExpression), original.range(of: #"\d{4}"#, options: .regularExpression) == nil,
+           Self.dateParts(String(original[..<short.lowerBound]) + "1900")?.month != nil || Self.eitherWay(String(original[..<short.lowerBound]) + "1900") != nil,
+           let yy = Int(original[short]) {
+            let century = yy <= now % 100 ? (now / 100) * 100 : (now / 100 - 1) * 100
+            let made = dateLike(String(original[..<short.lowerBound]) + String(century + yy) + original[short.upperBound...])
+            guard let four = made.range(of: #"\d{4}(?=\D*$)"#, options: .regularExpression) else { return made }
+            return String(made[..<four.lowerBound]) + made[four].suffix(2) + made[four.upperBound...]
+        }
         var year = Int.random(in: 1940...1999, using: &rng)
         var month = Int.random(in: 1...12, using: &rng)
         var day = Int.random(in: 1...28, using: &rng)
+        // Which way round a date that reads either way is, where one of its readings is a day already written another way.
+        var monthFirst: Bool?
+        if Self.dateParts(original)?.month == nil, let either = Self.eitherWay(original) {
+            if let known = days[Day(year: either.year, month: either.first, day: either.second)] { (month, day, monthFirst) = (known.month, known.day, true) }
+            else if let known = days[Day(year: either.year, month: either.second, day: either.first)] { (month, day, monthFirst) = (known.month, known.day, false) }
+        }
         // A day already written another way keeps its stand-in day.
         if let real = Self.dateParts(original), let realMonth = real.month, let realDay = real.day {
             if let known = days[Day(year: real.year, month: realMonth, day: realDay)] {
@@ -1813,14 +1828,19 @@ final class StandIns {
         if let named {
             output[named] = monthWord(like: runs[named])
             output[rest[0]] = padded(day, like: runs[rest[0]])
+            // "March 7th": the day's ordinal ending follows the stand-in day.
+            if rest[0] + 1 < runs.count, ["st", "nd", "rd", "th"].contains(runs[rest[0] + 1].lowercased()) {
+                let ending = (11...13).contains(day % 100) ? "th" : [1: "st", 2: "nd", 3: "rd"][day % 10] ?? "th"
+                output[rest[0] + 1] = runs[rest[0] + 1] == runs[rest[0] + 1].uppercased() ? ending.uppercased() : ending
+            }
         } else if yearIndex < rest[0] {
             output[rest[0]] = padded(month, like: runs[rest[0]])
             output[rest[1]] = padded(day, like: runs[rest[1]])
         } else {
             let (a, b) = (Int(runs[rest[0]]) ?? 0, Int(runs[rest[1]]) ?? 0)
-            let dayFirst = a > 12
-            // "11/07/1984" reads either way, so its stand-in must too.
-            let day = a <= 12 && b <= 12 ? Int.random(in: 1...12, using: &rng) : day
+            let dayFirst = monthFirst.map(!) ?? (a > 12)
+            // "11/07/1984" reads either way, so its stand-in must too, unless the day it is was written another way.
+            let day = a <= 12 && b <= 12 && monthFirst == nil ? Int.random(in: 1...12, using: &rng) : day
             output[rest[0]] = padded(dayFirst ? day : month, like: runs[rest[0]])
             output[rest[1]] = padded(dayFirst ? month : day, like: runs[rest[1]])
         }
