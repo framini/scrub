@@ -61,6 +61,17 @@ import Testing
         #expect(!output.contains("Kestrelfeld") && !output.contains("12b") && !output.contains("50667") && !output.contains("Nordhaven"), "[\(path)] \(output)")
     }
 
+    /// A name with a middle initial and a suffix, alone as a value or a list's line, goes whole.
+    @Test(arguments: Path.allCases)
+    func aNameWithAnInitialAndASuffixGoesWhole(_ path: Path) throws {
+        for (note, parts) in [("Dorian K. Vossberg II", ["dorian", "vossberg"]), ("Teodor F. Haddleton II", ["teodor", "haddleton"]),
+                               ("Wendell G. Ashcombe III", ["wendell", "ashcombe"]), ("Gregory G. Whitcombe III", ["gregory", "whitcombe"])] {
+            let (_, output) = try ProseNameTests.scrub(note, path)
+            let words = PersonFields.lowerWords(output)
+            #expect(parts.allSatisfy { !words.contains($0) }, "[\(path)] \(note) → \(output)")
+        }
+    }
+
     /// A suffix stays after the stand-in, its full stop with it.
     @Test func aSuffixStaysAsWritten() throws {
         let (_, output) = try ProseNameTests.scrub("Signed by Arthur Wendell King Jr. at the branch.", .text)

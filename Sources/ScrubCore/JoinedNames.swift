@@ -116,7 +116,10 @@ enum JoinedNames {
                     last.append(piece); groups[groups.count - 1] = last; tangled.insert(groups.count - 1); continue
                 }
                 let gap = word(end..<piece.range.lowerBound)
-                if !TextRanges.matches(bridge, in: gap).isEmpty || gap == ", " && last.count == 1 && labelledField(last[0].range.lowerBound..<piece.range.upperBound, in: text) {
+                // A piece that ends on an initial ("Douglas D") takes its full stop as the bridge's.
+                let initialled = gap == ". " && end >= 2 && word((end - 2)..<end).first == " " && word((end - 1)..<end).first?.isUppercase == true
+                if !TextRanges.matches(bridge, in: gap).isEmpty || initialled
+                    || gap == ", " && last.count == 1 && labelledField(last[0].range.lowerBound..<piece.range.upperBound, in: text) {
                     last.append(piece); groups[groups.count - 1] = last; continue
                 }
             }
@@ -154,6 +157,14 @@ enum JoinedNames {
         others.removeAll { span in span.entity == "LOCATION" && joinedPlaces.contains(span.range) }
         // A finding of another kind inside a joined person ("Mary" read as a place) gives way to it.
         others.removeAll { span in span.entity == "LOCATION" && people.contains { $0.range.lowerBound <= span.range.lowerBound && span.range.upperBound <= $0.range.upperBound && $0.range != span.range } }
+        // A person inside another, grown over it, is part of it.
+        func opensName(_ range: Range<Int>) -> Bool {
+            guard let opening = NameShape.words(range, in: text).first else { return false }
+            return !greetings.contains(opening.bare) && !NameShape.commands.contains(opening.bare)
+        }
+        people = people.filter { inner in
+            !people.contains { $0.range != inner.range && $0.range.lowerBound <= inner.range.lowerBound && inner.range.upperBound <= $0.range.upperBound && opensName($0.range) }
+        }
         let all = (others + people).sorted { $0.range.lowerBound < $1.range.lowerBound }
         return (all, (otherDoubts + doubted).sorted { $0.range.lowerBound < $1.range.lowerBound })
     }
@@ -187,11 +198,15 @@ enum JoinedNames {
         } else if value.last?.isLetter == true, value.contains(where: \.isLowercase) {
             // The rest of a surname after the part found: "Elif" then "Aydın", "Leonor Nogueira" then "Pinto".
             for _ in 0..<2 {
-                let rest = ns.substring(with: NSRange(location: upper, length: min(48, ns.length - upper)))
+                // After an initial ("Teodor F"), its full stop comes first.
+                let initialled = upper - lower >= 2 && ns.character(at: upper - 2) == 0x20 && Unicode.Scalar(ns.character(at: upper - 1)).map(CharacterSet.uppercaseLetters.contains) == true
+                    && upper < ns.length && ns.character(at: upper) == 0x2E
+                let from = initialled ? upper + 1 : upper
+                let rest = ns.substring(with: NSRange(location: from, length: min(48, ns.length - from)))
                 guard let match = TextRanges.matches(surnameAfter, in: rest).first else { break }
                 let word = (rest as NSString).substring(with: match.range(at: 1))
                 let pieces = word.split(whereSeparator: { "-‐".contains($0) }).map(String.init)
-                let end = upper + NSMaxRange(match.range)
+                let end = from + NSMaxRange(match.range)
                 guard pieces.allSatisfy({ given($0) && !NameLists.isWordlike($0) && (NameLists.isSurname($0) && !NameLists.isOrdinary($0) || !NameLists.isWord($0)) }),
                       Places.region(word) == nil, !Names.citiesFolded.contains(word.lowercased()), !NameTagger.partOfOrganisation(upper..<end, in: text) else { break }
                 upper = end
