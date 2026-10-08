@@ -312,7 +312,7 @@ struct OtherLanguageRecordTests {
         #expect(finding.standIn.count == date.count && finding.standIn.filter(\.isNumber).count == date.filter(\.isNumber).count, "\(name): \(finding.standIn)")
     }
 
-    /// The surname someone was born with, among their name's parts, is theirs as their family name is.
+    /// The surname someone was born with, among their name's parts, is replaced as their family name is, by a surname of its own.
     @Test func aMaidenNameAmongANamesPartsIsReplaced() throws {
         let json = #"{"parties": [{"role": "applicant", "names": {"given": "Halina", "family": "Wierzbowska", "maiden": "Grabarczyk"}, "born": "1984-02-19"}, {"role": "spouse", "names": {"given": "Ove", "family": "Lindhagen"}}]}"#
         for seed in UInt64(0)..<4 {
@@ -320,8 +320,10 @@ struct OtherLanguageRecordTests {
             let text = String(decoding: result.output, as: UTF8.self)
             for gone in ["Halina", "Wierzbowska", "Grabarczyk", "Lindhagen"] { #expect(!text.contains(gone), "seed \(seed): \(gone) left in \(text)") }
             let parties = try #require((try JSONSerialization.jsonObject(with: result.output) as? [String: Any])?["parties"] as? [[String: Any]])
-            let maiden = try #require((parties[0]["names"] as? [String: String])?["maiden"])
-            #expect(PersonFields.looksLikeName("Ann " + maiden), "seed \(seed): \(maiden)")
+            let names = try #require(parties[0]["names"] as? [String: String])
+            let maiden = try #require(names["maiden"])
+            // A surname of its own: two surnames never share one stand-in.
+            #expect(PersonFields.looksLikeName("Ann " + maiden) && maiden != names["family"], "seed \(seed): \(names)")
         }
     }
 }

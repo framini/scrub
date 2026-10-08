@@ -253,8 +253,9 @@ public enum KeyHints {
         case "PERSON":
             if ["first", "given", "givennames", "forenames", "firstnames"].contains(compact) { return "first_name" }
             if ["middle", "middlenames", "middles"].contains(compact) { return "middle_name" }
-            // A name's parts include the surname someone was born with: "names": {"family": …, "maiden": …}.
-            if ["last", "family", "familynames", "lastnames", "surnames", "maiden", "birth", "birthname"].contains(compact) { return "last_name" }
+            if ["last", "family", "familynames", "lastnames", "surnames"].contains(compact) { return "last_name" }
+            // A name's parts include the surname someone was born with: "names": {"family": …, "maiden": …}, a surname of its own.
+            if ["maiden", "birth", "birthname"].contains(compact) { return "maiden_name" }
             if ["full", "display", "formatted", "text"].contains(compact) { return "full_name" }
             if let part = shortNameParts[compact] { return part }
         case "PHONE_NUMBER" where ["number", "digits", "e164", "national", "nationalnumber", "international", "internationalnumber", "formatted", "raw", "full"].contains(compact): return parent
