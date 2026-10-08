@@ -403,14 +403,15 @@ final class People {
     }
     /// The one person known whose names hold every word of these, read in full elsewhere: "Maria Lindqvist" or
     /// "García Lindqvist, María José" for María José García Lindqvist, "A Bello Okafor" for Aisha Bello-Okafor.
-    /// Their first word given is the person's, or its initial.
+    /// Their first word given is the person's, or its initial; only someone of three names or more may be
+    /// written opening with another of them, as in "García Lindqvist, María José", since "Lee Kim" and "Kim Lee" may be two people.
     private func fuller(_ f: String?, _ l: String, _ m: String?) -> Persona? {
         let given = Self.words(f ?? ""), rest = Array(given.dropFirst()) + Self.words(m ?? "") + Self.words(l)
         guard let lead = given.first, let key = Self.words(l).last else { return nil }
         let found = (byWord[key]?.people ?? []).filter { person in
             guard let realFirst = person.realFirst, let realLast = person.realLast, let own = Self.words(realFirst).first else { return false }
             let theirs = Set(Self.words(realFirst) + Self.words(realLast) + Self.words(person.realMiddle ?? ""))
-            return (theirs.contains(lead) || lead.count == 1 && own.hasPrefix(lead)) && rest.allSatisfy(theirs.contains)
+            return (own == lead || lead.count == 1 && own.hasPrefix(lead) || theirs.count >= 3 && theirs.contains(lead)) && rest.allSatisfy(theirs.contains)
         }
         return found.count == 1 ? found[0] : nil
     }
