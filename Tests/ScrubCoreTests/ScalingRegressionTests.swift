@@ -401,8 +401,8 @@ private func namedNotes(_ count: Int) -> (text: String, spans: [Span]) {
 /// and to read the pronouns after each, not sixteen: each name is weighed against its neighbours, not every other name.
 @Test func manyPeopleInOneTextScaleLinearly() {
     let small = namedNotes(1_000), large = namedNotes(4_000)
-    let (joinedShort, joinedLong) = settled({ _ = JoinedNames.joined(small.spans, [], in: small.text) },
-                                            { _ = JoinedNames.joined(large.spans, [], in: large.text) }, until: { $1 < $0 * 6 })
+    let (joinedShort, joinedLong) = settled({ for _ in 0..<5 { _ = JoinedNames.joined(small.spans, [], in: small.text) } },
+                                            { for _ in 0..<5 { _ = JoinedNames.joined(large.spans, [], in: large.text) } }, until: { $1 < $0 * 6 })
     print("joined names debug: 1000=\(joinedShort), 4000=\(joinedLong)")
     #expect(joinedLong < joinedShort * 6)
     let (observedShort, observedLong) = settled({ Job(seed: 3).observeSpans([(small.text, small.spans)]) },
@@ -430,4 +430,45 @@ private func namedNotes(_ count: Int) -> (text: String, spans: [Span]) {
         }
     }
     #expect(differing.isEmpty, "\(differing.prefix(3))")
+}
+
+/// A chat four times as long, its speakers mentioned with "@" on every line, takes about four times as long
+/// to find who speaks, not sixteen: each mention is looked up among the speakers found, not compared with each.
+@Test func chatMentionsScaleLinearly() {
+    let speakers = ["ingrid", "tomasz", "deepa", "yaw", "odalys", "kwabena", "saoirse", "teodoro"]
+    func chat(_ count: Int) -> String {
+        (0..<count).map { "[\(String(format: "%02d:%02d", 9 + $0 / 60 % 10, $0 % 60))] \(speakers[$0 % speakers.count]): @\(speakers[($0 * 5 + 3) % speakers.count]) can you look at build \($0)?" }.joined(separator: "\n")
+    }
+    let small = chat(1_000), large = chat(4_000)
+    #expect(ListedNames.spoken(in: small).sure.count == 2_000)
+    let (short, long) = settled({ for _ in 0..<8 { _ = ListedNames.spoken(in: small) } }, { for _ in 0..<8 { _ = ListedNames.spoken(in: large) } }, until: { $1 < $0 * 6 })
+    print("chat mentions debug: 1000=\(short), 4000=\(long)")
+    #expect(long < short * 6)
+}
+
+/// A support log four times as long, each ticket from someone whose email spells their name and who is
+/// named again at a sentence's end, takes about four times as long to find those names, not sixteen:
+/// each name the emails spell is read once where it is written, and the full stop after it on its own.
+@Test func namesSpelledByEmailsScaleLinearly() {
+    let firsts = ["Odalys", "Teodoro", "Marisol", "Kwabena", "Ingrid", "Tobiah", "Saoirse", "Leocadia"]
+    let syllables = ["bran", "dol", "vik", "ster", "mor", "quil", "tren", "fal", "wick", "hal", "gon", "rith"]
+    func log(_ count: Int) -> (text: String, spans: [Span]) {
+        var text = "", spans: [Span] = []
+        for index in 0..<count {
+            let first = firsts[index % firsts.count]
+            let last = (syllables[index / firsts.count % syllables.count] + syllables[index / 96 % syllables.count] + ["", "son", "ley", "ard"][index / 1_152 % 4]).capitalized
+            let email = "\(first.lowercased()).\(last.lowercased())@example.com"
+            let line = "ticket \(40_000 + index) from \(first) \(last) <\(email)>: card declined, spoke with \(first) \(last).\n"
+            let start = (text as NSString).length + (line.components(separatedBy: "<")[0] as NSString).length + 1
+            spans.append(Span(range: start..<(start + (email as NSString).length), entity: "EMAIL_ADDRESS", score: 1))
+            text += line
+        }
+        return (text, spans)
+    }
+    let small = log(1_000), large = log(4_000)
+    #expect(Detector.spelledByEmail(small.spans, in: small.text).count == 1_000)
+    let (short, long) = settled({ for _ in 0..<3 { _ = Detector.spelledByEmail(small.spans, in: small.text) } },
+                                { for _ in 0..<3 { _ = Detector.spelledByEmail(large.spans, in: large.text) } }, until: { $1 < $0 * 6 })
+    print("spelled names debug: 1000=\(short), 4000=\(long)")
+    #expect(long < short * 6)
 }

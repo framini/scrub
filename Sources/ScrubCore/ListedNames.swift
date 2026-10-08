@@ -116,9 +116,10 @@ enum ListedNames {
                 sure += unknown + worded.flatMap { lines[$0]!.map { Span(range: $0, entity: "PERSON", score: cuedScore) } }
                 // A speaker mentioned with "@" ("@yaw can you look") is that speaker.
                 let speakers = Set(sure.map { TextRanges.substring(text, $0.range).lowercased() })
+                var taken = Set(sure.map(\.range))
                 for match in TextRanges.matches(mention, in: text, isCancelled: isCancelled) where speakers.contains(ns.substring(with: match.range(at: 1)).lowercased()) {
                     let range = match.range(at: 1).location..<NSMaxRange(match.range(at: 1))
-                    if !sure.contains(where: { $0.range == range }) { sure.append(Span(range: range, entity: "PERSON", score: cuedScore)) }
+                    if taken.insert(range).inserted { sure.append(Span(range: range, entity: "PERSON", score: cuedScore)) }
                 }
             } else { unsure += doubted(unknown.filter { span in lines[TextRanges.substring(text, span.range)]?.count ?? 0 >= 2 && transcript }) }
         }

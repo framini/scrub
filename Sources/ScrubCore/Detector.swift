@@ -276,17 +276,23 @@ public final class Detector {
             // what names a person in chat ("spoke to will"), is asked about.
             let spoken = ListedNames.spoken(in: text, isCancelled: isCancelled)
             spans.append(contentsOf: spoken.sure)
-            doubts += spoken.unsure.filter { span in !spans.contains { $0.range.overlaps(span.range) } }
+            if !spoken.unsure.isEmpty {
+                var taken = IndexSet()
+                for span in spans { taken.insert(integersIn: span.range) }
+                doubts += spoken.unsure.filter { !taken.intersects(integersIn: $0.range) }
+            }
             // A given name before a hyphenated surname the tagger read in pieces ("Brisa Smith-Jones").
             spans.append(contentsOf: ListedNames.hyphenated(in: text, people: spans.filter { $0.entity == "PERSON" }.map(\.range), organisations: organisations, isCancelled: isCancelled).filter { span in
                 !unsaid.contains { $0.overlaps(span.range) }
             })
             // A given name and a surname with its particles that no reader found ("Caio dos Santos").
             // It only fills a gap: a person found over any of it is read as found.
-            let found = spans.filter { ["PERSON", "ADDRESS"].contains($0.entity) }.map(\.range)
-            spans.append(contentsOf: JoinedNames.particled(in: text, places: spans.filter { $0.entity == "LOCATION" }.map(\.range), isCancelled: isCancelled).filter { span in
-                !unsaid.contains { $0.overlaps(span.range) } && !found.contains { $0.overlaps(span.range) }
-            })
+            let particled = JoinedNames.particled(in: text, places: spans.filter { $0.entity == "LOCATION" }.map(\.range), isCancelled: isCancelled)
+            if !particled.isEmpty {
+                var found = IndexSet()
+                for span in spans where ["PERSON", "ADDRESS"].contains(span.entity) { found.insert(integersIn: span.range) }
+                spans.append(contentsOf: particled.filter { span in !unsaid.contains { $0.overlaps(span.range) } && !found.intersects(integersIn: span.range) })
+            }
             // Names in capitals beside a first name or a title ("Julie BEET", "Ms BEET").
             spans.append(contentsOf: CapitalNames.scan(text, isCancelled: isCancelled).filter { span in !unsaid.contains { $0.overlaps(span.range) } })
             // The name model only fills gaps: where anything else found something, that finding stands.
@@ -418,6 +424,8 @@ public final class Detector {
         // Every word's place once; only a word as long as some email's first word is read: each
         // email's first word is looked up, not searched for.
         let ns = text as NSString
+        var inEmail = IndexSet()
+        for email in emails { inEmail.insert(integersIn: email.range) }
         let lengths = Set(spelled.map { ($0[0] as NSString).length })
         var words: [Range<Int>] = []
         var at: [String: [Int]] = [:]
@@ -433,23 +441,28 @@ public final class Detector {
             }
         }
         func word(_ range: Range<Int>) -> String { ns.substring(with: NSRange(location: range.lowerBound, length: range.count)).lowercased() }
-        var found: [Span] = []
-        for parts in spelled {
-            for first in at[parts[0]] ?? [] where first + parts.count <= words.count {
-                let run = words[first..<(first + parts.count)].map { (word: word($0), range: $0) }
-                guard zip(run, parts).allSatisfy({ $0.word == $1 }) else { continue }
-                // Written as words: only spaces between them, and not inside an email or handle.
-                let between = zip(run, run.dropFirst()).allSatisfy { a, b in ns.substring(with: NSRange(location: a.range.upperBound, length: b.range.lowerBound - a.range.upperBound)).allSatisfy { $0 == " " || $0 == "\t" } }
-                let range = run.first!.range.lowerBound..<run.last!.range.upperBound
-                let edge = { (index: Int) in index >= 0 && index < ns.length && "@._".utf16.contains(ns.character(at: index)) }
-                // A file's name is the name and its extension: "2025 return - Genevieve Oduya.ledger".
-                let extended = range.upperBound < ns.length && ns.character(at: range.upperBound) == 46
-                    && ns.substring(from: range.upperBound).range(of: #"^\.[A-Za-z0-9]{1,8}(?![\p{L}\p{N}@._-])"#, options: .regularExpression) != nil
-                guard between, !edge(range.lowerBound - 1), !edge(range.upperBound) || extended, !emails.contains(where: { $0.range.overlaps(range) }) else { continue }
-                found.append(Span(range: range, entity: "PERSON", score: 0.9))
+        // Each run of words some email spells is read once where its first word is written, whichever emails spell it.
+        let spellings = Set(spelled.map { $0.joined(separator: " ") })
+        var written: [String: [Span]] = [:]
+        for (opening, sizes) in Dictionary(grouping: spelled, by: { $0[0] }).mapValues({ Set($0.map(\.count)).sorted() }) {
+            for first in at[opening] ?? [] {
+                for size in sizes where first + size <= words.count {
+                    let run = words[first..<(first + size)].map { (word: word($0), range: $0) }
+                    let spelling = run.map(\.word).joined(separator: " ")
+                    guard spellings.contains(spelling) else { continue }
+                    // Written as words: only spaces between them, and not inside an email or handle.
+                    let between = zip(run, run.dropFirst()).allSatisfy { a, b in ns.substring(with: NSRange(location: a.range.upperBound, length: b.range.lowerBound - a.range.upperBound)).allSatisfy { $0 == " " || $0 == "\t" } }
+                    let range = run.first!.range.lowerBound..<run.last!.range.upperBound
+                    let edge = { (index: Int) in index >= 0 && index < ns.length && "@._".utf16.contains(ns.character(at: index)) }
+                    // A file's name is the name and its extension: "2025 return - Genevieve Oduya.ledger".
+                    let extended = range.upperBound < ns.length && ns.character(at: range.upperBound) == 46
+                        && ns.substring(with: NSRange(location: range.upperBound, length: min(32, ns.length - range.upperBound))).range(of: #"^\.[A-Za-z0-9]{1,8}(?![\p{L}\p{N}@._-])"#, options: .regularExpression) != nil
+                    guard between, !edge(range.lowerBound - 1), !edge(range.upperBound) || extended, !inEmail.intersects(integersIn: range) else { continue }
+                    written[spelling, default: []].append(Span(range: range, entity: "PERSON", score: 0.9))
+                }
             }
         }
-        return found
+        return spelled.flatMap { written[$0.joined(separator: " ")] ?? [] }
     }
     /// A person's full name closing a file's name before its extension ("2025 return - Genevieve
     /// Oduya.ledger", "Lease_Odalys_Ferriter.pdf"), which no reader takes for a name with the
