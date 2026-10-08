@@ -525,3 +525,19 @@ func driversLicenceByItsInitialsIsReplaced(_ name: String) throws {
     #expect(try value(output, "payload").contains(#""number":"\#(standIn)""#), "\(output)")
     #expect(try value(output, "status") == "review" && value(output, "check_id") == "chk_9Tq3Vx7B")
 }
+
+/// An address in Japan, on one line under "address_full" and in its street's
+/// part alone, is replaced by another address in Japan written the same way:
+/// a postcode after its mark, a prefecture and ward, a block's numbers, a
+/// building and its room. No part of the original is left.
+@Test(arguments: renderings)
+func anAddressInJapanTakesAnotherInItsLayout(_ name: String) throws {
+    let response = #"{"check_id":"chk_2Jp8Wq4N","subject":{"name":"Haruka Tsukimori","address_full":"〒150-0002 東京都渋谷区渋谷2丁目21-1 ソラノマンション 805号室","previous_address":{"street":"東京都目黒区青葉台3丁目6-28","country":"JP"}},"result":{"address_match":"FULL"}}"#
+    let output = try scrub(response, as: name)
+    for piece in ["150-0002", "渋谷", "ソラノ", "805号室", "目黒", "青葉台", "6-28"] { #expect(!output.contains(piece), "\(piece) left: \(output)") }
+    let full = try value(output, "subject", "address_full")
+    #expect(full.wholeMatch(of: /〒\d{3}-\d{4} \p{Han}+\d+丁目\d+-\d+ \S+ \d+号室/) != nil, "\(full)")
+    let street = try value(output, "subject", "previous_address", "street")
+    #expect(street.wholeMatch(of: /\p{Han}+\d+丁目\d+-\d+/) != nil, "\(street)")
+    #expect(try value(output, "subject", "previous_address", "country") == "JP" && value(output, "result", "address_match") == "FULL")
+}

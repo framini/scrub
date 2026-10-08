@@ -1106,6 +1106,44 @@ final class StandIns {
         assigned[key] = written
         return written
     }
+    /// An address as Japan writes one: a postcode after its mark, or a prefecture's or a
+    /// ward's name before a block's number ("東京都渋谷区…2丁目21-1").
+    static func japanese(_ original: String) -> Bool {
+        original.contains("〒") || original.range(of: #"(?:都|道|府|県|市|区)\p{Han}{0,4}?\d+(?:丁目|-|番)"#, options: .regularExpression) != nil
+    }
+    /// Prefectures with a city or ward in them, and a town each.
+    private static let japaneseLocalities: [(String, String)] = [("大阪府大阪市北区", "梅田"), ("神奈川県横浜市中区", "山下町"), ("愛知県名古屋市中区", "栄"), ("福岡県福岡市中央区", "天神"),
+                                                                ("北海道札幌市中央区", "大通西"), ("京都府京都市左京区", "下鴨"), ("宮城県仙台市青葉区", "一番町"), ("広島県広島市中区", "紙屋町")]
+    private static let japaneseBuildings = ["サクラハイツ", "グリーンコート", "メゾン青葉", "パークサイド", "コーポ松風", "リバーテラス"]
+    /// Another address in Japan, each part the original writes in its place: a postcode after
+    /// "〒", a prefecture with its city or ward and a town, a block's numbers, a building and its room.
+    private func japaneseAddress(like original: String) -> String {
+        func digits(_ count: Int) -> String { String((0..<count).map { _ in Character(String(Int.random(in: 0...9, using: &rng))) }) }
+        let locality = pick(Self.japaneseLocalities) ?? Self.japaneseLocalities[0]
+        var pieces: [String] = []
+        var rest = original.startIndex
+        if let postcode = original.range(of: #"〒?\s*\d{3}-?\d{4}"#, options: .regularExpression) {
+            rest = postcode.upperBound
+            let written = original[postcode]
+            pieces.append((written.hasPrefix("〒") ? "〒" : "") + (written.contains("-") ? "\(Int.random(in: 100...999, using: &rng))-\(digits(4))" : "\(Int.random(in: 100...999, using: &rng))\(digits(4))"))
+        }
+        var place = locality.0 + locality.1
+        if let block = original.range(of: #"\d+丁目\d+(?:-\d+)?(?:番地?\d*号?)?|\d+-\d+(?:-\d+)?"#, options: .regularExpression, range: rest..<original.endIndex) {
+            let written = String(original[block])
+            place += written.contains("丁目") ? "\(Int.random(in: 1...6, using: &rng))丁目\(Int.random(in: 1...30, using: &rng))-\(Int.random(in: 1...20, using: &rng))"
+                : "\(Int.random(in: 1...6, using: &rng))-\(Int.random(in: 1...30, using: &rng))" + (written.filter { $0 == "-" }.count == 2 ? "-\(Int.random(in: 1...20, using: &rng))" : "")
+        }
+        pieces.append(place)
+        // A building's name in katakana, or one ending in a word for a building ("ヒカリエマンション", "青葉荘").
+        if original.range(of: #"\s[\p{Katakana}ー]{3,}|(?:マンション|ハイツ|コーポ|ビル|レジデンス|タワー|荘|アパート)"#, options: .regularExpression) != nil {
+            pieces.append(pick(Self.japaneseBuildings) ?? "サクラハイツ")
+        }
+        if original.range(of: #"\d+号室"#, options: .regularExpression) != nil {
+            pieces.append("\(Int.random(in: 1...12, using: &rng))0\(Int.random(in: 1...9, using: &rng))号室")
+        }
+        // Spaced as the original is between its parts, or run together.
+        return pieces.joined(separator: original.contains(" ") || original.contains("　") ? (original.contains("　") ? "　" : " ") : "")
+    }
     private static let buildingWords: Set<String> = ["house", "court", "lodge", "cottage", "mansions", "building", "point", "tower", "hall", "barn", "farm", "works", "mill", "place", "wharf",
                                                      "apartments", "residency", "towers", "enclave", "heights", "complex", "plaza", "centre", "center", "hub", "residences", "suites", "yard",
                                                      "forge", "granary", "rectory", "chambers", "studios", "park"]
@@ -1518,6 +1556,8 @@ final class StandIns {
         case "LOCATION": return pick(Names.cities.filter { !originals.contains($0.lowercased()) }) ?? "Austin"
         case "REGION": return pick(Places.regions.filter { $0.country == "US" && !originals.contains($0.code.lowercased()) && !originals.contains($0.name.lowercased()) }).map { original.count > 3 ? $0.name : $0.code } ?? "TX"
         case "ADDRESS":
+            // "〒150-0002 東京都渋谷区渋谷2丁目21-1 …": another address in Japan, written as the original is.
+            if Self.japanese(original) { return japaneseAddress(like: original) }
             // "PO Box 7712, Halifax NS B3K 5M2" is a box and a locality, each rewritten.
             if let parsed = AddressBlock.read(original), parsed.pieces.count > 1 { return block(original, parsed) }
             if let unit = unit(original) { return unit }

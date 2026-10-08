@@ -151,7 +151,7 @@ public enum KeyHints {
     private static let digest = TextPattern(#"^(?:[0-9a-f]{32}|[0-9a-f]{40}|[0-9a-f]{64}|[0-9a-f]{128}|[0-9A-F]{32}|[0-9A-F]{40}|[0-9A-F]{64})$"#)
     /// A hash's hex digest ("5d2a9e0f7c13b48e6a0f9d21c7b3e845"): under a person's key, their value hashed, which looks them up as well as the value.
     static func isDigest(_ value: String) -> Bool { !TextRanges.matches(digest, in: value).isEmpty }
-    private static let displayWords: Set<String> = ["display", "displayed", "formatted", "pretty", "readable", "text", "string", "str", "iso",
+    private static let displayWords: Set<String> = ["display", "displayed", "formatted", "full", "pretty", "readable", "text", "string", "str", "iso",
                                                       // A field as a document writes it in a script or a language: "last_name_en", "firstNameLatin".
                                                       "en", "eng", "english", "latin", "local", "native", "translit", "transliterated", "romanized", "romanised", "ascii", "original"]
     private static let phoneQualifiers: Set<String> = ["secondary", "alternate", "alt", "other", "personal", "private", "business", "emergency", "direct", "day", "evening", "night"]
