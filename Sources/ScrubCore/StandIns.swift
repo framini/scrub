@@ -152,8 +152,9 @@ final class StandIns {
         let sameDigits = digitKey(digitKind, original).flatMap { assigned[$0] }.flatMap { pour($0, into: original) }.flatMap { checked($0, identity) }
         for attempt in 0..<8 {
             // A number a bare "last4" ends keeps its fourth-last digit off zero, before
-            // it is judged: the ending it is judged by is the one written.
-            let candidate = barelyEnding(actual, original, attempt == 0 ? sameDigits ?? make(digitKind, original, persona, place) : make(digitKind, original, persona, place))
+            // it is judged: the ending it is judged by is the one written. The same number
+            // written again keeps the digits it already took, whatever its ending.
+            let candidate = attempt == 0 ? sameDigits ?? barelyEnding(actual, original, make(digitKind, original, persona, place)) : barelyEnding(actual, original, make(digitKind, original, persona, place))
             // A persona's name is fixed; only a fresh value can be drawn again.
             // A part of a stand-in place may match someone else's real one: a state code or ZIP names no one.
             let free = place != nil && ["REGION", "POSTAL_CODE", "TIME_ZONE", "LATITUDE", "LONGITUDE"].contains(actual) && candidate.caseInsensitiveCompare(original) != .orderedSame
@@ -1405,7 +1406,7 @@ final class StandIns {
         let fake = String(original[..<start]) + String(original[start..<significant].map { character in
             character.isASCII && character.isNumber ? iterator.next() ?? character : character
         }) + original[significant...]
-        let kept = barelyEnding(entity, original, fake)
+        let kept = shared == nil ? barelyEnding(entity, original, fake) : fake
         if let digitKey = digitKey(entity, whole), assigned[digitKey] == nil { assigned[digitKey] = normalized(entity, kept) }
         assigned[key] = kept
         return kept

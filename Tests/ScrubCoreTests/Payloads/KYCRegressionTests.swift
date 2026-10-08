@@ -418,3 +418,18 @@ func ssnStandInIsIssuableWhole(_ name: String) throws {
         }
     }
 }
+
+/// One SSN written spaced, dashed in a note and ended by "ssn_last4" takes
+/// one stand-in in every spelling, its note's included.
+@Test(arguments: renderings)
+func ssnSpellingsShareOneStandIn(_ name: String) throws {
+    let response = #"{"RequestId":"0e7eb179-f0b1-4546-9239-7b7693e9bc34","Subject":{"FirstName":"Jiwon","LastName":"Hallorann","Tin":"329 69 1435","SsnLast4":"1435","MaskedSsn":"XXX-XX-1435","Identifiers":[{"Type":"SSN","Value":"329 69 1435"}]},"Results":{"SsnMatch":"PARTIAL","Score":981},"Notes":["SSN on file ends in 1435; customer read back 329-69-1435."]}"#
+    for seed in UInt64(1)...60 {
+        let output = try scrub(response, as: name, seed: seed).replacingOccurrences(of: #"'\''"#, with: "'")
+        let tin = try value(output, "Subject", "Tin").filter(\.isNumber)
+        let note = try value(output, "Notes", "0")
+        let dashed = note.split(separator: " ").last.map { $0.filter(\.isNumber) } ?? ""
+        #expect(tin.count == 9 && tin != "329691435" && dashed == tin, "seed \(seed): \(tin) vs \(note)")
+        #expect(try value(output, "Subject", "SsnLast4") == String(tin.suffix(4)))
+    }
+}
