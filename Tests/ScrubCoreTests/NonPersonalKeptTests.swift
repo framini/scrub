@@ -533,4 +533,29 @@ struct NonPersonalKeptTests {
             }
         }
     }
+
+    @Test func aShopNamedForItsFounderStaysAMerchant() throws {
+        // A card payment's description, a shop's name, its store's number and its town, was read as a
+        // person and an address ("JUSTIN BROWN 2519 DEN HAAG"), and the same shop as the counterparty.
+        let account = """
+        {
+          "account": {"holder": "Liesbeth Wondergem", "iban": "NL91ABNA0417164300"},
+          "transactions": [
+            {"date": "2026-10-01", "amount": -45.90, "description": "WILLEM KORTENHOEF 1043 AMSTERDAM", "counterparty": "Willem Kortenhoef"},
+            {"date": "2026-10-02", "amount": -12.00, "description": "Fennick & Daughters 207 Rotterdam", "counterparty": "Fennick & Daughters"},
+            {"date": "2026-10-03", "amount": -250.00, "description": "Transfer to Maarten Veldkamp rent October", "counterparty": "Maarten Veldkamp"}
+          ]
+        }
+        """
+        for seed: UInt64 in 1...3 {
+            for name in ["account.json", "Pasted text"] {
+                let output = try Self.scrub(account, name: name, seed: seed)
+                for kept in [#""WILLEM KORTENHOEF 1043 AMSTERDAM", "counterparty": "Willem Kortenhoef""#, "Fennick & Daughters 207 Rotterdam"] {
+                    #expect(output.contains(kept), "[\(name) seed \(seed)] \(kept): \(output)")
+                }
+                // A person paid by name is still a person, and so is the account's holder.
+                for gone in ["Maarten", "Veldkamp", "Liesbeth", "Wondergem"] { #expect(!output.contains(gone), "[\(name) seed \(seed)] \(gone): \(output)") }
+            }
+        }
+    }
 }

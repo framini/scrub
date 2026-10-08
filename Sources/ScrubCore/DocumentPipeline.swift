@@ -194,6 +194,7 @@ enum DocumentPipeline {
 
     static func run(_ given: [DocumentLeaf], job: Job, forceFullDetection: Bool = false, progress: (Stage, Int, Int) -> Void = { _, _, _ in }) throws -> [DocumentValue] {
         let leaves = byPerson(given)
+        let merchants = merchantLeaves(leaves)
         var (gazetteer, values, emptyBases) = try detectAndPrepare(leaves, job: job, progress: progress)
         try Scrubber.checkCancellation()
         var active = Array(repeating: true, count: values.count)
@@ -214,7 +215,8 @@ enum DocumentPipeline {
                 job.enter(value: index, records: leaves[index].enclosing, part: leaves[index].datePart, object: leaves[index].objectPath, naming: leaves[index].naming, kind: leaves[index].decided)
                 var held = previous.held
                 let (text, marks, unresolved) = try Correction.run(previous.text, marks: previous.marks, job: job, matcher: originals, gazetteer: gazetteer, gate: gate, passes: 1, base: reusable ? [] : nil, held: &held,
-                                                                   sparing: Set(leaves[index].nonPersonal ? ["SECRET"] : []).union(leaves[index].machineAddress ? ["IP_ADDRESS"] : []))
+                                                                   sparing: Set(leaves[index].nonPersonal ? ["SECRET"] : []).union(leaves[index].machineAddress ? ["IP_ADDRESS"] : [])
+                                                                    .union(merchants.contains(index) ? merchantKinds : []))
                 if text != previous.text { changed = true; changedIndices.append(index) }
                 values[index] = DocumentValue(text: text, marks: marks, unresolved: unresolved, held: held)
             }
@@ -382,6 +384,7 @@ enum DocumentPipeline {
             founds[index] = found
         }
         Fields.decide(leaves, &founds)
+        for index in merchantLeaves(leaves) { founds[index].removeAll { merchantKinds.contains($0.entity) } }
         if placesStandAlone(leaves, founds, doubts) {
             for index in founds.indices {
                 guard standsAsPlace(leaves[index]) else { continue }
@@ -432,6 +435,32 @@ enum DocumentPipeline {
         let ns = text as NSString
         guard Patterns.privateAddress(TextRanges.substring(text, range)), let key = Patterns.keyBefore(ns, range.lowerBound) else { return false }
         return !Set(KeyHints.words(key)).isDisjoint(with: Patterns.infrastructureWords)
+    }
+    private static let merchantKinds: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME", "ADDRESS", "LOCATION"]
+    /// A card payment's description as a bank writes it: the shop's name, its store's number and its town ("FENWICK GROCERS 1043 AMSTERDAM").
+    private static let storeLine = TextPattern(#"^([A-Za-z][A-Za-z'&.\- ]*?[A-Za-z.]) +#?\d{2,6} +([A-Za-z][A-Za-z'\- ]*[A-Za-z])$"#)
+    private static let transactionWords: Set<String> = ["transaction", "transactions", "txn", "txns", "payment", "payments", "purchase", "purchases", "merchant", "card", "statement", "entries", "entry"]
+    /// The values of a transaction that name its merchant: a description written as a shop's name, its store's number and a town
+    /// Scrub knows, and a value of the same transaction that writes that name alone ("counterparty": "Fenwick Grocers").
+    /// A transfer to a person names them with no store's number, so it is read as any value is.
+    static func merchantLeaves(_ leaves: [DocumentLeaf]) -> Set<Int> {
+        var found: Set<Int> = [], names: [Int: Set<String>] = [:]
+        for (index, leaf) in leaves.enumerated() {
+            guard let record = leaf.lastRecord, let field = leaf.field, leaf.key == nil || KeyHints.hint(leaf.key) == nil,
+                  !Set(field.split(separator: ".").flatMap { KeyHints.words(String($0)) }).isDisjoint(with: transactionWords),
+                  let match = TextRanges.matches(storeLine, in: leaf.text.trimmingCharacters(in: .whitespaces)).first else { continue }
+            let text = leaf.text.trimmingCharacters(in: .whitespaces) as NSString
+            let town = text.substring(with: match.range(at: 2))
+            func same(_ city: String) -> Bool { city.caseInsensitiveCompare(town) == .orderedSame }
+            guard Places.all.contains(where: { same($0.city) }) || Places.abroad.contains(where: { same($0.city) }) else { continue }
+            found.insert(index)
+            names[record, default: []].insert(text.substring(with: match.range(at: 1)).lowercased())
+        }
+        guard !names.isEmpty else { return found }
+        for (index, leaf) in leaves.enumerated() {
+            if let record = leaf.lastRecord, names[record]?.contains(leaf.text.trimmingCharacters(in: .whitespaces).lowercased()) == true { found.insert(index) }
+        }
+        return found
     }
     private static let placeKinds: Set<String> = ["LOCATION", "REGION"]
     /// Whether the document's places are all it holds of anyone's: no person, street, postcode
