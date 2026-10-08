@@ -59,8 +59,10 @@ struct DocumentLeaf: Sendable {
     init(_ text: String, key: String? = nil, records: [Int] = [], contextWords: Set<String> = [], numericEntity: String? = nil, fieldName: Bool = false, objectPath: String = "") {
         self.objectPath = objectPath
         self.text = text
-        self.key = numericEntity != nil || KeyHints.fits(key, text) ? key : nil
-        addressKey = self.key == nil && numericEntity == nil && (KeyHints.numberlessLine(key, text) || KeyHints.regionCode(key, text)) ? key : nil
+        // A note written after the value ("128 -- gate code on file") says nothing of what the value is.
+        let judged = numericEntity == nil ? KeyHints.judged(key, text) : text
+        self.key = numericEntity != nil || KeyHints.fits(key, judged) ? key : nil
+        addressKey = self.key == nil && numericEntity == nil && (KeyHints.numberlessLine(key, judged) || KeyHints.regionCode(key, judged)) ? key : nil
         self.rawKey = KeyHints.hint(key) == nil ? key : nil
         datePart = rawKey == nil ? KeyHints.datePart(self.key) : nil
         self.records = RecordPath(records)
@@ -885,10 +887,18 @@ enum DocumentPipeline {
                 // Records repeat their values ("level": "info"): one read the model had no part in
                 // is the same wherever its text, key and words are.
                 var reads: [ReadKey: (spans: [Span], doubts: [Span])] = [:]
+                var notes: [Int: [Span]] = [:]
                 for index in start..<end {
                     if cancelled.isSet { return }
                     let leaf = leaves[index]
-                    if leaf.numericEntity != nil || KeyHints.hint(leaf.key) != nil && !leaf.text.isEmpty { local.append(nil) }
+                    if leaf.numericEntity != nil || KeyHints.hint(leaf.key) != nil && !leaf.text.isEmpty {
+                        local.append(nil)
+                        // A note written after the field's value ("128 -- call Odalys first") is read as any text is.
+                        if leaf.numericEntity == nil, case let head = KeyHints.judged(leaf.key, leaf.seen), case let cut = (head as NSString).length, cut < (leaf.seen as NSString).length {
+                            let note = TextRanges.substring(leaf.seen, cut..<(leaf.seen as NSString).length)
+                            notes[index] = detector.read(note).spans.map { Span(range: ($0.range.lowerBound + cut)..<($0.range.upperBound + cut), entity: $0.entity, score: $0.score) }
+                        }
+                    }
                     else if leaf.fieldName { local.append(Patterns.find(leaf.seen, isCancelled: { cancelled.isSet })) }
                     else {
                         let key = context[index] == nil ? ReadKey(text: leaf.seen, key: leaf.key, contextWords: leaf.contextWords, naming: leaf.namingWords) : nil
@@ -904,7 +914,10 @@ enum DocumentPipeline {
                     }
                 }
                 // Where detection leaves a value to its key, the key's spans.
-                let keys = zip(local, leaves[start..<end]).map { found, leaf in found ?? (leaf.text.isEmpty ? [] : Detector.keyed(leaf.seen, key: leaf.key) ?? []) }
+                let keys = zip(local, start..<end).map { found, index in
+                    let leaf = leaves[index]
+                    return found ?? ((leaf.text.isEmpty ? [] : Detector.keyed(leaf.seen, key: leaf.key) ?? []) + (notes[index] ?? []))
+                }
                 results.withLock { $0.replaceSubrange(start..<end, with: local) }
                 keyed.withLock { $0.replaceSubrange(start..<end, with: keys) }
                 if !doubts.isEmpty { doubted.withLock { all in for (index, found) in doubts { all[index] = found } } }

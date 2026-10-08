@@ -87,6 +87,8 @@ final class JSONDocument {
         /// Values under a bare "name", by path, written as a person's though nothing says they are (see `KeyHints.writtenAsName`).
         private var unsureNames: Set<String> = []
         private var doubtedNames: Set<String> = []
+        /// The lists of a record whose kind says it is one person's ({"entityType": "INDIVIDUAL", "secondaryFields": […]}).
+        private var individualLists: Set<String> = []
         /// Every value each field writes, strings and numbers alike, and the strings' leaves.
         private var population: [String: [String]] = [:]
         private var fieldStrings: [String: [Int]] = [:]
@@ -111,6 +113,30 @@ final class JSONDocument {
             }
         }
 
+        /// Whether a record's kind says it is one person's: {"entityType": "INDIVIDUAL"}, {"type": "person"}.
+        private static func individual(_ pairs: [(String, JSONValue)]) -> Bool {
+            pairs.contains { pair in
+                RecordIDs.typeKeys.contains(KeyHints.words(pair.0).joined())
+                    && pair.1.stringValue.map { ["individual", "person", "naturalperson", "privateperson"].contains(KeyHints.words($0).joined()) } == true
+            }
+        }
+        /// Keys that say which of a person's fields a coded record holds ("typeId": "PF_13").
+        private static let fieldTypeKeys: Set<String> = ["typeid", "type", "typecode", "fieldtype", "fieldtypeid", "fieldid", "code"]
+        /// The keys such a record writes its value under: "value", "dateTimeValue".
+        private static let codedValueKeys: Set<String> = ["value", "val", "text", "data", "datetimevalue", "datevalue", "stringvalue"]
+        private static let pastDate = TextPattern(#"^(?:(\d{4})-\d{2}-\d{2}(?:T[0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)?|\d{2}[./-]\d{2}[./-](\d{4}))$"#)
+        private static let codedID = TextPattern(#"^(?=[A-Z0-9]*\d[A-Z0-9]*\d)[A-Z0-9]{6,20}$"#)
+        /// What a person's coded field holds when its value says so: a date long past is their birth's, a code
+        /// of capitals and digits their document's number. A country, a sex or a document's kind is no one's.
+        private static func individualsField(_ value: String) -> String? {
+            if let match = TextRanges.matches(pastDate, in: value).first {
+                let ns = value as NSString
+                let group = match.range(at: 1).location != NSNotFound ? match.range(at: 1) : match.range(at: 2)
+                guard let year = Int(ns.substring(with: group)) else { return nil }
+                return (1900...(Calendar(identifier: .gregorian).component(.year, from: Date()) - 10)).contains(year) ? "date_of_birth" : nil
+            }
+            return TextRanges.matches(codedID, in: value).isEmpty ? nil : "id_number"
+        }
         /// Keys whose value says what kind of thing a record's other values are ("type": "CPR").
         private static let kindKeys: Set<String> = ["type", "kind", "object", "idtype", "idkind", "documenttype", "doctype", "documentkind", "identifiertype", "identificationtype", "identitytype", "scheme", "idscheme", "typecode", "category", "system"]
         /// `typed`: the words a record's own kind field writes, which name its other values as a key would.
@@ -143,6 +169,13 @@ final class JSONDocument {
             }
             let ownIdentifier = personIdentifiers.contains(Place(document: documentID, path: path))
                 || path.lastIndex(of: "/").map { personIdentifiers.contains(Place(document: documentID, path: String(path[..<$0]))) } == true
+            if Self.individual(pairs) {
+                for (index, pair) in pairs.enumerated() { if case .array = pair.1 { individualLists.insert(path + "/" + String(index)) } }
+            }
+            // A field of that person's a list writes under a code for its type ({"typeId": "PF_2", "dateTimeValue": "1987-06-21"}):
+            // a code with a digit, which says nothing of what the field is, as "LISTED" or "BIRTH" would.
+            let individualField = path.lastIndex(of: "/").map { individualLists.contains(String(path[..<$0])) } == true
+                && pairs.contains { pair in Self.fieldTypeKeys.contains(KeyHints.words(pair.0).joined()) && pair.1.stringValue.map { $0.utf16.count <= 24 && $0.contains(where: \.isNumber) && !$0.contains(" ") } == true }
             nextRecord += 1
             let ancestry = KeyHints.isWrapper(pairs.map(\.0)) && !records.isEmpty ? records : records + [nextRecord]
             let named = pairs.compactMap { pair in pair.1.stringValue.map { (pair.0, $0) } }
@@ -186,6 +219,8 @@ final class JSONDocument {
                 if KeyHints.hint(inherited) == nil, KeyHints.isDocumentNumber(pair.0), !kind.isDisjoint(with: KeyHints.documentKinds) { inherited = "document_number" }
                 if KeyHints.hint(inherited) == nil, let part = nameParts[pair.0] { inherited = part }
                 if KeyHints.hint(inherited) == nil, let born = KeyHints.birthField(pair.0, value: pair.1.stringValue ?? pair.1.numberText, siblings: named, kind: kind) { inherited = born }
+                if individualField, KeyHints.hint(inherited) == nil, Self.codedValueKeys.contains(KeyHints.words(pair.0).joined()), let text = pair.1.stringValue,
+                   let field = Self.individualsField(text) { inherited = field }
                 if KeyHints.isBareName(pair.0), case .string(let name) = pair.1,
                    !KeyHints.bareNameIsPerson(name, siblings: pairs.map(\.0), parent: key, values: named.map(\.1)) {
                     inherited = nil

@@ -67,7 +67,8 @@ public enum KeyHints {
         // A card's number, whole or masked ("999911XXXXXX1234").
         ("cardnumber creditcardnumber debitcardnumber ccnumber cardno primaryaccountnumber pan", "CREDIT_CARD"),
         ("cityofbirth placeofbirth birthplace birthcity townofbirth municipalityofbirth pob countryofbirthcity birthfacility birthhospital hospitalofbirth", "LOCATION"),
-        ("birthregion birthstate stateofbirth provinceofbirth regionofbirth birthstatekey birthstatecode", "REGION"),
+        // A civil registry's record of a birth names the state and the town it was registered in ("registrationEntity", "registrationEntity2").
+        ("birthregion birthstate stateofbirth provinceofbirth regionofbirth birthstatekey birthstatecode registrationentity", "REGION"),
         // A passport's or ID card's machine-readable zone, one line or all of them.
         ("mrz mrz1 mrz2 mrz3 mrzline mrzline1 mrzline2 mrzline3 mrzlines mrzcode machinereadablezone", "MRZ"),
         ("age ageyears currentage", "AGE"),
@@ -111,8 +112,11 @@ public enum KeyHints {
             || compact.hasSuffix("numbersuffix") { return "LAST_DIGITS" }
         // "ssn_masked": "***-**-7784" still shows the real last digits.
         if compact.contains("masked") || compact.contains("redacted") || compact.contains("obfuscated") { return words(key).contains(where: { ["ssn", "card", "pan", "phone", "account", "acct", "number", "tin", "taxid"].contains($0) }) ? "LAST_DIGITS" : nil }
+        // A field written again under its number ("email2", "registrationEntity2") is the field.
+        if compact.last?.isNumber == true, case let bare = String(compact.reversed().drop(while: \.isNumber).reversed()), bare.count >= 3, let field = hints[bare] { return field }
         let parts = words(key)
         guard let last = parts.last else { return nil }
+        if let either = alternatives(parts), let field = hint(either[0]), hint(either[1]) == field { return field }
         if secretLast.contains(last) || parts.count >= 2 && secretPairs.contains(parts[parts.count - 2] + last) { return "SECRET" }
         // A contact field qualified after it ("phoneHome", "phone_cell", "email_work") is the field.
         if parts.count == 2, let field = hints[parts[0]], ["PHONE_NUMBER", "EMAIL_ADDRESS"].contains(field),
@@ -128,6 +132,15 @@ public enum KeyHints {
         // A field's name abbreviated ("natId", "doc_no", "birth_dt") hints as the field written out.
         let expanded = parts.map { abbreviations[$0] ?? $0 }
         return expanded != parts ? hints[expanded.joined()] : nil
+    }
+    /// The two fields a key offers a choice of ("houseNumberOrName", "email_or_phone"), the second
+    /// written short where it shares the first's opening words: "house number or [house] name".
+    static func alternatives(_ parts: [String]) -> [String]? {
+        guard parts.count >= 3, parts.count <= 6, let or = parts.firstIndex(of: "or"), or > 0, or < parts.count - 1 else { return nil }
+        let left = Array(parts[..<or]), right = Array(parts[(or + 1)...])
+        let shared = Array(left.prefix(max(0, left.count - right.count))) + right
+        let second = hints[shared.joined()] != nil ? shared : right
+        return [left.joined(separator: "_"), second.joined(separator: "_")]
     }
     private static let abbreviations: [String: String] = ["nat": "national", "natl": "national", "doc": "document", "no": "number", "nr": "number", "num": "number", "nbr": "number", "dt": "date"]
     /// A relative's name, in either order and in other languages ("mother_name", "mothersMaidenName",
@@ -517,6 +530,8 @@ public enum KeyHints {
     }
     static func fits(_ key: String?, _ value: String) -> Bool {
         guard let entity = hint(key) else { return true }
+        // A field that may hold either of two ("houseNumberOrName": "14" or "Kestrel House") holds what fits one.
+        if let either = alternatives(words(key)) { return either.contains { fits($0, value) } }
         let trimmed = value.trimmingCharacters(in: .whitespaces)
         // A sample that writes its own field's name ("LastName": "LastName") holds no value of it;
         // a password that is the word "password" is still one.
@@ -604,7 +619,7 @@ public enum KeyHints {
         if entity == "EMAIL_ADDRESS" { return trimmed.contains("@") || trimmed.range(of: "%40", options: .caseInsensitive) != nil }
         // "state": "open" and "region": "us-east-1" hold no place.
         // A region of birth may be any country's ("Jalisco", "OAXACA"): a word or two of letters.
-        if entity == "REGION", words(key).contains("birth") { return Places.region(trimmed) != nil || trimmed.split(separator: " ").count <= 3 && trimmed.allSatisfy { $0.isLetter || $0 == " " || $0 == "-" } && !isCommonValue(trimmed) }
+        if entity == "REGION", words(key).contains("birth") || words(key).contains("registration") { return Places.region(trimmed) != nil || trimmed.split(separator: " ").count <= 3 && trimmed.allSatisfy { $0.isLetter || $0 == " " || $0 == "-" } && !isCommonValue(trimmed) }
         // A Mexican or Indian state, a Brazilian one's code ("Jalisco", "SP") is a region as a US one is.
         if entity == "REGION" { return Places.region(trimmed) != nil || Places.regionAbroad(trimmed) != nil }
         if entity == "LATITUDE" || entity == "LONGITUDE" { return coordinate(trimmed, limit: entity == "LATITUDE" ? 90 : 180) }
@@ -665,10 +680,27 @@ public enum KeyHints {
         if value.contains("(") && value.hasSuffix(")") { return true }
         return words.dropFirst().allSatisfy { $0.first?.isLowercase == true && NameLists.isOrdinary($0) && !NameLists.isFirst($0) }
     }
+    private static let noteMark = TextPattern(#"[ \t]+(?:-{2,}|[—–|])[ \t]+"#)
+    /// Where a note written after a field's value begins ("128 -- gate code on file",
+    /// "Marisol — checked by phone", "94103 | verified"): a run of dashes, a long dash or a bar
+    /// with spaces around it, then words. The value is what comes before; nil for a value with no note.
+    static func noteStart(_ value: String) -> Int? {
+        guard value.utf16.count <= 4096, let mark = TextRanges.matches(noteMark, in: value).first, mark.range.location > 0 else { return nil }
+        let head = TextRanges.substring(value, 0..<mark.range.location), tail = TextRanges.substring(value, NSMaxRange(mark.range)..<(value as NSString).length)
+        guard head.contains(where: { $0.isLetter || $0.isNumber }), tail.filter(\.isLetter).count >= 2 else { return nil }
+        return mark.range.location
+    }
+    /// The value a field's key is judged against: what comes before a note written after it (see `noteStart`).
+    /// A secret is whole whatever it holds.
+    static func judged(_ key: String?, _ value: String) -> String {
+        guard let entity = hint(key), entity != "SECRET", let cut = noteStart(value) else { return value }
+        return TextRanges.substring(value, 0..<cut)
+    }
     private static let placeholderOpenings = ["same as", "see ", "as above", "as per", "not ", "no ", "none", "unknown", "n/a", "tbd", "tbc", "redacted", "withheld", "remote", "various", "pending", "to be ", "on file", "same"]
     /// A key that holds a house or a unit's number, which may be written as a bare number.
     static func addressNumberKey(_ key: String?) -> Bool {
         let parts = words(key)
+        if let either = alternatives(parts), hint(key) != nil { return either.contains { addressNumberKey($0) } }
         return hint(key) == "ADDRESS" && [houseNumberKeys, unitKeys].contains { $0.contains(parts.joined()) || $0.contains(parts.suffix(2).joined()) || $0.contains(parts.last ?? "") }
     }
     /// A key that names a unit alone ("unit", "units", "apt", "flat"): a sales

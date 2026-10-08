@@ -87,5 +87,19 @@ enum CapitalNames {
         }
         return spans
     }
+    private static let cities = Set(Places.all.map { $0.city.lowercased() } + Places.abroad.map { $0.city.lowercased() })
+    /// A field's whole value written as a name in capitals, with nothing beside it to say so ("ODILON TAVARES"):
+    /// two or three words, the last a surname the lists hold, each a name or no word at all and one of
+    /// them no word (not "GREEN PARK"); never a place's or a business's name.
+    static func whole(_ text: String) -> Span? {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        let words = trimmed.split(separator: " ").map(String.init)
+        guard (2...3).contains(words.count), words.allSatisfy(mayName), let last = words.last, NameLists.isSurname(last),
+              words.allSatisfy({ !NameLists.isWord($0) || NameLists.isFirst($0) || NameLists.isSurname($0) }), words.contains(where: { !NameLists.isWord($0) }),
+              !cities.contains(trimmed.lowercased()), Places.region(trimmed) == nil, Places.code(trimmed) == nil, !NameTagger.namesOrganisation(trimmed),
+              let found = text.range(of: trimmed) else { return nil }
+        let start = NSRange(found, in: text).location
+        return Span(range: start..<(start + (trimmed as NSString).length), entity: "PERSON", score: score)
+    }
     private static let twoCapitals = TextPattern(#"\p{Lu}\p{Lu}"#)
 }

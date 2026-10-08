@@ -49,8 +49,13 @@ enum RecordIDs {
         guard let last = words.last else { return false }
         // A device's fingerprint blob under its vendor's name ("acme_blackbox").
         if last == "blackbox" { return true }
+        // An identity document's number under the document's ID ("document_id": "123.456.789-00"): digits in
+        // groups, as a national number is written, never a record's generated ID nor a date.
+        if documentIDKeys.contains(words.suffix(2).joined()), groupedNumber(value) { return true }
         // The device itself, written as its identifier ("device": "d3f1c9a2-7b44-…", "device=9774d56d682e549c"); "device": "iPhone16,2" is a model.
         if words == ["device"], isUUID(value) || hexIdentifier(value) { return true }
+        // Any of its identifiers under a key naming the device or the browser ("DEVICE_LAYERS": "DF65…..99CF.E3D1…", "browser_hash").
+        if words.contains("device") || words.contains("browser"), isUUID(value) || hexIdentifier(value) || layeredHex(value) { return true }
         // The person names the ID right before it: "customer_id", "patientNumber", not "applicant_address_country_id".
         if idWords.contains(last), words.count >= 2, people.contains(words[words.count - 2]) { return true }
         // A person's ID in one of their systems: "customer_web_id", "user_external_id".
@@ -68,7 +73,7 @@ enum RecordIDs {
         let words = KeyHints.words(key)
         guard let last = words.last else { return false }
         return whole.contains(words.joined()) || words.count == 1 && people.contains(last) && !belongings.contains(last) || KeyHints.isRole(key)
-            || idWords.contains(last) || last == "slug" || last == "handle" || last == "blackbox" || words == ["device"]
+            || idWords.contains(last) || last == "slug" || last == "handle" || last == "blackbox" || words.contains("device") || words.contains("browser")
     }
 
     /// Whether a key names a person's identifier by itself: "customer_id", "patientNumber", "uid".
@@ -313,12 +318,30 @@ enum RecordIDs {
                                                         "pl", "lua", "jar", "war", "dll", "so", "bin", "tar", "tgz", "bz2", "xz", "7z", "rar", "svg", "webp", "ico", "bmp", "tif", "tiff",
                                                         "ttf", "otf", "woff", "woff2", "wasm", "map", "scss", "sass", "less", "vue", "ipynb", "cs", "scala", "dart", "tf", "pem", "crt"]
     static func technical(_ value: String) -> Bool { thingPrefixes.contains(keptPrefix(value).dropLast().lowercased()) }
+    /// What else a fingerprint is taken of: a certificate, a key, a file or a build.
+    private static let technicalOwners: Set<String> = ["certificate", "certificates", "cert", "certs", "tls", "ssl", "x509", "ssh", "key", "keys", "publickey", "pgp", "gpg", "signing",
+                                                       "file", "files", "commit", "build", "image", "artifact", "package", "host", "server", "checksum", "jwk", "jwks"]
     private static let uuid = TextPattern(#"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"#)
     /// A UUID names whatever the system made it for; only what is around it says that was a person.
     static func isUUID(_ value: String) -> Bool { !TextRanges.matches(uuid, in: value).isEmpty }
     /// Sixteen hex digits or more with a digit and a letter among them, as a device's identifier or fingerprint is written ("9774d56d682e549c").
     static func hexIdentifier(_ value: String) -> Bool {
         (16...64).contains(value.count) && value.allSatisfy(\.isHexDigit) && value.contains(where: \.isNumber) && value.contains(where: \.isLetter)
+    }
+
+    /// What a person's record of the law numbers: a case, a docket, a citation, a warrant, a booking.
+    private static let legalRecords: Set<String> = ["case", "docket", "court", "citation", "warrant", "booking", "arrest", "inmate", "offender", "conviction", "charge", "indictment"]
+    private static let documentIDKeys: Set<String> = ["documentid", "docid", "iddocumentid"]
+    private static let grouped = TextPattern(#"^\d{1,4}(?:[.\-/]\d{1,4}){2,5}$"#)
+    private static let dated = TextPattern(#"^(?:\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2}|\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4})$"#)
+    /// Digits in groups, eight or more of them, as a national number is written ("123.456.789-00", "12.345.678-5"); no date.
+    static func groupedNumber(_ value: String) -> Bool {
+        value.filter(\.isNumber).count >= 8 && !TextRanges.matches(grouped, in: value).isEmpty && TextRanges.matches(dated, in: value).isEmpty
+    }
+    /// Runs of hex joined by dots, some empty, as a device's fingerprint writes its layers ("DF651ACF30..99CF09F417.E3D16F2CB7").
+    static func layeredHex(_ value: String) -> Bool {
+        let runs = value.split(separator: ".")
+        return runs.count >= 2 && runs.allSatisfy { $0.count >= 8 && $0.allSatisfy(\.isHexDigit) } && value.contains(where: \.isNumber) && value.contains(where: \.isLetter)
     }
 
     /// The names, email local parts and phone numbers a document holds.
@@ -424,6 +447,12 @@ enum RecordIDs {
         let words = KeyHints.words(key?.split(separator: ".").last.map(String.init))
         // Any of a device's identifiers is the person's who uses it: "device": {"signals": {"hashId": …}}, "device": {"fingerprint": …}.
         if leaf.contextWords.contains("device"), ["id", "fingerprint", "hash"].contains(words.last ?? ""), plainID(leaf.text) || isUUID(leaf.text) || leaf.text.count >= 16 && leaf.text.allSatisfy(\.isHexDigit) { return true }
+        // A fingerprint alone, a long hex digest, is the device's a fraud check took it of ("FINGERPRINT": "290D1C01…");
+        // a certificate's, a key's or a file's is no one's.
+        if words == ["fingerprint"], leaf.text.count >= 32, hexIdentifier(leaf.text), leaf.contextWords.isDisjoint(with: technicalOwners) { return true }
+        // A court's or a police case's number in a person's own record ("case_number" beside their name and birth date)
+        // is their case's, as the record is theirs; an invoice's or a ticket's elsewhere names no one.
+        if ownRecord, words.count >= 2, legalRecords.contains(words[words.count - 2]), leaf.text.contains(where: \.isNumber) { return true }
         if words == ["id"] || words == ["uid"] {
             let prefix = keptPrefix(leaf.text).dropLast().lowercased()
             // A person's own object: under a collection of people, beside their name or email, or with a person's prefix.

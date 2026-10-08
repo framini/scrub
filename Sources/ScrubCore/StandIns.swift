@@ -1763,7 +1763,8 @@ final class StandIns {
     private func recordID(like original: String) -> String {
         let prefix = RecordIDs.keptPrefix(original, named: namedWords)
         let rest = original.dropFirst(prefix.count)
-        let hex = rest.allSatisfy { $0.isHexDigit || $0 == "-" } && rest.contains(where: \.isNumber) && rest.contains(where: \.isLetter)
+        // A UUID, a digest, or a device's layers joined by dots ("DF651ACF30..99CF09F417") stays hex.
+        let hex = rest.allSatisfy { $0.isHexDigit || $0 == "-" || $0 == "." } && rest.contains(where: \.isNumber) && rest.contains(where: \.isLetter)
         let lead = rest.firstIndex(where: { $0.isLetter || $0.isNumber })
         return prefix + String(rest.indices.map { index -> Character in
             let character = rest[index]

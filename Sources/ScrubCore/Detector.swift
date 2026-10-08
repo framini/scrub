@@ -232,6 +232,8 @@ public final class Detector {
         // A cookie header's pairs keep their names and settings (see `KeyedValues.cookies`).
         if KeyedValues.cookieKey(key), let pairs = KeyedValues.cookies(text) { return pairs }
         guard let entity = KeyHints.hint(key), !text.isEmpty else { return nil }
+        // The value before a note written after it is the field's; the note is read as any text is (see `KeyHints.noteStart`).
+        if case let head = KeyHints.judged(key, text), head.utf16.count < text.utf16.count { return keyed(head, key: key) }
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         // Someone's value hashed: a stand-in digest of its shape, never an email or a name in its place.
         if KeyHints.digestKinds.contains(entity), KeyHints.isDigest(trimmed), let found = text.range(of: trimmed) {
@@ -357,6 +359,8 @@ public final class Detector {
             }
             // Names in capitals beside a first name or a title ("Julie BEET", "Ms BEET").
             spans.append(contentsOf: CapitalNames.scan(text, isCancelled: isCancelled).filter { span in !unsaid.contains { $0.overlaps(span.range) } })
+            // A field's whole value written as a name in capitals ("headline": "ODILON TAVARES").
+            if key != nil, unsaid.isEmpty, let whole = CapitalNames.whole(text), !spans.contains(where: { $0.range.overlaps(whole.range) }) { spans.append(whole) }
             // The name model only fills gaps: where anything else found something, that finding stands.
             var covered = IndexSet()
             for range in spans.map(\.range) + nations + quiet + written.quiet + organisations + labelled.labels where !range.isEmpty { covered.insert(integersIn: range) }
