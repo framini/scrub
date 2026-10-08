@@ -152,10 +152,18 @@ func check(_ body: String, gone: [String], seed: UInt64 = 7, _ more: (Route, JSO
 @Test func longListsInTextScrubPromptly() throws {
     let record = #"{"first_name":"Rosalind","last_name":"Brightwater","password":"quillharbor","status":"ok"}"#
     let body = "[" + Array(repeating: record, count: 300).joined(separator: ",") + "]"
+    let quarter = "[" + Array(repeating: record, count: 75).joined(separator: ",") + "]"
     for route in [Route.curl, .log, .text] {
         let start = Date()
         let output = try route.scrub(body)
-        #expect(Date().timeIntervalSince(start) < 20, "\(route) took \(Date().timeIntervalSince(start))s")
+        let took = Date().timeIntervalSince(start)
+        // On a machine busy with other tests, a slow run still has to cost about what a quarter of the list costs four times.
+        if took >= 20 {
+            let quarterStart = Date()
+            _ = try route.scrub(quarter)
+            let quarterTook = Date().timeIntervalSince(quarterStart)
+            #expect(took < quarterTook * 8, "\(route) took \(took)s, a quarter of it \(quarterTook)s")
+        }
         #expect(!output.contains("Rosalind") && !output.contains("quillharbor") && parsed(output) != nil, "\(route)")
     }
 }
