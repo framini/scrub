@@ -735,7 +735,7 @@ public final class Detector {
     }
     private static let capitalCode = TextPattern(#"^[A-Z]{2,}[-_]?\d+$"#)
     /// The people a record serves, under whose key a handle is theirs whatever it ends in.
-    private static let clients: Set<String> = ["patient", "customer", "client", "user", "member", "student", "applicant", "candidate", "passenger", "traveler", "traveller",
+    static let clients: Set<String> = ["patient", "customer", "client", "user", "member", "student", "applicant", "candidate", "passenger", "traveler", "traveller",
                                                "tenant", "borrower", "guest", "insured", "policyholder", "cardholder", "accountholder", "beneficiary", "visitor", "employee"]
     static func clientKey(_ key: String?) -> Bool {
         KeyHints.words(key).last.map(clients.contains) == true

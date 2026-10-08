@@ -390,6 +390,12 @@ enum RecordIDs {
             && !NameLists.isOrdinary(lower) && !NameLists.isFirst(lower) && !NameLists.isSurname(lower)
     }
 
+    /// A key for a client's own ID ("referrer_customer_id", "memberNumber"), not a reference a client keeps ("client_reference").
+    static func clientsID(_ key: String?) -> Bool {
+        let words = KeyHints.words(key)
+        guard let last = words.last, ["id", "ids", "number", "no", "num", "nr"].contains(last) else { return false }
+        return words.dropLast().contains(where: Detector.clients.contains)
+    }
     /// `ownRecord`: the leaf's object holds a person's name or email itself, or says it is a person.
     static func isPersonal(_ leaf: DocumentLeaf, spelled: Known, ownRecord: Bool) -> Bool {
         let key = leaf.rawKey ?? leaf.key
@@ -397,8 +403,9 @@ enum RecordIDs {
         if idKey(key), leaf.contextWords.contains("address"), !leaf.text.contains(" "), leaf.text.split(separator: "_").count >= 4,
            leaf.text.contains(where: \.isNumber), leaf.text.contains(where: \.isLetter), leaf.text.count <= 128 { return true }
         guard shaped(leaf.text), !crossReference(leaf.text) else { return false }
-        // A value its own prefix calls a request's, an application's or an order's reference ("ref-55af36d14d") is filed under no one.
-        if ContextStage.referencePrefixed(leaf.text) { return false }
+        // A value its own prefix calls a request's, an application's or an order's reference ("ref-55af36d14d") is filed under no one,
+        // unless its key says whose it is ("referrer_customer_id": "ref_9876").
+        if ContextStage.referencePrefixed(leaf.text), !Self.clientsID(key) { return false }
         // A sample that writes its own field's name ("accountRef": "ACCOUNTREF", "user": "USER_1") holds no one's ID;
         // a number after the field's code is one ("mrn": "MRN-00482913").
         if KeyHints.words(leaf.text).joined() == KeyHints.words(key).joined()

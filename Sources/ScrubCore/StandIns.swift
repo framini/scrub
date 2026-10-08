@@ -1683,10 +1683,28 @@ final class StandIns {
     /// month names ("1987-04-12", "04/12/1987", "April 12, 1987", "12 APR 1987").
     /// The same birth year always moves to the same stand-in year, so a
     /// "birth_year" or "age" beside the date still agrees with it.
+    private static let dateListSeparator = TextPattern(#"[ \t]*[,;][ \t]*|[ \t]+(?:and|or|&)[ \t]+"#)
     private func dateLike(_ original: String) -> String {
         // "1975-11-22T00:00:00Z": the date takes a stand-in, its time and zone stay as written.
         if let time = original.range(of: #"(?<=^\d{4}-\d{2}-\d{2})[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$"#, options: .regularExpression) {
             return dateLike(String(original[..<time.lowerBound])) + original[time]
+        }
+        // "1958-08-17, 1957-08-17": a list of whole dates, each with its own stand-in, the list's separators as written.
+        let separators = TextRanges.matches(Self.dateListSeparator, in: original)
+        if !separators.isEmpty {
+            let ns = original as NSString
+            var pieces: [String] = [], between: [String] = [], start = 0
+            for separator in separators {
+                pieces.append(ns.substring(with: NSRange(location: start, length: separator.range.location - start)))
+                between.append(ns.substring(with: separator.range))
+                start = NSMaxRange(separator.range)
+            }
+            pieces.append(ns.substring(from: start))
+            if pieces.allSatisfy({ piece in
+                piece.range(of: #"(?<!\d)\d{4}(?!\d)"#, options: .regularExpression) != nil && Self.dateParts(piece).map { $0.month != nil && $0.day != nil } == true
+            }) {
+                return zip(pieces.map(dateLike), between + [""]).map { $0 + $1 }.joined()
+            }
         }
         var year = Int.random(in: 1940...1999, using: &rng)
         var month = Int.random(in: 1...12, using: &rng)
@@ -1742,7 +1760,8 @@ final class StandIns {
         // A time after the date ("1975-11-22T00:00:00Z", "03/14/1987 08:30") stays as written.
         let dated = Array(numbers.prefix(named == nil ? 3 : 2))
         guard let yearIndex = dated.first(where: { runs[$0].count == 4 }), dated.count == (named == nil ? 3 : 2),
-              !runs[dated[0]...dated[dated.count - 1]].contains(where: { $0.contains(":") }) else {
+              !runs[dated[0]...dated[dated.count - 1]].contains(where: { $0.contains(":") }),
+              numbers.count == dated.count || runs[(dated[dated.count - 1] + 1)...].contains(where: { $0.contains(":") }) else {
             return String(format: "%04d-%02d-%02d", year, month, day)
         }
         let rest = dated.filter { $0 != yearIndex }

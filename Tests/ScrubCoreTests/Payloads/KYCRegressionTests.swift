@@ -315,3 +315,18 @@ func primaryNumberIsAHouseNumber(_ name: String) throws {
     }
 }
 
+
+/// A screening hit that lists two birth dates in one field replaces both, each in its own format,
+/// and a time after a single date still stays as written.
+@Test func aListOfBirthDatesTakesAStandInForEach() throws {
+    let output = try scrub(#"{"hits":[{"name":"Imre Halvorsen-Bakó","birth_date":"1958-08-17, 1957-08-17","dob":"03/14/1987 08:30","dates_of_birth":"12 Mar 1961; 14 Apr 1962"}]}"#, as: "screening.json")
+    for original in ["1958-08-17", "1957-08-17", "03/14/1987", "12 Mar 1961", "14 Apr 1962"] { #expect(!output.contains(original), "\(output)") }
+    #expect(output.range(of: #""birth_date":"\d{4}-\d{2}-\d{2}, \d{4}-\d{2}-\d{2}""#, options: .regularExpression) != nil, "\(output)")
+    #expect(output.range(of: #""dob":"\d{2}/\d{2}/\d{4} 08:30""#, options: .regularExpression) != nil, "\(output)")
+}
+
+/// A customer's ID whose value opens like a reference ("ref_9876") is still theirs; a request's reference stays.
+@Test func aCustomersIDThatLooksLikeAReferenceIsTheirs() throws {
+    let output = try scrub(#"{"referrer_customer_id":"ref_9876","request_ref":"ref-55af36d14d","status":"approved"}"#, as: "decision.json")
+    #expect(!output.contains("ref_9876") && output.contains(#""request_ref":"ref-55af36d14d""#), "\(output)")
+}
