@@ -1526,9 +1526,10 @@ final class StandIns {
                     return original == original.lowercased() ? handle.lowercased() : handle
                 }
             }
-            if let persona {
+            if let persona, People.joint(original) == nil {
                 owner = persona
-                return persona.full
+                // "García Lindqvist, María José" keeps its order.
+                return People.naturalOrder(original) != nil || People.surnameFirst(original) != nil ? persona.last + ", " + persona.first : persona.full
             }
             let name = people.name(for: original)
             owner = people.lastNamed

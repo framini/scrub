@@ -142,4 +142,71 @@ struct NameConsistencyTests {
             #expect(output.contains(" - \(full).ledger"), "\(output)")
         }
     }
+
+    /// A name written with and without its accents, apostrophe or ß, in capitals or not, is one person's:
+    /// a card's embossed "EABHA ODWYER" is the "Éabha O'Dwyer" of the account.
+    @Test func aNameKeepsItsStandInWithoutItsAccentsOrApostrophe() throws {
+        for seed: UInt64 in 1...6 {
+            let text = #"{"account": {"full_name": "Éabha O'Dwyer", "card": {"cardholder": "EABHA ODWYER", "last4": "4417"}}, "payee": {"name": "Lukas Großmann", "reference": "LUKAS GROSSMANN"}}"#
+            let (result, output) = try Self.scrub(text, "account.json", seed: seed)
+            let account = try #require(Self.standIn(result, "Éabha O'Dwyer"), "\(output)")
+            let card = try #require(Self.standIn(result, "EABHA ODWYER"), "\(output)")
+            #expect(card == account.uppercased(), "[seed \(seed)] \(output)")
+            let payee = try #require(Self.standIn(result, "Lukas Großmann"), "\(output)")
+            #expect(Self.standIn(result, "LUKAS GROSSMANN") == payee.uppercased(), "[seed \(seed)] \(output)")
+        }
+    }
+
+    /// One person under compound given names and a double surname keeps one stand-in in each of the ways
+    /// a record writes them: in parts, in capitals, by one given name and one surname, and surname first.
+    @Test func aCompoundNameKeepsOneStandInHoweverWritten() throws {
+        for seed: UInt64 in 1...6 {
+            let text = #"{"first_name": "Ana Lucía", "last_name": "Ferreira Halvorsen", "names": [{"first": "ANA", "middle": "LUCIA", "last": "FERREIRA HALVORSEN"}, {"first": "Ana", "last": "Halvorsen", "type": "aka"}, {"full": "Ferreira Halvorsen, Ana Lucía", "type": "reported"}, {"full": "Ana Lucía Ferreira Halvorsen"}]}"#
+            let (result, output) = try Self.scrub(text, "identity.json", seed: seed)
+            let first = try #require(Self.standIn(result, "Ana Lucía"), "\(output)")
+            let last = try #require(Self.standIn(result, "Ferreira Halvorsen"), "\(output)")
+            #expect(Self.standIn(result, "ANA") == first.uppercased(), "[seed \(seed)] \(output)")
+            #expect(output.contains(#"{"first": "\#(first)", "last": "\#(last)", "type": "aka"}"#), "[seed \(seed)] \(output)")
+            #expect(Self.standIn(result, "Ferreira Halvorsen, Ana Lucía") == last + ", " + first, "[seed \(seed)] \(output)")
+            #expect(Self.standIn(result, "Ana Lucía Ferreira Halvorsen") == first + " " + last, "[seed \(seed)] \(output)")
+        }
+        // In a message, her given names alone and her surname alone are hers too.
+        let text = "Customer: Ana Lucía Ferreira Halvorsen\nHi Ana Lucía,\nAlso: Ferreira Halvorsen, Ana Lucía has a duplicate account.\nAna Halvorsen called back.\n"
+        let (result, output) = try Self.scrub(text, "ticket.txt")
+        let full = try #require(Self.standIn(result, "Ana Lucía Ferreira Halvorsen"), "\(output)")
+        let parts = full.split(separator: " ").map(String.init)
+        #expect(output.contains("Hi \(parts[0]),") && output.contains("Also: \(parts[1]), \(parts[0]) has") && output.contains("\(full) called back"), "\(output)")
+    }
+
+    /// A middle initial and the middle name it stands for, or a short form of the first name,
+    /// are one person in a credit header's aliases, and a spouse of the surname shares its stand-in.
+    @Test func aMiddleInitialAndItsNameAreOnePerson() throws {
+        for seed: UInt64 in 1...6 {
+            let text = #"{"subject": {"name": {"first": "WILLIAM", "middle": "K", "last": "BRANNIGAN", "suffix": ""}, "aka": ["BILL BRANNIGAN", "WILLIAM KEITH BRANNIGAN"], "ssn": "123-45-6789"}, "spouse": {"first": "MARGARET", "last": "BRANNIGAN"}}"#
+            let (result, output) = try Self.scrub(text, "header.json", seed: seed)
+            let first = try #require(Self.standIn(result, "WILLIAM"), "\(output)")
+            let last = try #require(Self.standIn(result, "BRANNIGAN"), "\(output)")
+            #expect(Self.standIn(result, "BILL BRANNIGAN") == first + " " + last, "[seed \(seed)] \(output)")
+            #expect(Self.standIn(result, "WILLIAM KEITH BRANNIGAN") == first + " " + last, "[seed \(seed)] \(output)")
+            #expect(!output.contains("BRANNIGAN") && output.components(separatedBy: last).count == 5, "[seed \(seed)] \(output)")
+        }
+    }
+
+    /// Two account holders joined by "&" are two people, each the one named elsewhere, and a surname
+    /// they share stays shared; a match input's double surname written apart is the holder's.
+    @Test func jointHoldersAreEachTheirOwn() throws {
+        for seed: UInt64 in 1...6 {
+            let text = #"{"accounts": [{"holder_name": "Ngozi Adeyemi-Eze", "name_match": {"input": "N Adeyemi Eze", "score": 0.91}}, {"holder_name": "NGOZI ADEYEMI-EZE & TUNDE EZE", "type": "joint"}, {"holder_name": "Tunde Eze"}, {"holder_name": "KEMI & DAYO OKONJO-BALOGUN"}]}"#
+            let (result, output) = try Self.scrub(text, "accounts.json", seed: seed)
+            let ngozi = try #require(Self.standIn(result, "Ngozi Adeyemi-Eze"), "\(output)")
+            let tunde = try #require(Self.standIn(result, "Tunde Eze"), "\(output)")
+            #expect(ngozi != tunde, "\(output)")
+            #expect(Self.standIn(result, "NGOZI ADEYEMI-EZE & TUNDE EZE") == ngozi.uppercased() + " & " + tunde.uppercased(), "[seed \(seed)] \(output)")
+            #expect(tunde.split(separator: " ").last == ngozi.split(separator: " ").last, "[seed \(seed)] a shared surname: \(output)")
+            #expect(output.contains(#""input": "N \#(ngozi.split(separator: " ")[1])""#), "[seed \(seed)] \(output)")
+            let pair = try #require(Self.standIn(result, "KEMI & DAYO OKONJO-BALOGUN"), "\(output)")
+            let words = pair.split(separator: " ")
+            #expect(words.count == 4 && words[1] == "&" && words[0] != words[2] && !pair.contains("KEMI") && !pair.contains("DAYO"), "[seed \(seed)] \(output)")
+        }
+    }
 }

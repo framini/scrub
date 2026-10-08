@@ -366,6 +366,8 @@ public final class Job {
     }
     @discardableResult
     func associateRecord(first: String?, last: String?, full: String?, email: String?, gender: String? = nil) -> Persona? {
+        // "Aisha Bello-Okafor & Chidi Okafor" is two people, each their own.
+        if let full, People.joint(full) != nil { return nil }
         if let full {
             let person = standIns.people.registerFull(full, emailSafe: email != nil, gender: gender).0
             standIns.people.associate(person, email: email)

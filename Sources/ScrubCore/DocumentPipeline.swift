@@ -502,6 +502,8 @@ enum DocumentPipeline {
                 continue
             }
             guard let record = innermost(leaf), let hint = KeyHints.hint(leaf.key), identityHints.contains(hint), !leaf.text.isEmpty, !KeyHints.namesARole(leaf.key) else { continue }
+            // "middle": "R" beside "first": "JAMES" is not who the record names first.
+            if hint == "FIRST_NAME", KeyHints.words(leaf.key).contains("middle") { continue }
             if recordFields[record] == nil { recordFields[record] = IdentityFields() }
             recordFields[record]?.set(leaf.seen, for: hint)
         }

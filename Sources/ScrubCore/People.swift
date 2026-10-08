@@ -101,8 +101,14 @@ final class People {
         }
     }
     private static let locale = Locale(identifier: "en_US_POSIX")
+    /// A name part as one person's, whatever its accents, capitals or apostrophes: "O'Neill" is "ONEILL", "Weiß" "WEISS".
     private static func fold(_ value: String) -> String {
-        value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: locale).trimmingCharacters(in: .whitespacesAndNewlines)
+        value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: locale).filter { !apostrophes.contains($0) }.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private static let apostrophes: Set<Character> = ["'", "’", "‘", "ʼ", "′", "`", "＇"]
+    /// A folded name's words, a hyphen's halves apart: "bello-okafor" is "bello" and "okafor".
+    private static func words(_ folded: String) -> [String] {
+        folded.split { $0.isWhitespace || $0 == "-" || $0 == "‐" || $0 == "‑" || $0 == "." || $0 == "," }.map(String.init)
     }
     private static let firstChoices = Names.first.map { ($0, fold($0)) }
     private static let lastChoices = Names.last.map { ($0, fold($0)) }
@@ -115,6 +121,8 @@ final class People {
     /// The same people by that part as an address writes it (see `Persona.letters`).
     private var firstOnlyLetters: [String: Persona] = [:]
     private var lastOnlyLetters: [String: Persona] = [:]
+    /// The people by each word of their surname and middle names ("garcia", "lindqvist").
+    private var byWord: [String: Bucket] = [:]
     private var missingFirst = Bucket()
     private var missingLast = Bucket()
     private var joined: [UInt64: Candidates]?
@@ -134,6 +142,7 @@ final class People {
         if f != nil && l != nil { fullBuckets[Key(first: f, last: l), default: Bucket()].add(person) }
         if let f { firstBuckets[f, default: Bucket()].add(person) } else { missingFirst.add(person) }
         if let l { lastBuckets[l, default: Bucket()].add(person) } else { missingLast.add(person) }
+        for word in Set(Self.words(l ?? "") + Self.words(person.realMiddle ?? "")) { byWord[word, default: Bucket()].add(person) }
         if let f, let l {
             if joined != nil { addJoined(person, first: f, last: l) }
         } else if let f { firstOnly[f] = person; firstOnlyLetters[Persona.letters(f)] = person }
@@ -164,13 +173,14 @@ final class People {
         fullBuckets[Key(first: f, last: l)]?.remove(person)
         if let f { firstBuckets[f]?.remove(person) } else { missingFirst.remove(person) }
         if let l { lastBuckets[l]?.remove(person) } else { missingLast.remove(person) }
+        for word in Set(Self.words(l ?? "") + Self.words(person.realMiddle ?? "")) { byWord[word]?.remove(person) }
         if let f, l == nil { firstOnly.removeValue(forKey: f); firstOnlyLetters.removeValue(forKey: Persona.letters(f)) }
         if let l, f == nil { lastOnly.removeValue(forKey: l); lastOnlyLetters.removeValue(forKey: Persona.letters(l)) }
     }
     private func compatible(_ f: String?, _ l: String?, _ middle: String?, gender: String? = nil) -> (Int, Persona?) {
         if let f, let l {
             let full = (fullBuckets[Key(first: f, last: l)]?.people ?? []).filter {
-                middle == nil || $0.realMiddle == nil || $0.realMiddle == middle
+                Self.sameMiddle(middle, $0.realMiddle)
             }
             // "Mateus Okafor" is not the "Ms Okafor" met before him.
             let first = firstOnly[f], last = lastOnly[l].flatMap { Self.opposite($0.gender, NameLists.gender(ofFirst: f) ?? gender) ? nil : $0 }
@@ -325,7 +335,7 @@ final class People {
     private func resolve(_ f: String?, _ l: String?, _ m: String?, emailSafe: Bool, gender: String?) -> Persona {
         // "Mr Okafor" beside Mateus Okafor and a "Ms Okafor": the one whose first name fits the title.
         if f == nil, let l, let gender, gender != "either" {
-            let fitting = (lastBuckets[l]?.people ?? []).filter { $0.realFirst.flatMap(NameLists.gender(ofFirst:)) == gender && (m == nil || $0.realMiddle == nil || $0.realMiddle == m) }
+            let fitting = (lastBuckets[l]?.people ?? []).filter { $0.realFirst.flatMap(NameLists.gender(ofFirst:)) == gender && Self.sameMiddle(m, $0.realMiddle) }
             if fitting.count == 1 { return fitting[0] }
             // "Hi Odalys", then "Mr Ferriter" (someone else), then "Mrs Ferriter": she is Odalys.
             if fitting.isEmpty, missingLast.count == 1, let only = missingLast.first, only.realFirst.flatMap(NameLists.gender(ofFirst:)) == gender,
@@ -342,6 +352,7 @@ final class People {
         // "J. Okafor" or "Bob Lind" after "Ama Okafor" and "Robert Lind": the one
         // person whose first name the initial or short form stands for.
         if count == 0, let f, let shared = sameFirst(f, last: l) { return shared }
+        if count == 0, let l, let found = fuller(f, l, m) { return found }
         if count == 1, let found = candidate {
             if (found.realFirst == nil && f != nil) || (found.realLast == nil && l != nil) || (found.realMiddle == nil && m != nil) {
                 remove(found)
@@ -363,7 +374,8 @@ final class People {
         // (a patient and their contact, "Clementine Abernathy" and "Ezra Abernathy"): one family, one stand-in surname.
         let relative = l.flatMap { l in f == nil
             ? ((lastBuckets[l]?.people).flatMap { $0.isEmpty ? nil : $0 } ?? unsurnamed.map { [$0] } ?? []).filter { Self.opposite(sex, $0.realFirst.flatMap(NameLists.gender(ofFirst:))) }.min { $0.last < $1.last }
-            : lastOnly[l].flatMap { Self.opposite(sex, $0.gender) ? $0 : nil } ?? (lastBuckets[l]?.people ?? []).filter { $0.realFirst != nil }.min { $0.last < $1.last } }
+            : lastOnly[l].flatMap { Self.opposite(sex, $0.gender) ? $0 : nil } ?? (lastBuckets[l]?.people ?? []).filter { $0.realFirst != nil }.min { $0.last < $1.last }
+                ?? doubled(l) }
         // Someone of a first name another person in the document has, with a surname of their own ("Ruoxi Huang",
         // then "Ruoxi Zeodaström" as a prior name): that first name has one stand-in.
         let namesake = relative == nil && l != nil ? f.flatMap { f in (firstBuckets[f]?.people ?? []).filter { $0.realLast != nil }.min { $0.drawn < $1.drawn } } : nil
@@ -374,6 +386,81 @@ final class People {
         person.realMiddle = m
         add(person)
         return person
+    }
+    /// Whether two middle names may be one person's: either unknown, the same, or one the other's
+    /// initials ("r" and "robert", "a. m." and "anne marie").
+    private static func sameMiddle(_ a: String?, _ b: String?) -> Bool {
+        guard let a, let b, a != b else { return true }
+        let x = words(a), y = words(b)
+        guard x.count == y.count else { return false }
+        return zip(x, y).allSatisfy { $0 == $1 || $0.count == 1 && $1.hasPrefix($0) || $1.count == 1 && $0.hasPrefix($1) }
+    }
+    /// Someone with a first name whose double surname holds `last` ("Aisha Bello-Okafor" for "Chidi Okafor"): one family.
+    private func doubled(_ last: String) -> Persona? {
+        guard last.count >= 3, Self.words(last) == [last] else { return nil }
+        let family = (byWord[last]?.people ?? []).filter { $0.realFirst != nil && Self.words($0.realLast ?? "").contains(last) }
+        return family.min { $0.last < $1.last }
+    }
+    /// The one person known whose names hold every word of these, read in full elsewhere: "Maria Lindqvist" or
+    /// "García Lindqvist, María José" for María José García Lindqvist, "A Bello Okafor" for Aisha Bello-Okafor.
+    /// Their first word given is the person's, or its initial.
+    private func fuller(_ f: String?, _ l: String, _ m: String?) -> Persona? {
+        let given = Self.words(f ?? ""), rest = Array(given.dropFirst()) + Self.words(m ?? "") + Self.words(l)
+        guard let lead = given.first, let key = Self.words(l).last else { return nil }
+        let found = (byWord[key]?.people ?? []).filter { person in
+            guard let realFirst = person.realFirst, let realLast = person.realLast, let own = Self.words(realFirst).first else { return false }
+            let theirs = Set(Self.words(realFirst) + Self.words(realLast) + Self.words(person.realMiddle ?? ""))
+            return (theirs.contains(lead) || lead.count == 1 && own.hasPrefix(lead)) && rest.allSatisfy(theirs.contains)
+        }
+        return found.count == 1 ? found[0] : nil
+    }
+    /// The one person whose double surname these words are, written apart ("Bello Okafor" for Aisha
+    /// Bello-Okafor) where no one has the first of them as a first name.
+    private func surname(_ tokens: [String]) -> Persona? {
+        let words = tokens.flatMap { Self.words(fold($0)) }
+        guard words.count >= 2, let key = words.last, firstBuckets[words[0]] == nil || firstBuckets[words[0]]?.count == 0 else { return nil }
+        let found = (byWord[key]?.people ?? []).filter { $0.realFirst != nil && Self.words($0.realLast ?? "") == words }
+        return found.count == 1 ? found[0] : nil
+    }
+    /// "García Lindqvist, María José": a surname of more than one word, then the given names.
+    static func surnameFirst(_ value: String) -> (surname: String, given: String)? {
+        let halves = value.split(separator: ",", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+        guard halves.count == 2, !halves[0].isEmpty, !halves[1].isEmpty, halves.allSatisfy({ $0.split(separator: " ").count <= 3 }) else { return nil }
+        return (halves[0], halves[1])
+    }
+    /// Two people in one value, "Aisha Bello-Okafor & Chidi Okafor" or "AISHA AND CHIDI OKAFOR":
+    /// each name, and what joins it to the next.
+    static func joint(_ value: String) -> [(name: String, joiner: String)]? {
+        let words = value.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        var result: [(name: String, joiner: String)] = []
+        var current: [String] = []
+        for word in words {
+            if ["&", "+", "and"].contains(word.lowercased()) {
+                guard !current.isEmpty else { return nil }
+                result.append((current.joined(separator: " "), " " + word + " "))
+                current = []
+            } else { current.append(word) }
+        }
+        guard !result.isEmpty, !current.isEmpty else { return nil }
+        result.append((current.joined(separator: " "), ""))
+        return result.allSatisfy({ $0.name.contains(where: \.isLetter) && $0.name.split(separator: " ").count <= 4 }) ? result : nil
+    }
+    /// Each name of a joint value in full, a first name alone taking the surname after it
+    /// ("AISHA & CHIDI OKAFOR"), with what joins it to the next and whether it was alone.
+    private static func jointNames(_ value: String) -> [(name: String, joiner: String, alone: Bool)]? {
+        guard let parts = joint(value) else { return nil }
+        let surname = parts.last.flatMap { $0.name.split(separator: " ").count >= 2 ? $0.name.split(separator: " ").last.map(String.init) : nil }
+        return parts.map { part in
+            guard let surname, !part.name.contains(" ") else { return (part.name, part.joiner, false) }
+            return (part.name + " " + surname, part.joiner, true)
+        }
+    }
+    /// Each of two people named in one value written as their own; nil when the value names one.
+    func jointName(for value: String) -> String? {
+        Self.jointNames(value)?.map { part in
+            let made = name(for: part.name)
+            return (part.alone ? String(made.prefix { $0 != " " }) : made) + part.joiner
+        }.joined()
     }
     /// The one person already known whose first name `first` abbreviates
     /// ("j.", "j"), shortens ("bob" for "robert") or clips ("bart" for
@@ -461,6 +548,11 @@ final class People {
     }
     static func isTitle(_ word: String) -> Bool { titles.contains(word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) }
     func registerFull(_ value: String, emailSafe: Bool = false, gender: String? = nil) -> (Persona, Int) {
+        if let names = Self.jointNames(value) { return (names.map { registerFull($0.name, emailSafe: emailSafe).0 }[0], 2) }
+        if Self.naturalOrder(value) == nil, let (surname, given) = Self.surnameFirst(value) {
+            let names = given.split(separator: " ").map(String.init)
+            if let found = fuller(fold(names[0]), fold(surname), names.count > 1 ? fold(names.dropFirst().joined(separator: " ")) : nil) { return (found, 3) }
+        }
         var tokens = (Self.naturalOrder(value) ?? value).split { $0.isWhitespace || $0 == "," }.map(String.init)
         // A suffix says which of a family it is, not who: "Raymond Bowen Jr." is Raymond Bowen.
         if tokens.count > 2, let last = tokens.last, Self.isSuffix(last) { tokens.removeLast() }
@@ -473,7 +565,19 @@ final class People {
         }
         // "Ms. Okafor": a title comes before a surname.
         if titled, tokens.count == 1 { return (register(nil, tokens[0], emailSafe: emailSafe, gender: gender), -1) }
-        if tokens.count >= 2 { return (register(tokens.first, tokens.last, emailSafe: emailSafe, middle: tokens.count > 2 ? tokens.dropFirst().dropLast().joined(separator: " ") : nil, gender: gender), 2) }
+        if !titled, let found = surname(tokens) { return (found, -1) }
+        if tokens.count >= 2 {
+            let person = register(tokens.first, tokens.last, emailSafe: emailSafe, middle: tokens.count > 2 ? tokens.dropFirst().dropLast().joined(separator: " ") : nil, gender: gender)
+            // "María José" and "García Lindqvist" for María José García Lindqvist are her given names
+            // and her surname, written as her stand-in's.
+            if !titled, let realFirst = person.realFirst, let realLast = person.realLast, let lead = Self.words(realFirst).first, let end = Self.words(realLast).last {
+                let words = tokens.flatMap { Self.words(fold($0)) }, middle = Self.words(person.realMiddle ?? "")
+                let given = Set(Self.words(realFirst) + middle), surname = Set(Self.words(realLast) + middle)
+                if words.contains(lead), words.allSatisfy(given.contains), !words.contains(where: Self.words(realLast).contains) { return (person, 1) }
+                if words.contains(end), words.allSatisfy(surname.contains), !words.contains(where: Self.words(realFirst).contains) { return (person, -1) }
+            }
+            return (person, 2)
+        }
         if let token = tokens.first {
             let last = lastBuckets[fold(token)] ?? Bucket()
             if last.count == 1, let found = last.first {
@@ -493,7 +597,7 @@ final class People {
         guard tokens.count >= 2, let first = tokens.first, let last = tokens.last else { return false }
         let middle = tokens.count > 2 ? fold(tokens.dropFirst().dropLast().joined(separator: " ")) : nil
         return (fullBuckets[Key(first: fold(String(first)), last: fold(String(last)))]?.people ?? []).contains {
-            middle == nil || $0.realMiddle == nil || $0.realMiddle == middle
+            Self.sameMiddle(middle, $0.realMiddle)
         }
     }
     /// A name written the same way is written for the same person each time,
@@ -506,6 +610,10 @@ final class People {
         if let known = written[value] {
             lastNamed = writers[value]
             return known
+        }
+        if let joint = jointName(for: value) {
+            written[value] = joint
+            return joint
         }
         let name = writtenName(for: value)
         writers[value] = lastNamed
@@ -527,7 +635,7 @@ final class People {
         lastNamed = person
         // "Ms. Siobhan Okafor" keeps its title, which the stand-in name fits.
         let title = value.split(separator: " ").first.map(String.init).flatMap { Self.titles.contains($0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) ? $0 + " " : nil } ?? ""
-        if parts == 2, Self.naturalOrder(value) != nil {
+        if parts == 3 || parts == 2 && Self.naturalOrder(value) != nil {
             let halves = value.split(separator: ",", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
             let (surname, suffix) = Self.suffixed(halves[0])
             // "FERRITER, O." keeps its capitals and its initial.
