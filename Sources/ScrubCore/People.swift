@@ -545,7 +545,7 @@ final class People {
     /// Titles, and the ranks written as one ("Corporal Haddleton" keeps "Corporal").
     private static let titles: Set<String> = Set(["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "dame", "lady", "madam"]).union(WrittenNames.ranks)
     private static func isInitials(_ word: String) -> Bool {
-        word.count == 1 && word.first?.isUppercase == true || word.count >= 2 && word.allSatisfy { $0 == "." || $0.isUppercase } && word.hasSuffix(".")
+        word.count == 1 && word.first?.isUppercase == true || word.count >= 2 && word.allSatisfy { $0 == "." || $0 == "-" || $0.isUppercase } && word.hasSuffix(".") && word.first?.isUppercase == true
     }
     static func isTitle(_ word: String) -> Bool { titles.contains(word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) }
     func registerFull(_ value: String, emailSafe: Bool = false, gender: String? = nil) -> (Persona, Int) {

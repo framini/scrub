@@ -169,3 +169,16 @@ func doublyEscapedBodyInALogLineIsReadInside(_ name: String) throws {
     let after = try #require(output.components(separatedBy: "Antrag von Frau ").last?.components(separatedBy: ", geb.").first)
     #expect(after.split(separator: " ").count == 2 && output.hasSuffix("\n" + after), "\(output)")
 }
+
+/// A double-barrelled surname after a hyphenated given name, and the same person signing with hyphenated
+/// initials: no half of the surname and no initial stays, and the surname takes one stand-in in both places.
+@Test(arguments: ["Hello, my name is Karl-Heinz Brettschneider-Oldenhove and I can't log in to my account.\nRegards,\nK.-H. Brettschneider-Oldenhove",
+                  "mein Name ist Karl-Heinz Brettschneider-Oldenhove, geboren am 3. Juni 1958 in Kassel. Ich komme nicht in mein Konto.\n\nMit freundlichen Grüßen\nK.-H. Brettschneider-Oldenhove"])
+func aDoubleBarrelledNameAndItsInitialsGoWhole(_ message: String) throws {
+    let (output, _) = try scrubText(message)
+    for original in ["Karl", "Heinz", "Brettschneider", "Oldenhove", "K.-H."] { #expect(!output.contains(original), "\(original) in \(output)") }
+    let lines = output.split(separator: "\n")
+    let signature = try #require(lines.last).split(separator: " ")
+    #expect(signature.count == 2 && signature[0].wholeMatch(of: /\p{Lu}\.-\p{Lu}\./) != nil, "\(output)")
+    #expect(lines[0].contains(" " + signature[1] + " ") || lines[0].contains(" " + signature[1] + ","), "\(output)")
+}

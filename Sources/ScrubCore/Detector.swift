@@ -84,7 +84,31 @@ public final class Detector {
             if !doubts.isEmpty { (kept, doubts) = Self.joined(doubts, onto: kept, in: text) }
             // A person written in pieces is one person (see `JoinedNames`).
             (kept, doubts) = JoinedNames.joined(kept, doubts, in: text)
-            return Self.wholeName(kept, in: text)
+            return Self.wholeName(Self.withNameEnds(kept, in: text), in: text)
+        }
+    }
+    /// The second half of a double-barrelled surname ("Müller-Lüdenscheidt") a reader stopped short of, and the
+    /// initials written before a surname ("H.-J. Müller", "P. Okafor"): parts of the person, never left as written.
+    private static let barrelAfter = TextPattern(#"^[-‐]\p{Lu}\p{Ll}[\p{L}'’]*(?![\p{L}\p{N}@_-])"#)
+    private static let initialsBefore = TextPattern(#"(?<![\p{L}\p{N}.@_-])\p{Lu}\.(?:[ -]?\p{Lu}\.){0,2}[ \t]$"#)
+    static func withNameEnds(_ spans: [Span], in text: String) -> [Span] {
+        guard spans.contains(where: { $0.entity == "PERSON" }) else { return spans }
+        let ns = text as NSString
+        var taken = IndexSet()
+        for span in spans where !span.range.isEmpty { taken.insert(integersIn: span.range) }
+        return spans.map { span in
+            guard span.entity == "PERSON", span.url == nil else { return span }
+            var lower = span.range.lowerBound, upper = span.range.upperBound
+            if upper < ns.length, let match = TextRanges.matches(barrelAfter, in: ns.substring(with: NSRange(location: upper, length: min(40, ns.length - upper)))).first,
+               !taken.intersects(integersIn: upper..<(upper + match.range.length)) {
+                upper += match.range.length
+            }
+            let head = max(0, lower - 12)
+            if lower > 0, let match = TextRanges.matches(initialsBefore, in: ns.substring(with: NSRange(location: head, length: lower - head))).first,
+               !taken.intersects(integersIn: (head + match.range.location)..<lower) {
+                lower = head + match.range.location
+            }
+            return lower == span.range.lowerBound && upper == span.range.upperBound ? span : Span(range: lower..<upper, entity: span.entity, score: span.score)
         }
     }
     /// A value written whole as a name is one name when a reader took its
