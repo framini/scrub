@@ -875,6 +875,12 @@ public final class Detector {
                 // Ten digits from 1 are a Unix time (2001 to 2033), never a North
                 // American number, whose area code starts from 2.
                 if value.count == 10 || value.count == 13, value.first == "1", value.allSatisfy({ $0.isASCII && $0.isNumber }) { return nil }
+                // A log's technical numbers: a connection's port ("from 10.0.0.5 port 52144"), and an access log's
+                // status and size after the request it answers ("GET /x HTTP/1.1" 200 1877).
+                let before = (text as NSString).substring(to: match.range.location)
+                if before.range(of: #"(?i)\bport[ \t]*[:=]?[ \t]*$"#, options: .regularExpression) != nil, value.allSatisfy({ $0.isASCII && $0.isNumber }),
+                   Int(value).map({ $0 <= 65_535 }) == true { return nil }
+                if before.range(of: #"HTTP/\d(?:\.\d)?"[ \t]+$"#, options: .regularExpression) != nil, value.range(of: #"^[1-5]\d\d(?:[ \t]+\d+)?$"#, options: .regularExpression) != nil { return nil }
                 // A bare run of digits may as well be an account, SSN or ID, so its
                 // stand-in keeps the digits instead of becoming "+1 555-…".
                 entity = value.allSatisfy(\.isNumber) ? "ID_NUMBER" : "PHONE_NUMBER"; score = 0.75

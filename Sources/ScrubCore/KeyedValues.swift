@@ -361,6 +361,12 @@ enum KeyedValues {
                 return
             }
             var content = content
+            // An unquoted value ends where its line goes on to another field after a bar ("Email: … | Mobile: …"):
+            // the rest is the next field's, read on its own, and never lost to this one's stand-in.
+            if unquoted, case let bar = (string(content) as NSString).range(of: #"[ \t]+\|[ \t]"#, options: .regularExpression), bar.location != NSNotFound {
+                guard bar.location > 0 else { return }
+                content = content.lowerBound..<(content.lowerBound + bar.location)
+            }
             // An unquoted secret is one token, after its scheme: "Authorization: Bearer 9f8e… rejected".
             if unquoted, KeyHints.hint(key) == "SECRET" {
                 var tokens: [Range<Int>] = []

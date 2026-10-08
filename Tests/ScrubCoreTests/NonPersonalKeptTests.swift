@@ -598,6 +598,40 @@ struct NonPersonalKeptTests {
         }
     }
 
+    /// A log's technical numbers stay as written: an access log's status and size after the request
+    /// ("HTTP/1.1" 200 1877" became "482 6238"), and a connection's port ("port 52144" became 98139, no port at all).
+    @Test func aLogsStatusSizeAndPortStay() throws {
+        let log = """
+        198.51.100.42 - - [07/Oct/2026:13:55:15 +0000] "GET /api/v2/applicants/search?email=odalys.ferriter%40example.com HTTP/2.0" 200 1877 "-" "Mozilla/5.0" rt=0.088
+        192.0.2.10 - - [07/Oct/2026:13:55:21 +0000] "GET /metrics HTTP/1.1" 200 48211 "-" "Prometheus/3.2.1" rt=0.015
+        Oct  7 14:31:44 bastion-01 sshd[22840]: Failed password for invalid user admin from 203.0.113.77 port 40122 ssh2
+        Oct  7 14:31:02 bastion-01 sshd[22817]: Accepted publickey for deploy from 198.51.100.9 port 52144 ssh2
+        """
+        for seed: UInt64 in 1...3 {
+            for name in ["access.log", "Pasted text"] {
+                let output = try Self.scrub(log, name: name, seed: seed)
+                for kept in [#"HTTP/2.0" 200 1877 "-""#, #"HTTP/1.1" 200 48211 "-""#, "port 40122 ssh2", "port 52144 ssh2"] {
+                    #expect(output.contains(kept), "[\(name) seed \(seed)] \(kept): \(output)")
+                }
+                #expect(!output.contains("odalys"), "[\(name) seed \(seed)] \(output)")
+            }
+        }
+    }
+
+    /// Replacing a value never takes the text around it: the quote that opens a logged email
+    /// ("email='…'") and the field after a bar on its line ("Email: … | Mobile: …") stay, and the number there is replaced on its own.
+    @Test func textAroundAReplacedValueStays() throws {
+        let trace = "com.example.persistence.DuplicateKeyException: Applicant already exists: name='Odalys Ferriter', email='odalys.ferriter@example.org', ref='CS-1182'"
+        let ticket = "Customer: Ms Odalys Ferriter\nEmail: odalys.ferriter@example.co.uk | Mobile: 07700 900 482\nDOB: 03/09/1977 | Plan: Basic"
+        for seed: UInt64 in 1...3 {
+            let traced = try Self.scrub(trace, name: "Pasted text", seed: seed)
+            #expect(traced.range(of: #"email='[a-z.]+@example\.[a-z]+', ref='CS-1182'"#, options: .regularExpression) != nil, "[seed \(seed)] \(traced)")
+            let written = try Self.scrub(ticket, name: "Pasted text", seed: seed)
+            #expect(written.range(of: #"\nEmail: [a-z.]+@example\.[a-z.]+ \| Mobile: \d{5} \d{3} \d{3}\n"#, options: .regularExpression) != nil, "[seed \(seed)] \(written)")
+            #expect(!written.contains("900 482") && !written.contains("Ferriter"), "[seed \(seed)] \(written)")
+        }
+    }
+
     /// A status or an enum written as a code ("KEIN_TREFFER", a screening's "no hit") is no one's name: a note's
     /// "kein Treffer" read as a person once rewrote the screening result as that person's stand-in.
     @Test func aStatusCodeIsNeverAName() throws {

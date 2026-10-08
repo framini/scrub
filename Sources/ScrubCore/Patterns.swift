@@ -103,6 +103,10 @@ enum Patterns {
                    after.range(of: #"^[ T]\d\d:\d\d"#, options: .regularExpression) != nil, !after.hasSuffix("00:00") { return }
                 if entity == "SECRET", let cut = URLs.queryValueEnd(ns, range) { range = range.lowerBound..<cut }
                 if entity == "EMAIL_ADDRESS", let start = addressStart(ns, range) { range = start..<range.upperBound }
+                // A quote the same quote closes right after the address ("email='ana@example.org'") wraps it, though a quote may open a local part.
+                if entity == "EMAIL_ADDRESS", range.upperBound < length, [39, 96].contains(units[range.lowerBound]), units[range.upperBound] == units[range.lowerBound] {
+                    range = (range.lowerBound + 1)..<range.upperBound
+                }
                 // A piece of a longer identifier ("O72" of "O72-2331-924-76") is that identifier: replaced
                 // alone, it would leave the rest written as it was, so the whole is read.
                 if Self.pieceKinds.contains(entity) { range = Self.whole(range, of: units) }
