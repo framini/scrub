@@ -453,6 +453,15 @@ public enum KeyHints {
     /// keys for statuses ("first_name": "match", "date_of_birth": "no_match")
     /// and sources ("address": ["USPS"], "firstName": ["Government"]), which are
     /// left to detection instead of becoming names, dates and streets.
+    /// A machine's name as DNS writes it: lowercase labels joined by three dots or more, or
+    /// by two where one holds a digit or a hyphen ("ip-10-0-3-17.eu-west-1.compute.internal", "db-2.int.example").
+    static func hostName(_ text: String) -> Bool {
+        let labels = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count >= 3, text.utf8.count <= 253, let top = labels.last, top.count >= 2, top.allSatisfy({ $0.isASCII && $0.isLowercase }),
+              labels.allSatisfy({ label in !label.isEmpty && label.count <= 63 && label.first != "-" && label.last != "-"
+                  && label.allSatisfy { $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "-") } }) else { return false }
+        return labels.count >= 4 || labels.contains { $0.contains(where: { $0.isNumber || $0 == "-" }) }
+    }
     static func fits(_ key: String?, _ value: String) -> Bool {
         guard let entity = hint(key) else { return true }
         let trimmed = value.trimmingCharacters(in: .whitespaces)
@@ -483,6 +492,13 @@ public enum KeyHints {
             return !referenceQualifiers.contains(qualifier)
         }
         if typeWords.contains(trimmed.lowercased()) { return false }
+        // A machine's host name under a "name" ("ip-10-0-3-17.eu-west-1.compute.internal") names no one.
+        if ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(entity), hostName(trimmed) { return false }
+        // A loopback, a public resolver and a network's block ("10.42.0.0/16") are no one's address.
+        if entity == "IP_ADDRESS" {
+            let parts = trimmed.split(separator: "/", omittingEmptySubsequences: false)
+            if Patterns.sharedAddress(String(parts[0])) || parts.count == 2 && Int(parts[1]).map({ Patterns.networkBlock(String(parts[0]), prefix: $0) }) == true { return false }
+        }
         if digestKinds.contains(entity), isDigest(trimmed) { return true }
         if entity == "USERNAME" { return !describes(trimmed) }
         // A zone's line under a line's key ("mrz": {"line2": "EJ4728193…"}), its check digits right, is the zone's, no street.

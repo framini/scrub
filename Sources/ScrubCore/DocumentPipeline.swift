@@ -71,6 +71,11 @@ struct DocumentLeaf: Sendable {
         nonPersonal = Self.holdsNoOnesData(key)
             || KeyHints.hint(key) == "SECRET" && numericEntity == nil && !KeyHints.fits(key, text)
     }
+    /// Whether the value is a private network's address under a network's machines
+    /// ("nodes": [{"ip": "10.0.3.17"}], "subnet", "gateway"): a machine's, no one's.
+    var machineAddress: Bool {
+        !contextWords.isDisjoint(with: Patterns.infrastructureWords) && Patterns.privateAddress(text.trimmingCharacters(in: .whitespaces))
+    }
     /// Whether `key` says its value is a status, an amount, a time, a code or the like.
     static func holdsNoOnesData(_ key: String?) -> Bool {
         KeyHints.hint(key) == nil && KeyHints.words(key).last.map(nonPersonalWords.contains) == true
@@ -193,7 +198,7 @@ enum DocumentPipeline {
                 job.enter(value: index, records: leaves[index].enclosing, part: leaves[index].datePart, object: leaves[index].objectPath, naming: leaves[index].naming, kind: leaves[index].decided)
                 var held = previous.held
                 let (text, marks, unresolved) = try Correction.run(previous.text, marks: previous.marks, job: job, matcher: originals, gazetteer: gazetteer, gate: gate, passes: 1, base: reusable ? [] : nil, held: &held,
-                                                                   sparing: leaves[index].nonPersonal ? ["SECRET"] : [])
+                                                                   sparing: Set(leaves[index].nonPersonal ? ["SECRET"] : []).union(leaves[index].machineAddress ? ["IP_ADDRESS"] : []))
                 if text != previous.text { changed = true; changedIndices.append(index) }
                 values[index] = DocumentValue(text: text, marks: marks, unresolved: unresolved, held: held)
             }
@@ -366,6 +371,7 @@ enum DocumentPipeline {
             let leaf = leaves[index]
             job.enter(value: index, records: leaf.enclosing, part: leaf.datePart, object: leaf.objectPath, naming: leaf.naming, kind: leaf.decided)
             var found = founds[index]
+            if leaf.machineAddress { found.removeAll { $0.entity == "IP_ADDRESS" } }
             job.recordOriginals([(leaf.seen, found)])
             // Read in the text as seen, replaced in the text as written.
             if let view = leaf.view { found = found.map(view.raw) }

@@ -88,6 +88,10 @@ enum Patterns {
                 if entity == "IP_ADDRESS", range.upperBound < length {
                     let tail = TextRanges.substring(text, range.upperBound..<min(length, range.upperBound + 2))
                     if tail.range(of: #"^\.[0-9]|^:[0-9A-Fa-f]"#, options: .regularExpression) != nil { return }
+                    // A network's block ("10.42.0.0/16") names a range of machines, no one's.
+                    let after = TextRanges.substring(text, range.upperBound..<min(length, range.upperBound + 5))
+                    if let slash = after.range(of: #"^/\d{1,3}(?!\d)"#, options: .regularExpression),
+                       let prefix = Int(after[slash].dropFirst()), networkBlock(TextRanges.substring(text, range), prefix: prefix) { return }
                 }
                 // A day with its time of day ("[2026-09-14 14:03:05]") stamps a line or an event; one at midnight may be a birth date stored as a time.
                 if entity == "DATE_OF_BIRTH", range.upperBound < length,
@@ -263,14 +267,56 @@ enum Patterns {
             let (a, b) = parts[0] > 31 ? (parts[1], parts[2]) : (parts[0], parts[1])
             return (1...12).contains(a) && (1...31).contains(b) || (1...12).contains(b) && (1...31).contains(a)
         case "IP_ADDRESS":
-            // "::" alone is the unspecified address: no host's.
-            guard value.contains(where: \.isHexDigit) else { return false }
+            // "::" alone is the unspecified address: no host's; nor is a loopback or a public resolver's (see `sharedAddress`).
+            guard value.contains(where: \.isHexDigit), !sharedAddress(value) else { return false }
             var v4 = in_addr(); var v6 = in6_addr()
             if !value.contains("."), !value.contains(":") { return value.replacingOccurrences(of: "-", with: ".").withCString { inet_pton(AF_INET, $0, &v4) == 1 } }
             return value.withCString { inet_pton(AF_INET, $0, &v4) == 1 || inet_pton(AF_INET6, $0, &v6) == 1 }
         default: return true
         }
     }
+    /// An address no one's device holds: the loopback ("127.0.0.1", "::1"), the
+    /// unspecified address ("0.0.0.0") and a public resolver's well-known address
+    /// ("8.8.8.8", "1.1.1.1"), which every network asks alike.
+    static func sharedAddress(_ value: String) -> Bool {
+        var v4 = in_addr(), v6 = in6_addr()
+        if value.withCString({ inet_pton(AF_INET, $0, &v4) }) == 1 {
+            let octets = withUnsafeBytes(of: v4.s_addr) { Array($0) }
+            return octets[0] == 127 || octets.allSatisfy { $0 == 0 } || publicResolvers.contains(value)
+        }
+        guard value.withCString({ inet_pton(AF_INET6, $0, &v6) }) == 1 else { return false }
+        let bytes = withUnsafeBytes(of: v6) { Array($0) }
+        return bytes.dropLast().allSatisfy { $0 == 0 } && bytes[15] <= 1 || publicResolvers.contains(value.lowercased())
+    }
+    private static let publicResolvers: Set<String> = ["8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1", "9.9.9.9", "149.112.112.112", "208.67.222.222", "208.67.220.220",
+                                                       "2001:4860:4860::8888", "2001:4860:4860::8844", "2606:4700:4700::1111", "2606:4700:4700::1001"]
+    /// An address of a private network (10/8, 172.16/12, 192.168/16, fc00::/7): a
+    /// machine's inside a network, which names a person only where a person's record holds it.
+    static func privateAddress(_ value: String) -> Bool {
+        var v4 = in_addr(), v6 = in6_addr()
+        if value.withCString({ inet_pton(AF_INET, $0, &v4) }) == 1 {
+            let o = withUnsafeBytes(of: v4.s_addr) { Array($0) }
+            return o[0] == 10 || o[0] == 172 && (16...31).contains(o[1]) || o[0] == 192 && o[1] == 168
+        }
+        guard value.withCString({ inet_pton(AF_INET6, $0, &v6) }) == 1 else { return false }
+        return withUnsafeBytes(of: v6) { $0[0] } & 0xFE == 0xFC
+    }
+    /// Whether an address followed by a prefix's length ("10.42.0.0/16") is a network's block:
+    /// its host bits all zero. A host's own address with its mask ("98.204.17.66/24") is no block.
+    static func networkBlock(_ address: String, prefix: Int) -> Bool {
+        var v4 = in_addr(), v6 = in6_addr()
+        let bytes: [UInt8]
+        if address.withCString({ inet_pton(AF_INET, $0, &v4) }) == 1 { bytes = withUnsafeBytes(of: v4.s_addr) { Array($0) } }
+        else if address.withCString({ inet_pton(AF_INET6, $0, &v6) }) == 1 { bytes = withUnsafeBytes(of: v6) { Array($0) } }
+        else { return false }
+        guard prefix >= 0, prefix < bytes.count * 8 else { return false }
+        for bit in prefix..<(bytes.count * 8) where bytes[bit / 8] & (0x80 >> UInt8(bit % 8)) != 0 { return false }
+        return true
+    }
+    /// The keys and words of a network's machines ("nodes", "dns", "subnet", "gateway"): an address under them is a machine's, no one's.
+    static let infrastructureWords: Set<String> = ["node", "nodes", "dns", "nameserver", "nameservers", "resolver", "resolvers", "subnet", "subnets", "gateway", "gateways",
+                                                   "cidr", "vpc", "cluster", "clusters", "router", "routers", "upstream", "upstreams", "loopback", "listen", "bind",
+                                                   "pod", "pods", "kubelet", "netmask", "broadcast", "nat", "ingress", "egress", "vip", "vips", "lb", "loadbalancer", "peers", "replicas", "replica"]
     /// Only a Visa card is 13 digits, and it opens with a 4; 13 digits opening
     /// with a 1 is a time in milliseconds ("sent_at": 1668455936404).
     static func epochMilliseconds(_ digits: [Int]) -> Bool { digits.count == 13 && digits.first != 4 }

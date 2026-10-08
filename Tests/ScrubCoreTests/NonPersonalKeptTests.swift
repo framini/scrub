@@ -284,6 +284,44 @@ struct NonPersonalKeptTests {
         }
     }
 
+    @Test func aNetworksMachinesAddressesStay() throws {
+        // A cluster's status named no one, yet its node's host name became a person and every address a stand-in.
+        let cluster = """
+        {
+          "cluster": "prod-eu-1",
+          "nodes": [
+            {"name": "ip-10-0-3-17.eu-west-1.compute.internal", "ip": "10.0.3.17", "status": "Ready"},
+            {"name": "worker-b", "ip": "192.168.1.20", "status": "NotReady"}
+          ],
+          "dns": ["8.8.8.8", "1.1.1.1"],
+          "subnet": {"cidr": "10.42.0.0/16", "gateway": "10.42.0.1"},
+          "listen": "0.0.0.0:8443",
+          "loopback": "127.0.0.1",
+          "ipv6_loopback": "::1",
+          "maintainers": ["team-payments", "team-sre"]
+        }
+        """
+        // A person's session keeps none of its addresses but the resolver it asked.
+        let session = #"{"session": {"user": "Tobiah Quarrington", "email": "t.quarrington@example.net", "ip": "98.204.17.66", "lan_ip": "192.168.1.20", "dns": "8.8.8.8"}}"#
+        let log = """
+        2026-09-14T10:22:31Z INFO [edge] listening on 127.0.0.1:8080, routing 10.42.0.0/16 via 10.42.0.1
+        2026-09-14T10:22:33Z INFO [edge] login user=t.quarrington@example.net client=98.204.17.66 iface=98.204.17.66/24
+
+        """
+        for seed in UInt64(0)..<3 {
+            for name in ["cluster.json", "Pasted text"] {
+                let output = try Self.scrub(cluster, name: name, seed: seed)
+                #expect(output == cluster, "\(output)")
+            }
+            let person = try Self.scrub(session, name: "session.json", seed: seed)
+            for gone in ["Quarrington", "98.204.17.66", "192.168.1.20"] { #expect(!person.contains(gone), "\(gone): \(person)") }
+            #expect(person.contains(#""dns": "8.8.8.8""#), "\(person)")
+            let text = try Self.scrub(log, name: "edge.log", seed: seed)
+            #expect(text.contains("listening on 127.0.0.1:8080, routing 10.42.0.0/16 via"), "\(text)")
+            for gone in ["quarrington", "98.204.17.66"] { #expect(!text.contains(gone), "\(gone): \(text)") }
+        }
+    }
+
     @Test func aChatsLineTimesStayWhenItAsksForABirthDate() throws {
         // Asking for a "dob" made every line's time "[2026-09-14 14:02:40]" a birth date, rewritten everywhere.
         let chat = """
