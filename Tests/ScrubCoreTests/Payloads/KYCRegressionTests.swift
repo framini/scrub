@@ -470,3 +470,19 @@ func aRareWordNameBesideAnAddressIsReplaced(_ name: String) throws {
     let pasted = String(decoding: try Scrubber.scrub(Data("Name: Ilka Sztojka\nAddress: Hegedűs Gyula utca 76, 1136 Budapest\n".utf8), name: "Pasted text", forceFullDetection: false, seed: 5).output, as: UTF8.self)
     #expect(!pasted.contains("Sztojka"), "\(pasted)")
 }
+
+/// A floor or flat in one address never draws another the document writes
+/// ("1. OG" beside a current "2. OG"), so it always takes a stand-in of its
+/// own shape rather than a placeholder.
+@Test(arguments: renderings)
+func aUnitNeverDrawsAnotherAddresssUnit(_ name: String) throws {
+    let response = #"{"fullName":"Wendelin Achterberg","address":{"streetAddress":"Am Gries 654","address2":"2. OG","city":"München","postalCode":"80538","countryCode":"DE"},"previousAddresses":[{"street":"AM MÜHLBACH","buildingNumber":613,"apt":"1. OG","town":"HAMBURG","postcode":"20095","country":"DE"},{"street":"CALLE MAYOR","buildingNumber":914,"apt":"8º B","town":"SEVILLA","postcode":"41004","country":"ES"},{"street":"CALLE OLIVOS","buildingNumber":12,"apt":"3º B","town":"BILBAO","postcode":"48001","country":"ES"}]}"#
+    for seed in UInt64(1)...40 {
+        let output = try scrub(response, as: name, seed: seed).replacingOccurrences(of: #"'\''"#, with: "'")
+        #expect(!output.contains("[ADDRESS]"), "seed \(seed): \(output)")
+        let units = [try value(output, "address", "address2")] + (try (0..<3).map { try value(output, "previousAddresses", String($0), "apt") })
+        for (unit, pattern) in zip(units, [#"^\d\. OG$"#, #"^\d\. OG$"#, #"^\dº B$"#, #"^\dº B$"#]) {
+            #expect(unit.range(of: pattern, options: .regularExpression) != nil && !["2. OG", "1. OG", "8º B", "3º B"].contains(unit), "seed \(seed): \(units)")
+        }
+    }
+}

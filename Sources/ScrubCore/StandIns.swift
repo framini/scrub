@@ -9,8 +9,12 @@ final class StandIns {
     private var originals: Set<String> = []
     /// The last four digits of every long number found, which no stand-in year may spell.
     private var originalEndings: Set<String> = []
+    /// The words of every short value found: a street or place abroad takes no name another value
+    /// writes ("Calle Mayor" never becomes "Calle Olivos" beside a real "CALLE OLIVOS").
+    private var originalWords: Set<String> = []
     func avoid(_ original: String) {
         originals.insert(original.lowercased())
+        if original.utf16.count <= 160 { for word in original.lowercased().split(whereSeparator: { !$0.isLetter }) where word.count >= 3 { originalWords.insert(String(word)) } }
         let digits = original.filter { $0.isASCII && $0.isNumber }
         if digits.count >= 7 { originalEndings.insert(String(digits.suffix(4))) }
         // "Denver, Colorado 80205" also names Denver, which no other place may become.
@@ -853,8 +857,10 @@ final class StandIns {
         let lead = original.firstIndex(where: \.isNumber)
         func draw() -> String { String(original.indices.map { index in original[index].isNumber ? Character(digit(index == lead)) : original[index] }) }
         var made = draw()
-        // Never the number it replaces ("3. OG" drawn as "3. OG"); and, like `digits`, four digits never spell a real number's ending or another real value.
-        for _ in 0..<16 where made == original || made.filter(\.isNumber).count == 4 && (originalEndings.contains(made.filter(\.isNumber)) || originals.contains(made.filter(\.isNumber))) { made = draw() }
+        // Never the number it replaces ("3. OG" drawn as "3. OG") nor another the document writes ("2. OG" two
+        // addresses up, which no stand-in may be); and, like `digits`, four digits never spell a real number's ending or another real value.
+        for _ in 0..<16 where made == original || originals.contains(made.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))
+            || made.filter(\.isNumber).count == 4 && (originalEndings.contains(made.filter(\.isNumber)) || originals.contains(made.filter(\.isNumber))) { made = draw() }
         return made
     }
 
@@ -989,7 +995,7 @@ final class StandIns {
     /// nil where English ones read right.
     private func names(for country: String?) -> [String] {
         let pool = country.flatMap { Places.streetWords[$0] } ?? Names.streets
-        return pool.filter { !originals.contains($0.lowercased()) }
+        return pool.filter { !originals.contains($0.lowercased()) && !originalWords.contains($0.lowercased()) }
     }
 
     /// A street in a layout of its own country, "Lindenhofer Straße 48a" →
