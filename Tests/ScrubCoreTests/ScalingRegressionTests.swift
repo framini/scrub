@@ -382,3 +382,52 @@ private func serviceLog(_ count: Int) -> Data {
     // Read once, about half as long; read every time, about two thirds.
     #expect(repeated * 9 < unique * 5)
 }
+
+/// A support log's notes, a person named on every line: each name's place in the text, as a reader found it.
+private func namedNotes(_ count: Int) -> (text: String, spans: [Span]) {
+    let firsts = ["Odalys", "Teodoro", "Marisol", "Kwabena", "Ingrid", "Tobiah", "Saoirse", "Leocadia"]
+    let lasts = ["Ferriter", "Quillan", "Abernathy", "Oduya", "Brackenridge", "Thornquist", "Castellanos", "Venkataraman"]
+    var text = "", spans: [Span] = []
+    for index in 0..<count {
+        let name = "\(firsts[index % firsts.count]) \(lasts[index / firsts.count % lasts.count])"
+        let start = (text as NSString).length
+        spans.append(Span(range: start..<(start + (name as NSString).length), entity: "PERSON", score: 0.9))
+        text += "\(name) asked for a refund on order \(index * 37 + 1000); she will call back after \(index % 12 + 1) pm.\n"
+    }
+    return (text, spans)
+}
+
+/// A text naming four times as many people takes about four times as long to join their names' pieces
+/// and to read the pronouns after each, not sixteen: each name is weighed against its neighbours, not every other name.
+@Test func manyPeopleInOneTextScaleLinearly() {
+    let small = namedNotes(1_000), large = namedNotes(4_000)
+    let (joinedShort, joinedLong) = settled({ _ = JoinedNames.joined(small.spans, [], in: small.text) },
+                                            { _ = JoinedNames.joined(large.spans, [], in: large.text) }, until: { $1 < $0 * 6 })
+    print("joined names debug: 1000=\(joinedShort), 4000=\(joinedLong)")
+    #expect(joinedLong < joinedShort * 6)
+    let (observedShort, observedLong) = settled({ Job(seed: 3).observeSpans([(small.text, small.spans)]) },
+                                                { Job(seed: 3).observeSpans([(large.text, large.spans)]) }, until: { $1 < $0 * 6 })
+    print("observed names debug: 1000=\(observedShort), 4000=\(observedLong)")
+    #expect(observedLong < observedShort * 6)
+}
+
+@Test func enclosingRangesMatchLinearReference() {
+    var seed: UInt64 = 0x5eed_2b17
+    var differing: [String] = []
+    func next() -> Int { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Int(seed >> 33) }
+    for _ in 0..<500 {
+        let ranges = (0..<(next() % 40)).map { _ in
+            let start = next() % 60
+            return start..<(start + next() % 12)
+        }
+        let enclosing = JoinedNames.Enclosing(ranges)
+        for start in 0..<64 {
+            for end in start..<(start + 14) {
+                let range = start..<end
+                let linear = ranges.contains { $0 != range && $0.lowerBound <= range.lowerBound && range.upperBound <= $0.upperBound }
+                if enclosing.holds(range) != linear { differing.append("\(range) in \(ranges)") }
+            }
+        }
+    }
+    #expect(differing.isEmpty, "\(differing.prefix(3))")
+}

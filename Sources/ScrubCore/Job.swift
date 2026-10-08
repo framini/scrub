@@ -78,6 +78,8 @@ public final class Job {
         defer { learnSpelled(spelling) }
         for (text, spans) in fields {
             let length = (text as NSString).length
+            // Where each name in the text starts, in order: the next one after a name ends its pronouns' reach.
+            let starts = spans.contains { $0.entity == "PERSON" } ? spans.filter { Self.naming.contains($0.entity) }.map(\.range.lowerBound).sorted() : []
             for span in spans {
                 // A link's part is the value it spells: "Odalys+Ferriter" is Odalys Ferriter.
                 let value = span.url.map { URLs.decode(TextRanges.substring(text, span.range), $0) } ?? TextRanges.substring(text, span.range)
@@ -95,13 +97,22 @@ public final class Job {
                 if span.entity != "PHONE_NUMBER", value.filter(\.isLetter).count < 2 { continue }
                 gazetteer[span.entity, default: []].insert(value)
                 if span.entity == "PERSON" {
-                    let next = spans.lazy.filter { $0.range.lowerBound >= span.range.upperBound && Self.naming.contains($0.entity) }.map(\.range.lowerBound).min() ?? length
+                    let next = Self.first(in: starts, atLeast: span.range.upperBound) ?? length
                     _ = standIns.people.registerFull(value, gender: Self.pronounGender(of: value, after: span.range, before: next, in: text))
                     rememberParts(of: value, confidence: span.score)
                 }
                 if span.entity == "EMAIL_ADDRESS" { spelling.append((value, span.score)) }
             }
         }
+    }
+    /// The first of `sorted` at least `bound`, found by halving.
+    private static func first(in sorted: [Int], atLeast bound: Int) -> Int? {
+        var low = 0, high = sorted.count
+        while low < high {
+            let middle = (low + high) / 2
+            if sorted[middle] < bound { low = middle + 1 } else { high = middle }
+        }
+        return low < sorted.count ? sorted[low] : nil
     }
     /// The sex the first pronoun after a name in its sentence gives a person whose
     /// first name gives none ("Dr. Benedikt Sauer, can speak to my work; he is …"),

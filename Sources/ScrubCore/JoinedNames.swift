@@ -157,17 +157,18 @@ enum JoinedNames {
             let score = group.filter { $0.sure == sure }.map(\.score).max() ?? 0
             if sure { people.append(Span(range: range, entity: "PERSON", score: score)) } else { doubted.append(Span(range: range, entity: "PERSON", score: score)) }
         }
-        others.removeAll { span in span.entity == "LOCATION" && joinedPlaces.contains(span.range) }
+        let placesJoined = Set(joinedPlaces)
+        others.removeAll { span in span.entity == "LOCATION" && placesJoined.contains(span.range) }
         // A finding of another kind inside a joined person ("Mary" read as a place) gives way to it.
-        others.removeAll { span in span.entity == "LOCATION" && people.contains { $0.range.lowerBound <= span.range.lowerBound && span.range.upperBound <= $0.range.upperBound && $0.range != span.range } }
+        let inPerson = Enclosing(people.map(\.range))
+        others.removeAll { span in span.entity == "LOCATION" && inPerson.holds(span.range) }
         // A person inside another, grown over it, is part of it.
         func opensName(_ range: Range<Int>) -> Bool {
             guard let opening = NameShape.words(range, in: text).first else { return false }
             return !greetings.contains(opening.bare) && !NameShape.commands.contains(opening.bare)
         }
-        people = people.filter { inner in
-            !people.contains { $0.range != inner.range && $0.range.lowerBound <= inner.range.lowerBound && inner.range.upperBound <= $0.range.upperBound && opensName($0.range) }
-        }
+        let inName = Enclosing(people.map(\.range).filter(opensName))
+        people = people.filter { !inName.holds($0.range) }
         let all = (others + people).sorted { $0.range.lowerBound < $1.range.lowerBound }
         return (all, (otherDoubts + doubted).sorted { $0.range.lowerBound < $1.range.lowerBound })
     }
@@ -232,6 +233,36 @@ enum JoinedNames {
         if lower < range.lowerBound, found.contains(where: { $0.overlaps(lower..<range.lowerBound) }) { lower = range.lowerBound }
         if upper > range.upperBound, found.contains(where: { $0.overlaps(range.upperBound..<upper) }) { upper = range.upperBound }
         return (unsuffixed(lower..<upper, in: text), nicknamed)
+    }
+    /// Ranges, ordered by where they start, that say whether one of them other than a
+    /// range itself holds it, without a look at each for every range asked about.
+    struct Enclosing {
+        private let lowers: [Int]
+        /// The furthest end among the ranges up to each, in order.
+        private let reach: [Int]
+        init(_ ranges: [Range<Int>]) {
+            let sorted = ranges.sorted { $0.lowerBound < $1.lowerBound }
+            lowers = sorted.map(\.lowerBound)
+            var furthest = Int.min
+            reach = sorted.map { furthest = max(furthest, $0.upperBound); return furthest }
+        }
+        /// How many ranges start before `bound`, or at it too when `including`.
+        private func count(before bound: Int, including: Bool) -> Int {
+            var low = 0, high = lowers.count
+            while low < high {
+                let middle = (low + high) / 2
+                if lowers[middle] < bound || including && lowers[middle] == bound { low = middle + 1 } else { high = middle }
+            }
+            return low
+        }
+        /// One range other than `range` starts at or before it and ends at or after it: one that
+        /// starts before it and ends no sooner, or one that starts no later and ends after it.
+        func holds(_ range: Range<Int>) -> Bool {
+            let before = count(before: range.lowerBound, including: false)
+            if before > 0, reach[before - 1] >= range.upperBound { return true }
+            let upTo = count(before: range.lowerBound, including: true)
+            return upTo > 0 && reach[upTo - 1] > range.upperBound
+        }
     }
     /// A suffix says which of a family it is, not who: it stays as written after the stand-in ("… Jr.").
     private static func unsuffixed(_ range: Range<Int>, in text: String) -> Range<Int> {
