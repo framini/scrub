@@ -121,3 +121,21 @@ import Testing
         #expect(output.contains("ik ben ") && output.contains("Ik ben hier om te helpen, "), "[\(path)] \(output)")
     }
 }
+
+/// An ops chat that names a person all in small letters, then calls them by a first name that is also
+/// a word: each later "ivy" is that person, replaced by the first name of their stand-in, not asked about.
+@Test func aLowercaseFirstNameFollowsTheFullNameInAChat() throws {
+    let chat = """
+    [09:00] ops1: kyc fail for ivy brannigan again
+    [09:01] ops2: ivy's ssn looks mistyped, bureau has a different one
+    [09:02] ops1: i'll ping ivy later
+    [09:03] ops2: ok, and tell ivy to resend the selfie
+    """
+    let result = try Scrubber.scrub(Data(chat.utf8), name: "Pasted text")
+    let output = try #require(String(data: result.output, encoding: .utf8))
+    #expect(!output.lowercased().contains("ivy") && !output.contains("brannigan"), "\(output)")
+    let lines = output.split(separator: "\n").map(String.init)
+    let first = try #require(lines[0].components(separatedBy: "kyc fail for ").last?.split(separator: " ").first.map(String.init))
+    #expect(lines[1].contains("ops2: \(first)'s ssn looks mistyped") && lines[2].hasSuffix("ping \(first) later") && lines[3].contains("tell \(first) to resend"), "\(output)")
+    #expect(result.unresolved.isEmpty, "\(result.unresolved.map(\.original))")
+}

@@ -84,8 +84,38 @@ public final class Detector {
             if !doubts.isEmpty { (kept, doubts) = Self.joined(doubts, onto: kept, in: text) }
             // A person written in pieces is one person (see `JoinedNames`).
             (kept, doubts) = JoinedNames.joined(kept, doubts, in: text)
-            return Self.wholeName(Self.withNameEnds(kept, in: text), in: text)
+            kept = Self.withNameEnds(kept, in: text)
+            let called = Self.firstNamesOfLowercasePeople(kept, in: text)
+            if !called.isEmpty {
+                kept += called
+                doubts.removeAll { doubt in called.contains { $0.range.overlaps(doubt.range) } }
+            }
+            return Self.wholeName(kept, in: text)
         }
+    }
+    /// "rose" alone in a chat that named "rose martinez": a person written all in small letters is
+    /// called by their first name later, as a capitalised one is ("rose's ssn", "ping rose"), and
+    /// that first name is theirs though it is also a word. Only where nothing else was found.
+    static func firstNamesOfLowercasePeople(_ spans: [Span], in text: String) -> [Span] {
+        var firsts: Set<String> = []
+        for span in spans where span.entity == "PERSON" && span.url == nil {
+            let words = NameShape.words(span.range, in: text)
+            guard words.count >= 2, words.allSatisfy({ $0.text == $0.text.lowercased() }), NameLists.isFirst(words[0].bare), words[0].bare.count >= 3 else { continue }
+            firsts.insert(words[0].text)
+        }
+        guard !firsts.isEmpty else { return [] }
+        var taken = IndexSet()
+        for span in spans where !span.range.isEmpty { taken.insert(integersIn: span.range) }
+        var found: [Span] = []
+        for first in firsts {
+            let pattern = TextPattern("(?<![\\p{L}\\p{N}@._-])" + NSRegularExpression.escapedPattern(for: first) + "(?![\\p{L}\\p{N}@_-])(?!\\.[\\p{L}\\p{N}])")
+            for match in TextRanges.matches(pattern, in: text) {
+                let range = match.range.location..<NSMaxRange(match.range)
+                guard !taken.intersects(integersIn: range) else { continue }
+                found.append(Span(range: range, entity: "PERSON", score: 0.85))
+            }
+        }
+        return found
     }
     /// The second half of a double-barrelled surname ("Müller-Lüdenscheidt") a reader stopped short of, and the
     /// initials written before a surname ("H.-J. Müller", "P. Okafor"): parts of the person, never left as written.
