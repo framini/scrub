@@ -169,7 +169,8 @@ enum ContextStage {
             // A calendar date ("Last backup 2022-11-28") is a date, not an ID; a birth date is DOB's.
             guard TextRanges.matches(calendarDate, in: value).isEmpty else { return nil }
             // Nor is a reading, a code or a reference no one is filed under (see `notFiledUnder`).
-            guard !notFiledUnder(value) else { return nil }
+            // Unless its own words call it a person's ("license plate FYT-9375", "MRN-65881").
+            guard !notFiledUnder(value) || namedPersonal(range, in: text) else { return nil }
             // A bare run of digits is someone's only where the sentence ties it to
             // someone: a deal, notice or ticket number in a business email is not.
             if value.allSatisfy(\.isNumber) {
@@ -275,6 +276,22 @@ enum ContextStage {
         return referencePrefixes.contains(prefix.lowercased())
             || prefix == prefix.uppercased() && (1...5).contains(number.count) && number.allSatisfy(\.isNumber)
     }
+    /// Whether an ID is a person's by its own words, though shaped like a reference: its prefix is a
+    /// medical record's or a customer's code ("MRN-65881", "CID-92281"), or the words before it in its
+    /// sentence name a person's record, licence, plate or biometric ID with no request, order or ticket
+    /// after them ("The license plate for the vehicle is VXP-3921", "| Employee ID: | MKT-3928").
+    static func namedPersonal(_ range: Range<Int>, in text: String) -> Bool {
+        let value = TextRanges.substring(text, range)
+        if let match = TextRanges.matches(referenced, in: value).first,
+           personCodes.contains((value as NSString).substring(with: match.range(at: 1)).lowercased()) { return true }
+        let around = sentence(around: range, in: text)
+        let before = (text as NSString).substring(with: NSRange(location: around.range.lowerBound, length: range.lowerBound - around.range.lowerBound))
+        guard let cue = TextRanges.matches(personsID, in: before).last else { return false }
+        return TextRanges.matches(referenceWord, in: (before as NSString).substring(from: NSMaxRange(cue.range))).isEmpty
+    }
+    private static let personCodes: Set<String> = ["mrn", "cid"]
+    private static let personsID = TextPattern(#"(?i)\b(?:medical[ \t]+records?|mrn|patient|customer|client|member|employee|biometric|licen[cs]e|plates?)\b"#)
+    private static let referenceWord = TextPattern(#"(?i)\b(?:order|ticket|request|invoice|application|case|transaction|incident|quote)s?\b"#)
     /// A value whose prefix names a request's, an order's or a ticket's reference ("ref-55af36d14d", "REQ-20417").
     static func referencePrefixed(_ value: String) -> Bool {
         guard let match = TextRanges.matches(referenced, in: value).first else { return false }

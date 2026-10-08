@@ -404,4 +404,26 @@ struct NonPersonalKeptTests {
             for gone in ["Bohdan", "Kovalchyk", "Marrow"] { #expect(!output.contains(gone), "\(gone): \(output)") }
         }
     }
+
+    @Test func anIDItsOwnWordsCallAPersonsIsReplacedThoughShapedLikeAReference() throws {
+        // A record number, a plate, a member's or an employee's ID of capitals and a short number was let go
+        // as a tracker's key ("ONB-1693"), and a licence number opening "TX-" as a transaction's reference.
+        let notes = """
+        Service note 2026-09-14: oil change for the vehicle with the license plate KWD-4417, owner Ottoline Wexcombe.
+        Intake: patient seen in triage, MRN-58213, referred to Dr. Tobiah Quennell. MRN-58213 to be flagged for follow-up.
+        The customer id for reference is QV-30418 and the member's card number is HLM-7720.
+        The certificate license number for this audit is TX-6604183.
+        | Employee ID: | PLN-2291 |
+        | Name: | Ottoline Wexcombe |
+        Action: Tobiah to follow up on the onboarding board (ONB-1693) and request REQ-20417.
+        """
+        let body = #"{"case": {"note": "\#(notes.replacingOccurrences(of: "\n", with: "\\n"))", "status": "open"}}"#
+        for seed in UInt64(0)..<3 {
+            for (document, name) in [(notes, "notes.txt"), (body, "case.json")] {
+                let output = try Self.scrub(document, name: name, seed: seed)
+                for gone in ["KWD-4417", "58213", "QV-30418", "HLM-7720", "TX-6604183", "PLN-2291", "Wexcombe"] { #expect(!output.contains(gone), "\(gone) in \(name): \(output)") }
+                for kept in ["(ONB-1693)", "REQ-20417"] { #expect(output.contains(kept), "\(kept) in \(name): \(output)") }
+            }
+        }
+    }
 }
