@@ -439,4 +439,63 @@ struct NonPersonalKeptTests {
             }
         }
     }
+
+    @Test func placesInADocumentOfNoOnesStayAsWritten() throws {
+        // A service's regions, its data centres keyed by their cities and an error's region were replaced
+        // with no person, street or postcode anywhere in the document, a key ("Austin") among them.
+        let spec = """
+        {
+          "openapi": "3.1.0",
+          "info": {"title": "Fraud Signals API", "version": "2.7.1"},
+          "servers": [{"url": "https://signals.example.com/v2"}],
+          "regions": ["Virginia", "Oregon", "Frankfurt", "Sydney"],
+          "dataCenters": {"Austin": "dc-aus-2", "Dublin": "dc-dub-1"},
+          "retryPolicy": {"maxAttempts": 4, "backoffMs": [250, 500, 1000]}
+        }
+        """
+        let failure = #"{"errors": [{"code": "ADDRESS_NOT_FOUND", "message": "The address could not be verified."}], "decision": "Manual Review", "policy": "Standard Tier 2", "region": "Virginia"}"#
+        for seed: UInt64 in 1...3 {
+            for (document, name) in [(spec, "spec.json"), (spec, "Pasted text"), (failure, "error.json"), (failure, "Pasted text")] {
+                let output = try Self.scrub(document, name: name, seed: seed)
+                #expect(output == document, "[\(name) seed \(seed)] \(output)")
+            }
+        }
+    }
+
+    @Test func aPlaceBesideSomeonesDataIsStillReplaced() throws {
+        // The same places beside a person, or as someone's place of birth alone, are theirs.
+        let profile = #"{"agent": {"fullName": "Corwin Halloway-Pryce", "email": "corwin.hp@example.com"}, "licensedStates": {"state": "Virginia"}, "regions": ["Virginia", "Oregon"]}"#
+        let born = #"{"extracted": {"placeOfBirth": "Saskatoon"}, "checks": {"liveness": "PASS"}}"#
+        for seed: UInt64 in 1...3 {
+            for name in ["profile.json", "Pasted text"] {
+                let output = try Self.scrub(profile, name: name, seed: seed)
+                for gone in ["Virginia", "Oregon", "Halloway", "corwin"] { #expect(!output.contains(gone), "[\(name) seed \(seed)] \(gone): \(output)") }
+                let birth = try Self.scrub(born, name: name, seed: seed)
+                #expect(!birth.contains("Saskatoon"), "[\(name) seed \(seed)] \(birth)")
+            }
+        }
+    }
+
+    @Test func twoStatesNeverShareOneStandIn() throws {
+        // "Virginia" and "Oregon" side by side both became "Wisconsin": two places read as one.
+        let applicant = """
+        {"applicant": {"name": "Marisol Ekwueme", "dob": "1979-03-14"},
+         "addresses": [
+           {"line1": "4417 Larkspur Ct", "city": "Richmond", "state": "Virginia", "zip": "23220"},
+           {"line1": "88 Quarry Bend Rd", "city": "Bend", "state": "Oregon", "zip": "97701"}
+         ],
+         "regions": ["Virginia", "Oregon"]}
+        """
+        for seed: UInt64 in 1...8 {
+            for name in ["applicant.json", "Pasted text"] {
+                let output = try Self.scrub(applicant, name: name, seed: seed)
+                let json = try JSONSerialization.jsonObject(with: Data(output.utf8)) as! [String: Any]
+                let addresses = json["addresses"] as! [[String: Any]], regions = json["regions"] as! [String]
+                let first = addresses[0]["state"] as! String, second = addresses[1]["state"] as! String
+                #expect(first != second, "[\(name) seed \(seed)] \(output)")
+                #expect(regions[0] == first && regions[1] == second, "[\(name) seed \(seed)] \(output)")
+                for gone in ["Virginia", "Oregon", "Ekwueme"] { #expect(!output.contains(gone), "[\(name) seed \(seed)] \(output)") }
+            }
+        }
+    }
 }

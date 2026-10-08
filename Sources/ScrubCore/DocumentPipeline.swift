@@ -382,6 +382,13 @@ enum DocumentPipeline {
             founds[index] = found
         }
         Fields.decide(leaves, &founds)
+        if placesStandAlone(leaves, founds, doubts) {
+            for index in founds.indices {
+                guard standsAsPlace(leaves[index]) else { continue }
+                let whole = leaves[index].seen.trimmingCharacters(in: .whitespaces)
+                founds[index].removeAll { placeKinds.contains($0.entity) && TextRanges.substring(leaves[index].seen, $0.range) == whole && namesAPlace(whole) }
+            }
+        }
         for index in order {
             try Scrubber.checkCancellation()
             let leaf = leaves[index]
@@ -416,6 +423,41 @@ enum DocumentPipeline {
             values[index] = DocumentValue(text: text, marks: marks, unresolved: [], held: held)
         }
         return (gazetteer, values.map { $0! })
+    }
+
+    private static let placeKinds: Set<String> = ["LOCATION", "REGION"]
+    /// Whether the document's places are all it holds of anyone's: no person, street, postcode
+    /// or other personal value found or named by a key, nor a place of birth. A cloud's regions
+    /// and a configuration's data centres keyed by their cities name a place and no one in it
+    /// (see `standsAsPlace` for the ones kept).
+    private static func placesStandAlone(_ leaves: [DocumentLeaf], _ founds: [[Span]], _ doubts: [[Span]]) -> Bool {
+        // A paste's text has no fields to read around its places by.
+        guard leaves.contains(where: { $0.lastRecord != nil }), founds.contains(where: { $0.contains { placeKinds.contains($0.entity) } }),
+              founds.allSatisfy({ $0.allSatisfy { placeKinds.contains($0.entity) } }), doubts.allSatisfy(\.isEmpty) else { return false }
+        return !leaves.contains { leaf in
+            guard !leaf.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+            if leaf.numericEntity != nil || leaf.unsureName || leaf.doubtedName { return true }
+            guard let hint = KeyHints.hint(leaf.key ?? leaf.addressKey) else { return false }
+            let key = KeyHints.words(leaf.key ?? leaf.addressKey).joined()
+            return !placeKinds.contains(hint) || key.contains("birth") || key == "pob"
+        }
+    }
+
+    /// Whether a value names a place for what it is rather than where someone is: an object's key
+    /// ("dataCenters": {"Austin": …}) or a region's ("region": "Virginia", "regions": [...]),
+    /// a cloud's or a service's as often as a state. A city's or a state's key is an address's part.
+    private static func standsAsPlace(_ leaf: DocumentLeaf) -> Bool {
+        if leaf.lastRecord == nil { return leaf.key == nil && leaf.field == nil }
+        guard let last = leaf.field?.split(separator: ".").last else { return false }
+        return ["region", "regions"].contains(KeyHints.words(String(last)).last ?? "")
+    }
+    /// Whether a place read alone is one: a state or a city Scrub knows, or words no one is named
+    /// ("Frankfurt"), never a first name or a surname read as a place ("James").
+    private static func namesAPlace(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        func same(_ city: String) -> Bool { city.caseInsensitiveCompare(trimmed) == .orderedSame }
+        if Places.region(trimmed) != nil || Places.all.contains(where: { same($0.city) }) || Places.abroad.contains(where: { same($0.city) }) { return true }
+        return trimmed.split(separator: " ").allSatisfy { !NameLists.isFirst(String($0)) && !NameLists.isSurname(String($0)) }
     }
 
     /// The person each record is, read off the names in it (see `associateOwners`).

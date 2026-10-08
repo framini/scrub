@@ -118,6 +118,11 @@ final class StandIns {
         if actual == "PHONE_NUMBER", let found = assigned[plain] { return found }
         // A one-line address is placed by its own parts: the city it names, not a state beside it.
         var parts = address ?? Self.lone(actual, original)
+        // A state beside an address in another state ("regions": ["Virginia", "Oregon"]) is placed by itself.
+        if actual == "REGION", let own = address?.region, own.caseInsensitiveCompare(original.trimmingCharacters(in: .whitespaces)) != .orderedSame,
+           let named = Places.region(original), Places.region(own).map({ $0.code != named.code || $0.country != named.country }) ?? true {
+            parts = Self.lone(actual, original)
+        }
         if ["ADDRESS", "LOCATION"].contains(actual), let own = AddressParts.line(original)?.parts, own.city != nil {
             parts = AddressParts(city: own.city, region: own.region, postal: own.postal, country: own.country ?? address?.country, coordinates: nil)
         }
@@ -648,6 +653,8 @@ final class StandIns {
     private var usedPlaces: Set<String> = []
     private var regionPlaces: [String: Place] = [:]
     private var claimed: Set<String> = []
+    /// The original state each stand-in state stands for: two states never become one.
+    private var regionOwners: [String: String] = [:]
     private var districtPlaces: [String: Place] = [:]
     func place(for parts: AddressParts) -> Place? {
         guard !parts.isEmpty, let country = Places.country(city: parts.city, region: parts.region, postal: parts.postal, country: parts.country, coordinates: parts.coordinates) else { return nil }
@@ -690,7 +697,10 @@ final class StandIns {
         let elsewhere = writing.filter { place in parts.postal.map { !place.postal.contains(Self.district($0)) } ?? true }
         // Best a place outside the original's district; a UK shape only its own place writes stays there.
         // Never another country for want of a postcode's shape: a place of its own country, its code drawn in the shape.
-        let candidates = !elsewhere.isEmpty ? elsewhere : country == "GB" && !writing.isEmpty ? writing : inCountry
+        let written = !elsewhere.isEmpty ? elsewhere : country == "GB" && !writing.isEmpty ? writing : inCountry
+        // "Virginia" and "Oregon" side by side stay two states: a state another state became is no one else's.
+        let unowned = written.filter { place in regionOwners[country + "\u{0}" + place.region].map { $0 == ownRegion } ?? true }
+        let candidates = ownRegion == nil || unowned.isEmpty ? written : unowned
         // Best a place no other address became, in a region no one in the document is from.
         let fresh = candidates.filter { place in
             let region = Places.region(place.region, in: country)
@@ -698,6 +708,7 @@ final class StandIns {
         }
         guard let chosen = pick(fresh.filter { !usedPlaces.contains($0.city + $0.region) }) ?? pick(candidates.filter { !usedPlaces.contains($0.city + $0.region) }) ?? pick(fresh) ?? pick(candidates) else { return nil }
         usedPlaces.insert(chosen.city + chosen.region)
+        if let ownRegion, regionOwners[country + "\u{0}" + chosen.region] == nil { regionOwners[country + "\u{0}" + chosen.region] = ownRegion }
         places[key] = chosen
         if let regionKey, regionPlaces[regionKey] == nil { regionPlaces[regionKey] = chosen }
         if let districtKey, districtPlaces[districtKey] == nil { districtPlaces[districtKey] = chosen }
