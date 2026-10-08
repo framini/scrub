@@ -411,7 +411,9 @@ final class People {
         let found = (byWord[key]?.people ?? []).filter { person in
             guard let realFirst = person.realFirst, let realLast = person.realLast, let own = Self.words(realFirst).first else { return false }
             let theirs = Set(Self.words(realFirst) + Self.words(realLast) + Self.words(person.realMiddle ?? ""))
-            return (own == lead || lead.count == 1 && own.hasPrefix(lead) || theirs.count >= 3 && theirs.contains(lead)) && rest.allSatisfy(theirs.contains)
+            // A middle initial stands for a name of theirs as the first does ("J. R. Gutiérrez" for José Ramón Gutiérrez Peña).
+            return (own == lead || lead.count == 1 && own.hasPrefix(lead) || theirs.count >= 3 && theirs.contains(lead))
+                && rest.allSatisfy { word in theirs.contains(word) || word.count == 1 && theirs.contains { $0.hasPrefix(word) } }
         }
         return found.count == 1 ? found[0] : nil
     }

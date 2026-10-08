@@ -182,3 +182,23 @@ func aDoubleBarrelledNameAndItsInitialsGoWhole(_ message: String) throws {
     #expect(signature.count == 2 && signature[0].wholeMatch(of: /\p{Lu}\.-\p{Lu}\./) != nil, "\(output)")
     #expect(lines[0].contains(" " + signature[1] + " ") || lines[0].contains(" " + signature[1] + ","), "\(output)")
 }
+
+/// A case note naming an applicant in full, then by two initials and the first word of a double surname,
+/// and a colleague by an initial: each initialled form is the same person's stand-in, its first initial theirs.
+@Test func initialsFollowTheFullNamesStandIn() throws {
+    let note = """
+    Applicant Tomás Ignacio Arreola Benítez called about the refund; reviewer Anneliese Wohlgemuth took the call.
+    Signed: T. I. Arreola. Approved: A. Wohlgemuth.
+    """
+    for seed: UInt64 in 0..<4 {
+    let output = String(decoding: try Scrubber.scrub(Data(note.utf8), name: "notes.txt", forceFullDetection: false, seed: seed).output, as: UTF8.self)
+    for original in ["Tomás", "Arreola", "Benítez", "Anneliese", "Wohlgemuth"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    let lines = output.split(separator: "\n").map(String.init)
+    let applicant = try #require(lines[0].components(separatedBy: "Applicant ").last?.components(separatedBy: " called").first).split(separator: " ")
+    let reviewer = try #require(lines[0].components(separatedBy: "reviewer ").last?.components(separatedBy: " took").first).split(separator: " ")
+    let signed = try #require(lines[1].components(separatedBy: "Signed: ").last?.components(separatedBy: ". Approved").first).split(separator: " ")
+    let approved = try #require(lines[1].components(separatedBy: "Approved: ").last?.dropLast()).split(separator: " ")
+    #expect(signed.count == 3 && signed[0] == "\(applicant[0].prefix(1))." && applicant.contains(signed[2]), "\(output)")
+    #expect(approved.count == 2 && approved[0] == "\(reviewer[0].prefix(1))." && approved[1] == reviewer.last!, "\(output)")
+    }
+}
