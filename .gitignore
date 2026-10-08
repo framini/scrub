@@ -23,3 +23,6 @@ Tools/AddressModel/data/
 Tools/AddressModel/__pycache__/
 Sources/ScrubCore/Resources/AddressModel.bin.pt
 Sources/ScrubCore/Resources/AddressModelWide.bin.pt
+
+# The span tagger's weights, built by scripts/make-span-tagger.py
+Models/
