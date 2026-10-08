@@ -176,3 +176,24 @@ import Testing
         }
     }
 }
+
+/// A known person's given name written alone after their full name takes their stand-in first name, in any
+/// language, and their full name written after a form of address in that language ("Mme", "Frau", "signora")
+/// is the same person, so the two stand-ins agree.
+@Test(arguments: [UInt64(3), 14])
+func aGivenNameAloneAfterTheFullNameIsThatPerson(_ seed: UInt64) throws {
+    let notes: [(text: String, given: String, full: String)] = [
+        ("Note d'appel du 4 mars.\nMme Odile Marchetti a appelé au sujet de sa demande. Odile voulait savoir quand l'argent arrive.\nJ'ai dit à Odile que nous répondrions dans cinq jours.", "Odile", "Marchetti"),
+        ("Gesprächsnotiz vom 4. März.\nFrau Hildegard Brenner rief wegen ihres Antrags an. Hildegard fragte, wann das Geld kommt.\nIch habe Hildegard gesagt, dass wir in fünf Tagen antworten.", "Hildegard", "Brenner"),
+        ("Nota della telefonata del 4 marzo.\nLa signora Chiara Bassi ha chiamato per la sua domanda. Chiara voleva sapere quando arrivano i soldi.\nHo detto a Chiara che risponderemo entro cinque giorni.", "Chiara", "Bassi"),
+    ]
+    for note in notes {
+        let result = try Scrubber.scrub(Data(note.text.utf8), name: "note.txt", forceFullDetection: false, seed: seed)
+        let output = String(decoding: result.output, as: UTF8.self)
+        #expect(!output.contains(note.given) && !output.contains(note.full), "\(output)")
+        let full = try #require(result.findings.first { $0.original.hasSuffix(note.full) }?.standIn, "\(output)")
+        let alone = try #require(result.findings.first { $0.original == note.given }?.standIn, "\(output)")
+        #expect(full.split(separator: " ").dropLast().last.map(String.init) == alone, "\(full) / \(alone)")
+        #expect(result.findings.allSatisfy { !$0.needsReview || ![note.given, note.full].contains($0.original) }, "\(result.findings.map { "\($0.original) \($0.needsReview)" })")
+    }
+}

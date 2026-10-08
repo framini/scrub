@@ -556,7 +556,11 @@ final class People {
         return (words[0], words[1])
     }
     /// Titles, and the ranks written as one ("Corporal Haddleton" keeps "Corporal").
+    /// The forms of address other languages write before a name, too ("Mme Odile Marchetti" is Odile Marchetti); not
+    /// those that are also a first name or an initial ("Don", "M.").
     private static let titles: Set<String> = Set(["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "dame", "lady", "madam"]).union(WrittenNames.ranks)
+        .union(["herr", "herrn", "frau", "sra", "srta", "señor", "señora", "señorita", "senhor", "senhora", "mme", "mlle", "monsieur", "madame",
+                "mademoiselle", "dhr", "mevr", "mevrouw", "meneer", "signor", "signora", "signorina", "dott", "dottor", "dottoressa", "pani", "dra"])
     private static func isInitials(_ word: String) -> Bool {
         word.count == 1 && word.first?.isUppercase == true || word.count >= 2 && word.allSatisfy { $0 == "." || $0 == "-" || $0.isUppercase } && word.hasSuffix(".") && word.first?.isUppercase == true
     }

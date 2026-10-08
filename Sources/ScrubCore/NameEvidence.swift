@@ -84,10 +84,17 @@ enum NameEvidence {
         return !NameLists.isFirst(lower) && !NameLists.isSurname(lower) && inDictionary(capital, language)
     }
 
+    /// A word the language writes in small letters ("rose", "jong"): a known person's given name that is one is unsure alone.
+    static func isLowercaseWord(_ word: String, in language: NLLanguage) -> Bool {
+        let lower = word.lowercased()
+        guard lower.count >= 2, lower.allSatisfy(\.isLetter) else { return false }
+        return language == .english || !readable(language) ? NameLists.isOrdinary(lower) || NameLists.isWordlike(lower) : inDictionary(lower, language)
+    }
+
     // MARK: Evidence
 
     /// Titles and forms of address written before a name, in the languages Scrub reads.
-    private static let titles: Set<String> = ["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "dame", "herr", "herrn", "frau", "fräulein", "sr", "sra", "srta",
+    static let titles: Set<String> = ["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "dame", "herr", "herrn", "frau", "fräulein", "sr", "sra", "srta",
                                               "don", "doña", "dona", "señor", "señora", "señorita", "senhor", "senhora", "m", "mme", "mlle", "monsieur", "madame",
                                               "mademoiselle", "dhr", "mevr", "mevrouw", "meneer", "heer", "sig", "signor", "signora", "signorina", "dott", "dottor",
                                               "dottoressa", "pan", "pani", "fru", "bay", "bayan", "ông", "bà", "anh", "chị", "dra", "ing", "mag"]

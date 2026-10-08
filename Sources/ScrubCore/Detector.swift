@@ -103,9 +103,51 @@ public final class Detector {
             let whole = Self.wholeName(kept, in: text)
             if NameEvidence.namesPerson(key) { return whole }
             let gated = NameEvidence.gate(whole, doubts: doubts, evidenced: evidenced, in: text, document: language)
-            doubts = gated.doubts
-            return gated.spans
+            let given = Self.givenNamesAlone(gated.spans, doubts: gated.doubts, in: text, document: language)
+            doubts = given.doubts
+            return given.spans
         }
+    }
+    /// "Pieter" alone after "Pieter Hoogeveen": a given name of a person found here, written later on its own,
+    /// is that person, and the evidence that found them is evidence for it. Where it is also an ordinary word
+    /// of the text's language, or two people found here share it, it is asked about instead.
+    static func givenNamesAlone(_ spans: [Span], doubts: [Span], in text: String, document: NLLanguage?) -> (spans: [Span], doubts: [Span]) {
+        var surnames: [String: Set<String>] = [:]
+        for span in spans where span.entity == "PERSON" && span.url == nil {
+            var words = NameShape.words(span.range, in: text).filter { !People.isTitle($0.text) && !NameEvidence.titles.contains($0.bare) }
+            if let last = words.last, words.count > 2, People.isSuffix(last.text) { words.removeLast() }
+            guard words.count >= 2, let first = words.first, let last = words.last, first.text.count >= 2, first.text.allSatisfy(\.isLetter),
+                  first.text.first?.isUppercase == true, first.text.dropFirst().contains(where: \.isLowercase) else { continue }
+            surnames[first.text, default: []].insert(last.bare)
+        }
+        guard !surnames.isEmpty else { return (spans, doubts) }
+        let ns = text as NSString
+        var taken = IndexSet()
+        for span in spans where !span.range.isEmpty { taken.insert(integersIn: span.range) }
+        var found = spans, doubted = doubts
+        for (first, families) in surnames {
+            let pattern = TextPattern("(?<![\\p{L}\\p{N}@._-])" + NSRegularExpression.escapedPattern(for: first) + "(?![\\p{L}\\p{N}@_-])(?!\\.[\\p{L}\\p{N}])")
+            for match in TextRanges.matches(pattern, in: text) {
+                let range = match.range.location..<NSMaxRange(match.range)
+                guard !taken.intersects(integersIn: range) else { continue }
+                // Part of another name written beside it ("Anne Pieter", "Pieter Verhoeven"): left to what reads names.
+                let before = Context.words(before: range.lowerBound, in: text, limit: 1).first, after = Context.words(after: range.upperBound, in: text, limit: 1).first
+                if let before, before.first?.isUppercase == true, !People.isTitle(before), !NameEvidence.titles.contains(before.lowercased()), range.lowerBound >= before.utf16.count + 1,
+                   ns.substring(with: NSRange(location: range.lowerBound - before.utf16.count - 1, length: before.utf16.count + 1)) == before + " " { continue }
+                if let after, after.first?.isUppercase == true, range.upperBound < ns.length, ns.character(at: range.upperBound) == 32 { continue }
+                let language = NameEvidence.language(around: range, in: text, document: document) ?? .english
+                if families.count > 1 || NameEvidence.isLowercaseWord(first, in: language) {
+                    doubted.append(Span(range: range, entity: "PERSON", score: Doubt.unconfirmed.confidence))
+                } else {
+                    doubted.removeAll { $0.range.overlaps(range) }
+                    found.append(Span(range: range, entity: "PERSON", score: 0.85))
+                }
+                taken.insert(integersIn: range)
+            }
+        }
+        found.sort { $0.range.lowerBound < $1.range.lowerBound }
+        doubted.sort { $0.range.lowerBound < $1.range.lowerBound }
+        return (found, doubted)
     }
     /// "rose" alone in a chat that named "rose martinez": a person written all in small letters is
     /// called by their first name later, as a capitalised one is ("rose's ssn", "ping rose"), and
