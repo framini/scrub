@@ -1862,6 +1862,11 @@ final class StandIns {
             return yearFirst ? String(format: "%04d%02d%02d", year, month, day) : String(format: "%02d%02d%04d", month, day, year)
         }
         if trimmed.count == 4, let real = Int(trimmed), trimmed.allSatisfy({ $0.isASCII && $0.isNumber }) { return String(self.year(for: real)) }
+        // A year alone among words ("circa 1970", "c. 1970", "1970 (approx.)") stays a year: only it takes a stand-in.
+        if trimmed.filter(\.isNumber).count == 4, let found = original.range(of: #"(?<!\d)(?:1[89]|20)\d\d(?!\d)"#, options: .regularExpression), let real = Int(original[found]),
+           Self.dateParts(trimmed).map({ $0.month == nil && $0.day == nil }) ?? true {
+            return original.replacingCharacters(in: found, with: String(self.year(for: real)))
+        }
         if (1...2).contains(trimmed.count), let part = Int(trimmed) { return String(part <= 12 ? month : day) }
         // Runs of digits, of letters and of anything else, rewritten one by one.
         var runs: [String] = []

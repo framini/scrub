@@ -338,4 +338,33 @@ struct NonPersonalKeptTests {
             for gone in ["quarrington", "1991-04-12"] { #expect(!output.contains(gone), "\(gone): \(output)") }
         }
     }
+
+    @Test func aCountryAWeekdayAndAYearAloneKeepTheirShape() throws {
+        // "Ukraine" was read as a person, so a sanctions program "UKRAINE-EO13660" and "Dnipro, Ukraine" took a woman's name;
+        // a birth year "circa 1970" became a whole date; "On Fri, 11 Sep 2026" became "On Carolyn, 11 Sep 2026".
+        let screening = """
+        {"name": "Bohdan Kovalchyk", "places_of_birth": ["Dnipro, Ukraine"], "programs": ["UKRAINE-EO13660"], "dates_of_birth": ["1971-11-02", "circa 1970"], "nationalities": ["Ukraine"]}
+        """
+        let email = """
+        From: Bohdan Kovalchyk <b.kovalchyk@example.org>
+        To: verification@example.com
+
+        Hello, my check was rejected again.
+
+        > On Fri, 11 Sep 2026, Verification Team wrote:
+        > Dear Mr Kovalchyk, we could not confirm your address.
+
+        """
+        for seed in UInt64(0)..<3 {
+            for name in ["screening.json", "Pasted text"] {
+                let output = try Self.scrub(screening, name: name, seed: seed)
+                #expect(output.contains(#""programs": ["UKRAINE-EO13660"]"#) && output.contains(#", Ukraine"]"#) && output.contains(#""nationalities": ["Ukraine"]"#), "\(output)")
+                for gone in ["Kovalchyk", "1971-11-02", "circa 1970"] { #expect(!output.contains(gone), "\(gone): \(output)") }
+                #expect(output.contains(/"(?:1[89]|20)\d\d-\d\d-\d\d", "circa (?:19|20)\d\d"\]/), "\(output)")
+            }
+            let text = try Self.scrub(email, name: "Pasted text", seed: seed)
+            #expect(text.contains("> On Fri, 11 Sep 2026, Verification Team wrote:\n"), "\(text)")
+            #expect(!text.contains("Kovalchyk") && !text.contains("kovalchyk"), "\(text)")
+        }
+    }
 }

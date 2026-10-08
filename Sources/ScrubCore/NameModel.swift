@@ -350,10 +350,14 @@ final class NameModel: Sendable {
         guard letters.contains(where: { $0.count >= 2 }) else { return false }
         if words.count == 1 {
             if letters[0].count < 3 || letters[0].allSatisfy(\.properties.isUppercase) { return false }
-            if literals.contains(String(String.UnicodeScalarView(words[words.startIndex].scalars)).lowercased()) { return false }
+            let word = String(String.UnicodeScalarView(words[words.startIndex].scalars)).lowercased()
+            if literals.contains(word) { return false }
+            // A day of the week ("On Fri, 11 Sep") and a country ("Dnipro, Ukraine") name no one, but a country a first name spells too ("Jordan").
+            if NameShape.weekdays.contains(word) || weekdayAbbreviations.contains(word) || ContextStage.nations.contains(word) && !NameLists.isFirst(word) { return false }
         }
         return true
     }
+    private static let weekdayAbbreviations: Set<String> = ["mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun"]
     private static let literals: Set<String> = ["true", "false", "null", "nil", "none", "undefined", "nan", "yes", "no"]
 
     private static func looksLikeHandle(_ scalars: [Unicode.Scalar]) -> Bool {
