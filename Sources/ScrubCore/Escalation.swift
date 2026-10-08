@@ -14,9 +14,8 @@ enum TaggerReading: Sendable, Equatable {
 /// and sends what it suspects to review. It only ever adds suspects: it never
 /// replaces a value, and never drops or weakens what a rule found.
 enum Escalation {
-    /// The layer's one switch, off until hand marking and its suspects agree (see EscalationTests).
-    /// Off, or without the tagger's weights, Scrub runs as it would without it.
-    static let enabled = Atomic(false)
+    /// The layer's one switch, on. Off, or without the tagger's weights, Scrub runs as it would without it.
+    static let enabled = Atomic(true)
     private static let log = Logger(subsystem: "Scrub", category: "Escalation")
     /// Turns the layer on or off for one task whatever the switch says, as tests do.
     @TaskLocal static var active: Bool?
