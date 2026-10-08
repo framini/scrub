@@ -88,6 +88,30 @@ import Testing
             }
         }
     }
+
+    /// A note written in another language keeps its own small words, which the readers took for names
+    /// ("justificante de domicilio" became "justificante de joseph"): only the people in it are replaced,
+    /// a surname after a title of that language too ("Herrn Brenneke").
+    @Test(arguments: Path.allCases)
+    func smallWordsOfAnotherLanguageStay(_ path: Path) throws {
+        let notes: [(note: String, kept: [String], names: [String])] = [
+            ("La clienta Odalys Quintero Vidal envió el recibo. Falta el justificante de domicilio y el código de alerta; no cerrar antes del viernes.",
+             ["justificante de domicilio", "código de alerta", "antes del viernes"], ["Quintero"]),
+            ("Herr Torvald Brenneke hat angerufen. Ich habe die Unterlagen geprüft, aber die Meldung nach Paragraf 12 fehlt noch. Rückruf bitte an Herrn Brenneke.",
+             ["Ich habe die Unterlagen", "aber die Meldung nach Paragraf"], ["Brenneke", "Torvald"]),
+            ("oi, aqui é o Caetano Brisolla, meu cadastro está travado desde ontem na casa da minha mãe.",
+             ["oi, aqui é o", "meu cadastro", "na casa da minha mãe"], ["Brisolla"]),
+            ("Brisa Fantoni preferisce i documenti in bianco e nero; colore della carta: azzurro.",
+             ["in bianco e nero; colore della carta"], ["Fantoni"]),
+            ("Ik ben Joris Achterberg. Dat verklaart de afkeuring van gisteren.",
+             ["Dat verklaart de afkeuring"], ["Achterberg"]),
+        ]
+        for (note, kept, names) in notes {
+            let (_, output) = try Self.scrub(note, path)
+            for phrase in kept { #expect(output.contains(phrase), "[\(path)] \(phrase): \(output)") }
+            for name in names { #expect(!output.contains(name), "[\(path)] \(name): \(output)") }
+        }
+    }
 }
 
 /// A record under a parent that names a business, a product or an app

@@ -163,7 +163,7 @@ final class AddressModel: Sendable {
             guard probabilities.count == tokens.count else { return ([], []) }
             for range in Self.decode(tokens, probabilities, numberless: numberless).compactMap({ Self.refined($0, tokens) }) {
                 let value = TextRanges.substring(part, range)
-                guard Self.accepts(value) || Self.cued(value, before: (part as NSString).substring(to: range.lowerBound)) else { continue }
+                guard !Self.misread(value), Self.accepts(value) || Self.cued(value, before: (part as NSString).substring(to: range.lowerBound)) else { continue }
                 spans.append(Span(range: (range.lowerBound + window.lowerBound)..<(range.upperBound + window.lowerBound), entity: "ADDRESS", score: Self.score))
             }
             guard numberless else { continue }
@@ -469,6 +469,16 @@ final class AddressModel: Sendable {
         }
         guard lower else { return true }
         return !TextRanges.matches(lowercasePostcode, in: value).isEmpty || !TextRanges.matches(numberedUnit, in: value).isEmpty || pieces.contains(where: AddressBlock.knownPlace)
+    }
+    private static let writtenDate = TextPattern("(?i)(?<![\\p{L}\\p{N}])" + ProseLabels.day + "[ \\t]+(?:(?:de|of|del)[ \\t]+)?" + ProseLabels.month
+                                                  + "(?:,?[ \\t]+(?:(?:de|del|of)[ \\t]+)?" + ProseLabels.year + ")?(?![\\p{L}\\p{N}])")
+    /// A date written out ("el 14 de febrero de 1988", "15. März 1980") is when, not where, whatever cue is
+    /// before it: a span with no number but the date's is no address. Nor is one a bracket opens or closes
+    /// alone, which runs over the text around an address.
+    static func misread(_ value: String) -> Bool {
+        let dates = TextRanges.matches(writtenDate, in: value)
+        if !dates.isEmpty, !dates.reversed().reduce(value, { rest, match in (rest as NSString).replacingCharacters(in: match.range, with: " ") }).contains(where: \.isNumber) { return true }
+        return value.filter { $0 == "(" }.count != value.filter { $0 == ")" }.count || value.filter { $0 == "[" }.count != value.filter { $0 == "]" }.count
     }
     private static let lowercasePostcode = TextPattern(AddressBlock.postcode.regex?.pattern ?? "$^", options: .caseInsensitive)
     private static let numberedUnit = TextPattern(#"(?i)(?<![\p{L}])(?:flat|apt|apartment|unit|suite|ste|room|floor|level|appt|piso|wohnung|top|p\.?\s?o\.?\s?box|box|postfach|postbus|apartado)\.?\s*#?\s*\d"#)

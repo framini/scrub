@@ -245,4 +245,21 @@ struct AddressModelTests {
             return (remark, result.counts)
         }
     }
+
+    /// A date written out in words ("el 3 de marzo de 1991") is when, never where: the model's reading
+    /// of one as an address turned a birth date into "410 cedar street".
+    @Test func aWrittenDateIsNoAddress() throws {
+        let notes = [
+            "Os reenvío lo de la clienta Odalys Quintero (DNI 52813467S, nacida el 3 de marzo de 1991).",
+            "La titular, nacida el 22 de octubre de 1987, pidió el cambio de cuenta.",
+            "Der Kunde, geboren am 15. März 1980 in Kiel, hat angerufen.",
+            "Le client, né le 4 juillet 1975, a rappelé ce matin.",
+        ]
+        for note in notes {
+            let found = AddressModel.find(note).map { TextRanges.substring(note, $0.range) }
+            #expect(!found.contains { $0.range(of: #"\d{4}"#, options: .regularExpression) != nil && $0.range(of: #"(?i)marzo|octubre|märz|juillet"#, options: .regularExpression) != nil }, "\(found)")
+            let result = try Scrubber.scrub(Data(note.utf8), name: "Pasted text", forceFullDetection: false, seed: 3)
+            #expect(!result.findings.contains { $0.entity == "ADDRESS" }, "\(result.findings.map { "\($0.entity) \($0.original)" })")
+        }
+    }
 }

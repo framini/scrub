@@ -13,9 +13,9 @@ enum ProseLabels {
     }
 
     /// A month's name in English, or in the other languages forms are filled in ("12 maart 1985", "15. März 1980").
-    private static let month = #"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|januari|februari|maart|mei|augustus|oktober|januar|februar|m[äa]rz|mai|dezember|janvier|f[ée]vrier|mars|avril|juin|juillet|ao[ûu]t|septembre|octobre|novembre|d[ée]cembre|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|gennaio|febbraio|aprile|maggio|giugno|luglio|settembre|ottobre|dicembre|janeiro|fevereiro|mar[çc]o|maio|junho|julho|setembro|outubro|dezembro|augusti)\.?"#
-    private static let day = #"(?:[0-3]?\d)(?:st|nd|rd|th|er|\.)?"#
-    private static let year = #"(?:19|20)\d{2}"#
+    static let month = #"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|januari|februari|maart|mei|augustus|oktober|januar|februar|m[äa]rz|mai|dezember|janvier|f[ée]vrier|mars|avril|juin|juillet|ao[ûu]t|septembre|octobre|novembre|d[ée]cembre|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|gennaio|febbraio|aprile|maggio|giugno|luglio|settembre|ottobre|dicembre|janeiro|fevereiro|mar[çc]o|maio|junho|julho|setembro|outubro|dezembro|augusti)\.?"#
+    static let day = #"(?:[0-3]?\d)(?:st|nd|rd|th|er|\.)?"#
+    static let year = #"(?:19|20)\d{2}"#
     /// A birth cue, then the date: longer forms first, so "March 5, 1971" is not cut to "March 5".
     private static let birth = TextPattern(
         #"\b(born(?:[ \t]+on|[ \t]+in)?|dob|d\.o\.b\.?|date[ \t]+of[ \t]+birth|birth[ \t]*date|birthday(?:[ \t]+is)?"#

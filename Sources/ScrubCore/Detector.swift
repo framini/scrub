@@ -59,6 +59,8 @@ public final class Detector {
                 return before == after && (before == 34 || before == 39)
             }
             spans.removeAll { Self.literals.contains(TextRanges.substring(text, $0.range)) && ($0.entity != "SECRET" || !quoted($0.range)) }
+            // Whichever reader took them for a name, a sentence's own small words in another language are no one (see `NameShape.smallForeignWords`).
+            spans.removeAll { $0.score < 0.95 && $0.url == nil && NameShape.smallForeignWords($0, in: text) }
             // An ID made of a name after the word for whose it is ("account Quillmere_Tavish"), where nothing else was read.
             spans += RecordIDs.labelled(in: text).filter { id in !spans.contains { $0.range.overlaps(id.range) } }
             // One made of a word and a number, with nothing labelling it ("close QUILLMERE-0042"):
