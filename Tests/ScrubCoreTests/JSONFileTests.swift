@@ -536,3 +536,14 @@ func jsonMeasurementsAreNoIdentifiers(_ key: String) throws {
     #expect((object["note"] as? String) == "customer confirmed \(spaced) by phone", "\(output)")
     #expect(output.contains(#""currency": "GBP", "status": "verified"},"#) && output.contains("2026-04-11T08:15:00Z"))
 }
+
+/// A key is renamed only for what it holds itself: a note's "Garante Moretti", read as a person whose
+/// first name is "Garante", left the key "garante" renamed to that stand-in, and the object unreadable.
+@Test(arguments: [UInt64(1), 2, 3])
+func aKeySpelledLikeANameReadElsewhereStays(_ seed: UInt64) throws {
+    let input = #"{"pratica": "PR-2207", "richiedente": {"nome": "Odalys", "cognome": "Ferriter"}, "garante": {"nome": "Tavish", "cognome": "Moretti", "parentela": "zio"}, "note": "Odalys preferisce la posta. Garante Moretti pensionato."}"#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "pratica.json", forceFullDetection: false, seed: seed).output, as: UTF8.self)
+    let object = try #require(try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any], "\(output)")
+    #expect(Set(object.keys) == ["pratica", "richiedente", "garante", "note"], "\(output)")
+    #expect(!output.contains("Moretti") && !output.contains("Odalys"), "\(output)")
+}

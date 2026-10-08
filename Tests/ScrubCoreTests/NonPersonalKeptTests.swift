@@ -597,4 +597,18 @@ struct NonPersonalKeptTests {
             }
         }
     }
+
+    /// A status or an enum written as a code ("KEIN_TREFFER", a screening's "no hit") is no one's name: a note's
+    /// "kein Treffer" read as a person once rewrote the screening result as that person's stand-in.
+    @Test func aStatusCodeIsNeverAName() throws {
+        let response = #"{"person": {"vorname": "Torvald", "nachname": "Brenneke"}, "hinweis": "Kunde ist Bäcker von Beruf; der Hund im Firmenlogo ist kein Treffer. Rückruf bitte an Herrn Brenneke.", "pruefung": {"sanktionsliste": "KEIN_TREFFER", "pep": "KEIN_TREFFER"}}"#
+        for seed: UInt64 in 1...3 {
+            for name in ["check.json", "Pasted text"] {
+                let output = try Self.scrub(response, name: name, seed: seed)
+                #expect(Self.count(#""KEIN_TREFFER""#, in: output) == 2, "[\(name) seed \(seed)] \(output)")
+                #expect(output.contains("ist kein Treffer."), "[\(name) seed \(seed)] \(output)")
+                #expect(!output.contains("Brenneke") && !output.contains("Torvald"), "[\(name) seed \(seed)] \(output)")
+            }
+        }
+    }
 }

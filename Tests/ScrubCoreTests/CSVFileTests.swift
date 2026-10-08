@@ -221,3 +221,12 @@ func csvReadsAWideHeaderInOnePass(_ shape: String) throws {
     #expect(name.count == 2 && rows[3].contains("\"\(name[1]), \(name[0])\""), "\(output)")
     #expect(!result.review!.findings.contains { $0.entity == "LOCATION" }, "\(result.review!.findings.map(\.original))")
 }
+
+/// A column's header is renamed only for what it holds itself, never because a cell reads a name spelled alike ("Garante Moretti").
+@Test(arguments: 1...3)
+func csvHeaderSpelledLikeANameReadElsewhereStays(_ run: Int) throws {
+    let input = "pratica,nome,cognome,garante,note\nPR-2207,Odalys,Ferriter,Tavish Moretti,\"Garante Moretti pensionato; Odalys preferisce la posta.\"\n"
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "pratiche.csv").output, as: UTF8.self)
+    #expect(output.hasPrefix("pratica,nome,cognome,garante,note\n"), "\(output)")
+    #expect(!output.contains("Moretti") && !output.contains("Odalys"), "\(output)")
+}

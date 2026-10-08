@@ -54,7 +54,9 @@ public enum XMLFile: FileFormat {
             guard let name = node.name else { return }
             namedNodes.append(node)
             nameIDs.append(leaves.count)
-            leaves.append(DocumentLeaf(name, records: records))
+            var leaf = DocumentLeaf(name, records: records)
+            leaf.isKey = true
+            leaves.append(leaf)
         }
         func walk(_ node: XMLNode, records: [Int], keys: [String], parentKey: String?) throws {
             try Scrubber.checkCancellation()

@@ -195,7 +195,9 @@ final class JSONDocument {
                 let fieldName = KeyHints.isFieldName(pair.0) && !KeyHints.holdsData(pair.0)
                 document.keyIDs[childPath] = items.count
                 if fieldName { document.fieldKeys.insert(childPath) }
-                items.append(DocumentLeaf(pair.0, fieldName: fieldName))
+                var keyLeaf = DocumentLeaf(pair.0, fieldName: fieldName)
+                keyLeaf.isKey = true
+                items.append(keyLeaf)
                 var inherited: String?
                 // A UUID a record's type calls its number is the system's own key, kept as every
                 // UUID is: a record number of any other shape is replaced.

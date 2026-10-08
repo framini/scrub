@@ -121,7 +121,9 @@ public enum CSVFile: FileFormat {
         if hasHeader {
             for column in columns.indices {
                 headerIDs.append(leaves.count)
-                leaves.append(DocumentLeaf(columns[column], fieldName: true))
+                var header = DocumentLeaf(columns[column], fieldName: true)
+                header.isKey = true
+                leaves.append(header)
             }
         }
         // A heading's own long digits ("order_48213907") are drawn first, as in

@@ -140,3 +140,12 @@ func xmlDoctypeHiddenBehindCommentLookalikesIsRefused(_ xml: String) {
     #expect(output.contains("<name>Everyday Checking</name>"))
     #expect(!output.contains("Priya"))
 }
+
+/// An element's name is renamed only for what it holds itself, never because a note reads a name spelled alike ("Garante Moretti").
+@Test(arguments: 1...3)
+func xmlElementSpelledLikeANameReadElsewhereStays(_ run: Int) throws {
+    let input = "<pratica><richiedente><nome>Odalys</nome><cognome>Ferriter</cognome></richiedente><garante><nome>Tavish</nome><cognome>Moretti</cognome></garante><note>Odalys preferisce la posta. Garante Moretti pensionato.</note></pratica>"
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "pratica.xml").output, as: UTF8.self)
+    #expect(output.contains("<garante><nome>") && output.contains("</cognome></garante>"), "\(output)")
+    #expect(!output.contains("Moretti") && !output.contains("Odalys"), "\(output)")
+}

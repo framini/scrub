@@ -53,6 +53,17 @@ struct DocumentLeaf: Sendable {
     /// One written only of names under a business's or an account's key ("account": {"name": …}):
     /// never replaced on the name model's word, but never kept unseen either.
     var doubtedName = false
+    /// A key, an element's or attribute's name or a column's header, not a value: renamed only for a name
+    /// read in it, or for being whole a person a field's key named (see `DocumentPipeline.keyIsName`), never
+    /// because a name only guessed elsewhere is spelled the same ("garante" beside "Garante Verdi").
+    var isKey = false
+    /// A value written as a code in capitals joined by underscores ("NO_MATCH", "KEIN_TREFFER") under a key that
+    /// names no one: a status or an enum, which no name, read in it or elsewhere, rewrites (see `DocumentPipeline.namesCode`).
+    var isCode: Bool {
+        !["PERSON", "FIRST_NAME", "LAST_NAME"].contains(KeyHints.hint(key) ?? "") && text.contains("_") && text.utf16.count <= 64
+            && !TextRanges.matches(Self.code, in: text).isEmpty
+    }
+    private static let code = TextPattern(#"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$"#)
     /// How the span tagger reads the value once the rules are done; nil where it never does (keys, headers).
     var reading: TaggerReading?
     private static let nonPersonalWords: Set<String> = ["status", "state", "type", "kind", "result", "outcome", "decision", "amount", "currency", "total", "balance", "fee",
@@ -220,7 +231,7 @@ enum DocumentPipeline {
                 var held = previous.held
                 let (text, marks, unresolved) = try Correction.run(previous.text, marks: previous.marks, job: job, matcher: originals, gazetteer: gazetteer, gate: gate, passes: 1, base: reusable ? [] : nil, held: &held,
                                                                    sparing: Set(leaves[index].nonPersonal ? ["SECRET"] : []).union(leaves[index].machineAddress ? ["IP_ADDRESS"] : [])
-                                                                    .union(merchants.contains(index) ? merchantKinds : []))
+                                                                    .union(merchants.contains(index) ? merchantKinds : []).union(leaves[index].isKey && !keyIsName(leaves[index], job: job) || leaves[index].isCode && !namesCode(leaves[index], job: job) ? nameEntities : []))
                 if text != previous.text { changed = true; changedIndices.append(index) }
                 values[index] = DocumentValue(text: text, marks: marks, unresolved: unresolved, held: held)
             }
@@ -378,7 +389,7 @@ enum DocumentPipeline {
         for index in order {
             try Scrubber.checkCancellation()
             let leaf = leaves[index]
-            var found = detected(leaf, base: bases[index], gazetteer: gazetteer, detector: job.detector)
+            var found = detected(leaf, base: bases[index], gazetteer: gazetteer, detector: job.detector, job: job)
             if found.isEmpty, leaf.numericEntity == nil, hint(leaf.key) == nil, mayName(leaf.rawKey ?? leaf.key), RecordIDs.isPersonal(leaf, spelled: spelled, ownRecord: object(leaf).map(personal.contains) ?? false) {
                 found = [Span(range: 0..<(leaf.seen as NSString).length, entity: "RECORD_ID", score: 1)]
             } else if leaf.numericEntity == nil, !leaf.fieldName, hint(leaf.key) == nil, case let ids = RecordIDs.spelled(in: leaf.seen, known: spelled), !ids.isEmpty {
@@ -844,9 +855,26 @@ enum DocumentPipeline {
         }
     }
 
-    private static func detected(_ leaf: DocumentLeaf, base: [Span], gazetteer: GazetteerMatcher, detector: Detector) -> [Span] {
-        leaf.numericEntity.map { [Span(range: 0..<(leaf.text as NSString).length, entity: $0, score: 1)] }
-            ?? detector.combined(base, text: leaf.seen, matcher: gazetteer)
+    /// Whether names may rewrite a code (see `DocumentLeaf.isCode`): only one spelling out, word for word, a person
+    /// a field's key or a rule named ("ODALYS_QUILLMERE" beside "last_name": "Quillmere"), never one a model guessed.
+    static func namesCode(_ leaf: DocumentLeaf, job: Job) -> Bool {
+        let words = leaf.text.split(separator: "_").map { $0.lowercased() }
+        func sure(_ original: String) -> Bool { (job.confidence(of: original) ?? 0) >= 0.95 }
+        return sure(words.joined(separator: " ")) || words.allSatisfy(sure)
+    }
+    /// Whether a key is, written as a name, the whole of a person a field's key or a rule named
+    /// ({"by_person": {"Nas": true}} beside "full_name": "Nas Garcia"): their data itself, renamed as they are.
+    static func keyIsName(_ leaf: DocumentLeaf, job: Job) -> Bool {
+        leaf.text.first?.isUppercase == true && (job.confidence(of: leaf.text) ?? 0) >= 0.95
+    }
+    private static func detected(_ leaf: DocumentLeaf, base: [Span], gazetteer: GazetteerMatcher, detector: Detector, job: Job) -> [Span] {
+        if let entity = leaf.numericEntity { return [Span(range: 0..<(leaf.text as NSString).length, entity: entity, score: 1)] }
+        let found = detector.combined(base, text: leaf.seen, matcher: gazetteer)
+        if leaf.isCode, !namesCode(leaf, job: job) { return found.filter { !nameEntities.contains($0.entity) } }
+        guard leaf.isKey, !keyIsName(leaf, job: job) else { return found }
+        return found.filter { span in
+            !nameEntities.contains(span.entity) || base.contains { nameEntities.contains($0.entity) && $0.range.overlaps(span.range) }
+        }
     }
 
 
