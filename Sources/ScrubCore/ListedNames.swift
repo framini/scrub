@@ -123,6 +123,7 @@ enum ListedNames {
                 }
             } else { unsure += doubted(unknown.filter { span in lines[TextRanges.substring(text, span.range)]?.count ?? 0 >= 2 && transcript }) }
         }
+        unsure += mentioned(in: text, besides: sure + unsure, isCancelled: isCancelled)
         for match in TextRanges.matches(lowerCued, in: text, isCancelled: isCancelled) {
             let group = match.range(at: 1).location != NSNotFound ? match.range(at: 1) : match.range(at: 2)
             let word = ns.substring(with: group)
@@ -131,6 +132,50 @@ enum ListedNames {
             unsure.append(Span(range: group.location..<NSMaxRange(group), entity: "PERSON", score: Doubt.unconfirmed.confidence))
         }
         return (sure, unsure)
+    }
+
+    /// A chat line sent at a time, by a handle a system writes ("[14:03:05] agent_lena: …", "customer: …").
+    private static let handleLine = TextPattern(#"(?m)^[ \t]*(?:\[[^\]\n]{1,24}\][ \t]*|\d{1,2}:\d{2}(?::\d{2})?[ \t]+)(\p{L}[\p{L}\p{N}._-]{0,30}):[ \t]+\S"#)
+    private static let lowerWord = TextPattern(#"(?<![\p{L}\p{N}@._'’-])(\p{Ll}{2,})(?![\p{L}\p{N}@'’-]|\.\p{L})"#)
+    /// Words that, in chat, put a person after them: "pass this to raghav", "sorry about that priya".
+    private static let mentionCues: Set<String> = ["to", "with", "ask", "asked", "tell", "told", "ping", "cc", "thanks", "thank", "thx", "ty", "hi", "hey", "hello", "sorry", "that", "from", "by", "for"]
+    private static let chatRoles: Set<String> = ["agent", "customer", "user", "client", "support", "rep", "me", "staff", "operator", "member", "guest", "caller", "visitor"]
+    /// The people a chat between someone and the person they serve mentions in lowercase ("sorry
+    /// about that priya", "i'll pass this to raghav"): a first name no word spells, anywhere in a
+    /// line, or a word no list holds after what puts a person there. Neither is sure enough to replace
+    /// on a transcript's case alone, and neither may be left unseen, so both are asked about.
+    /// A chat is two lines or more, sent at a time by two handles or more, one a person's or a role's.
+    private static func mentioned(in text: String, besides found: [Span], isCancelled: () -> Bool) -> [Span] {
+        guard text.contains(":") else { return [] }
+        let ns = text as NSString
+        let lines = TextRanges.matches(handleLine, in: text, isCancelled: isCancelled)
+        let handles = Set(lines.map { ns.substring(with: $0.range(at: 1)).lowercased() })
+        guard lines.count >= 2, handles.count >= 2, handles.contains(where: { handle in
+            handle.split(whereSeparator: { "._-".contains($0) }).contains { part in chatRoles.contains(String(part)) || NameLists.isName(String(part)) && !NameLists.isWord(String(part)) }
+        }) else { return [] }
+        var taken = IndexSet()
+        for span in found where !span.range.isEmpty { taken.insert(integersIn: span.range) }
+        var spans: [Span] = []
+        for line in lines {
+            let body = NSMaxRange(line.range) - 1
+            let end = NSMaxRange(ns.lineRange(for: NSRange(location: body, length: 0)))
+            let said = NSRange(location: body, length: end - body)
+            var previous: (word: String, end: Int)?
+            for match in TextRanges.matches(lowerWord, in: ns.substring(with: said), isCancelled: isCancelled) {
+                let range = said.location + match.range.location..<said.location + NSMaxRange(match.range)
+                let word = ns.substring(with: NSRange(location: range.lowerBound, length: range.count))
+                defer { previous = (word, range.upperBound) }
+                guard word.count >= 3, !taken.intersects(integersIn: range), !NameShape.joining.contains(word), !NameShape.months.contains(word), !NameShape.weekdays.contains(word) else { continue }
+                // The cue right before it, one space between.
+                let cued = previous.map { mentionCues.contains($0.word) && $0.end == range.lowerBound - 1 && ns.character(at: $0.end) == 0x20 } == true
+                let listed = NameLists.isFirst(word) && !NameLists.isWordlike(word) && !NameLists.isWord(word)
+                let unknown = cued && !NameLists.isFirst(word) && !NameLists.isSurname(word) && !NameLists.isWord(word) && word.count >= 4
+                guard listed || unknown else { continue }
+                taken.insert(integersIn: range)
+                spans.append(Span(range: range, entity: "PERSON", score: Doubt.unconfirmed.confidence))
+            }
+        }
+        return spans
     }
 
     static func scan(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {

@@ -85,4 +85,23 @@ import Testing
             #expect(result.findings.isEmpty, "[\(path)] \(note) → \(output)")
         }
     }
+
+    /// A support chat's agent mentions people in lowercase, by a first name no word spells or after
+    /// what puts a person there ("sorry about that anoushka", "pass this to thulani"): each is replaced
+    /// or asked about, never left unseen. The chat's own words after the same cues stay, unasked.
+    @Test(arguments: Path.allCases)
+    func aNameMentionedInLowercaseInASupportChatIsNeverLeftUnseen(_ path: Path) throws {
+        let chat = "[2026-03-02 10:14:05] agent_marta: sorry about that anoushka. can you confirm the email on file?\n"
+            + "[2026-03-02 10:14:40] customer: sure, same one as before\n"
+            + "[2026-03-02 10:15:12] agent_marta: thanks, i'll pass this to thulani on the fraud team"
+        let (result, output) = try Self.scrub(chat, path)
+        let words = PersonFields.lowerWords(output)
+        for name in ["anoushka", "thulani"] where words.contains(name) {
+            #expect(result.findings.contains { $0.original == name && $0.needsReview && Review.names.contains($0.entity) }, "[\(path)] \(name) kept unseen → \(output)")
+        }
+        for word in ["sorry", "confirm", "email", "pass", "fraud", "team", "customer"] { #expect(words.contains(word), "[\(path)] \(word) → \(output)") }
+        let plain = "[2026-03-02 10:14:05] agent_marta: i'll pass this to billing and the refunds desk\n[2026-03-02 10:14:40] customer: thanks to everyone, sorry for the trouble"
+        let (quiet, kept) = try Self.scrub(plain, path)
+        #expect(quiet.findings.filter { Review.names.contains($0.entity) }.isEmpty, "[\(path)] \(quiet.findings.map(\.original)) → \(kept)")
+    }
 }
