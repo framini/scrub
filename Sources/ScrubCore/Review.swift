@@ -237,12 +237,17 @@ final class Review: @unchecked Sendable {
         var changed: [String: Int] = [:]
         var reverts: [Int: Set<Int>] = [:], applies: [Int: Set<Int>] = [:]
         let revisions = try self.revisions(edits)
+        let placed = try placements(marks, edits: edits)
+        let overruled = overruled(by: placed)
+        // A suspect's place a mark stands on is the mark's, whatever was chosen for the suspect.
+        var dropped: [Int: Set<Int>] = [:]
+        for id in overruled { dropped[spots[id].value, default: []].insert(spots[id].mark) }
         // Each place of a revised finding that stays replaced, by value and the
         // index of its stand-in (or of its suspect, where one is replaced).
         var rewrites: [Int: [Int: Revision]] = [:], appliedAs: [Int: [Int: Revision]] = [:]
         for finding in findings {
             let revision = revisions[finding.id]
-            for place in finding.places {
+            for place in finding.places where !overruled.contains(place.id) {
                 let spot = spots[place.id], leaves = choices.leaves(place, of: finding)
                 if leaves != finding.suspected {
                     if spot.suspected { applies[spot.value, default: []].insert(spot.mark) } else { reverts[spot.value, default: []].insert(spot.mark) }
@@ -253,14 +258,14 @@ final class Review: @unchecked Sendable {
         }
         // Marked by hand: each place a choice does not leave.
         var added: [Int: [(range: Range<Int>, value: String, entity: String, original: String)]] = [:]
-        for (entry, places) in try placements(marks, edits: edits) {
+        for (entry, places) in placed {
             let finding = Self.findingID(entry)
             for (index, place) in places where !(choices.places[Self.placeID(entry, index)] ?? choices.left.contains(finding)) {
                 let original = (values[place.value].text as NSString).substring(with: NSRange(location: place.range.lowerBound, length: place.range.count))
                 added[place.value, default: []].append((place.range, place.written, place.entity, original))
             }
         }
-        for valueIndex in Set(reverts.keys).union(applies.keys).union(added.keys).union(rewrites.keys).sorted() {
+        for valueIndex in Set(reverts.keys).union(applies.keys).union(added.keys).union(rewrites.keys).union(dropped.keys).sorted() {
             try Scrubber.checkCancellation()
             let value = values[valueIndex]
             let marks = value.marks, reverted = reverts[valueIndex] ?? [], applied = applies[valueIndex] ?? [], manual = added[valueIndex] ?? []
@@ -300,7 +305,7 @@ final class Review: @unchecked Sendable {
                 if let made = edit.made { kept.append(made.moved(to: range)) }
             }
             kept.sort { $0.range.lowerBound < $1.range.lowerBound }
-            let left = value.unresolved.indices.filter { !applied.contains($0) }
+            let left = value.unresolved.indices.filter { !applied.contains($0) && dropped[valueIndex]?.contains($0) != true }
             revised[valueIndex] = DocumentValue(text: text, marks: kept, unresolved: TextRanges.shift(left.map { value.unresolved[$0] }, by: plain), proposals: left.map { value.proposals[$0] })
         }
         var counts = self.counts
@@ -319,7 +324,7 @@ final class Review: @unchecked Sendable {
 extension ScrubResult {
     /// Every value replaced, once each, in the order first met, and every
     /// value left as written for a person to decide.
-    public var findings: [Finding] { review?.findings ?? [] }
+    public var findings: [Finding] { review?.findings(marks, edits: edits) ?? [] }
     /// The findings worth a person's look before the file is saved: every one left as written among them.
     public var uncertain: [Finding] { findings.filter(\.needsReview) }
     /// The choices this result was written with: as made, what was left as written stays so.
@@ -354,14 +359,15 @@ extension Review {
         let byStandIn: [String: [Int]]
         /// The findings' originals, in lowercase: written back where a person kept them.
         let originals: Set<String>
-        /// The stand-ins and suspects of each value, in order, which a mark never overlaps.
+        /// The stand-ins of each value, in order, which a mark never overlaps.
         var taken: [Int: [Range<Int>]] = [:]
         /// Where each mark stands, by the mark and the replacement typed for it, if any.
         var located: [Locating: Located] = [:]
         /// The findings' values and parts, read as the leak gate reads them.
         var known: LeakGate?
-        /// The last marks shown as findings, which every redraw of the result asks for.
-        var shown: (marks: Marks, edits: Edits, findings: [Finding])?
+        /// The last marks shown as findings, which every redraw of the result asks for,
+        /// and the places of suspects they take (see `overruled`).
+        var shown: (marks: Marks, edits: Edits, findings: [Finding], overruled: Set<Occurrence.ID>)?
         /// The last edits read as revisions, which every redraw and pick asks for, and
         /// the findings whose revision cannot be written (see `revisions`).
         var revised: (edits: Edits, revisions: [Finding.ID: Revision], byStandIn: [String: [Finding.ID]], blocked: Set<Finding.ID>)?
@@ -491,7 +497,7 @@ extension Review {
 
     private func taken(_ value: Int) -> [Range<Int>] {
         if let known = marking?.taken[value] { return known }
-        let ranges = (values[value].marks.map(\.range) + values[value].unresolved.map(\.range)).sorted { $0.lowerBound < $1.lowerBound }
+        let ranges = values[value].marks.map(\.range).sorted { $0.lowerBound < $1.lowerBound }
         marking?.taken[value] = ranges
         return ranges
     }
@@ -622,8 +628,30 @@ extension Review {
     func marked(_ marks: Marks, edits: Edits = Edits()) -> [Finding] {
         lock.lock()
         defer { lock.unlock() }
-        if let shown = marking?.shown, shown.marks == marks, shown.edits == edits { return shown.findings }
-        guard let placed = try? placements(marks, edits: edits) else { return [] }
+        return shown(marks, edits: edits).findings
+    }
+
+    /// The findings as `marks` leave them: a suspect without the places a
+    /// mark took from it, and gone once a mark took them all.
+    func findings(_ marks: Marks, edits: Edits = Edits()) -> [Finding] {
+        guard !marks.isEmpty else { return findings }
+        lock.lock()
+        let overruled = shown(marks, edits: edits).overruled
+        lock.unlock()
+        guard !overruled.isEmpty else { return findings }
+        return findings.compactMap { finding in
+            guard finding.suspected, finding.places.contains(where: { overruled.contains($0.id) }) else { return finding }
+            let places = finding.places.filter { !overruled.contains($0.id) }
+            return places.isEmpty ? nil : Finding(id: finding.id, entity: finding.entity, original: finding.original, standIn: finding.standIn, confidence: finding.confidence,
+                                                  places: places, excerpts: finding.excerpts, suspected: true, doubt: finding.doubt)
+        }
+    }
+
+    /// The marks as findings and the suspects' places they take, cached for
+    /// the last marks and edits. Every caller holds the lock.
+    private func shown(_ marks: Marks, edits: Edits) -> (findings: [Finding], overruled: Set<Occurrence.ID>) {
+        if let shown = marking?.shown, shown.marks == marks, shown.edits == edits { return (shown.findings, shown.overruled) }
+        guard let placed = try? placements(marks, edits: edits) else { return ([], []) }
         var bridged: [Int: NSString] = [:]
         let made = placed.map { entry, places in
             var excerpts: [Excerpt] = []
@@ -637,8 +665,24 @@ extension Review {
             let standIn = (try? locate(entry, as: edits.replacements[Self.findingID(entry)]))?.standIn ?? ""
             return Finding(id: Self.findingID(entry), entity: entry.entity, original: entry.text, standIn: standIn, confidence: 1, places: occurrences, excerpts: excerpts, suspected: false, doubt: nil)
         }
-        marking?.shown = (marks, edits, made)
-        return made
+        let overruled = overruled(by: placed)
+        marking?.shown = (marks, edits, made, overruled)
+        return (made, overruled)
+    }
+
+    /// The places of suspects that marks stand on, by id. A person's mark wins
+    /// over a suspect: the place is the mark's, and the suspect is gone from it,
+    /// so taking the mark back leaves the place as written, as made.
+    private func overruled(by placed: [(Marks.Entry, [(Int, Place)])]) -> Set<Occurrence.ID> {
+        var ranges: [Int: [Range<Int>]] = [:]
+        for (_, places) in placed { for (_, place) in places { ranges[place.value, default: []].append(place.range) } }
+        guard !ranges.isEmpty else { return [] }
+        var out = Set<Occurrence.ID>()
+        for (id, spot) in spots.enumerated() where spot.suspected {
+            let suspect = values[spot.value].unresolved[spot.mark].range
+            if ranges[spot.value]?.contains(where: { $0.overlaps(suspect) }) == true { out.insert(id) }
+        }
+        return out
     }
 
     /// Each mark's places with their index among all it found, without those
@@ -662,7 +706,8 @@ extension Review {
     /// case, a name with its initial or last name first, and what the leak
     /// gate reads as written from it (a name's part alone or inside a handle,
     /// an email's local part, a number with other separators). None overlaps
-    /// a stand-in or a suspect, which their own choices decide. A replacement
+    /// a stand-in, which its own choices decide; a suspect's place it takes
+    /// (see `overruled`). A replacement
     /// typed for the mark is its stand-in, and its variants follow it.
     func locate(_ entry: Marks.Entry, as typed: String? = nil) throws -> Located {
         let marking = try prepared()
