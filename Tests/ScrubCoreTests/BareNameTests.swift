@@ -140,8 +140,8 @@ struct BareNameTests {
                 }
             }
         }
-        // A list of what a record is tagged with stays, and is not asked about.
-        let tags = #"{"case": "C-71", "tags": ["High Risk", "Manual Review"], "queues": ["Fraud Ops"]}"#
+        // A list of what a record is tagged with, or of the countries it covers, stays, and is not asked about.
+        let tags = #"{"case": "C-71", "tags": ["High Risk", "Manual Review"], "queues": ["Fraud Ops"], "countries": ["New Zealand", "South Africa"]}"#
         let result = try Scrubber.scrub(Data(tags.utf8), name: "case.json", forceFullDetection: false, seed: 3)
         #expect(String(decoding: result.output, as: UTF8.self) == tags)
         #expect(result.findings.isEmpty, "\(result.findings.map(\.original))")

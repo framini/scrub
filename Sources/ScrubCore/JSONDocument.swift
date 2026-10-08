@@ -206,6 +206,12 @@ final class JSONDocument {
                 }
             }
         }
+        private static let cities = Set(Places.all.map { $0.city.lowercased() } + Places.abroad.map { $0.city.lowercased() })
+        /// A country, a region or a city a list of places names ("New Zealand", "San Mateo"): no one.
+        private static func isPlace(_ text: String) -> Bool {
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            return cities.contains(trimmed.lowercased()) || Places.region(trimmed) != nil || Places.code(trimmed) != nil
+        }
         /// `given`: the list is one person's given names, the first the record's (see `collectObject`).
         @inline(never)
         private func collectArray(_ document: JSONDocument, _ values: [JSONValue], key: String?, path: String, records: [Int], keys: [String], depth: Int, typed: Set<String>, given: Bool = false) {
@@ -213,7 +219,7 @@ final class JSONDocument {
             // A list of names under a key that says nothing of them ("household_members": ["Halina Lis", …]):
             // each is a person's, as a bare "name" written as one is (see `KeyHints.writtenAsName`).
             if KeyHints.hint(key) == nil, !KeyHints.isStructural(key), !values.isEmpty,
-               values.allSatisfy({ if case .string(let text) = $0 { KeyHints.writtenAsName(text, parent: key) } else { false } }) {
+               values.allSatisfy({ if case .string(let text) = $0 { KeyHints.writtenAsName(text, parent: key) && !Self.isPlace(text) } else { false } }) {
                 for index in values.indices { unsureNames.insert(path + "/" + String(index)) }
             }
             for (index, child) in values.enumerated() {
