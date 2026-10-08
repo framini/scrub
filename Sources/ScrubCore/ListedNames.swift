@@ -156,7 +156,10 @@ enum ListedNames {
             offset += (text as NSString).length + 1
         }
         var spans: [Span] = []
-        for group in groups where !group.isEmpty {
+        for written in groups {
+            // "Hi, I'm Bartholomew Ng": the greeting's contraction says who follows; the name is the rest.
+            let group = Array(written.drop { contraction($0.0.trimmingCharacters(in: CharacterSet(charactersIn: ".'’"))) })
+            guard !group.isEmpty else { continue }
             let words = group.map(\.0)
             if NameTagger.namesOrganisation(words.joined(separator: " ")) { continue }
             let lower = words.allSatisfy { $0 == $0.lowercased() }

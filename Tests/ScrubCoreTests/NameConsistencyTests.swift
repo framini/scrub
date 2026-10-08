@@ -42,6 +42,14 @@ struct NameConsistencyTests {
         #expect(output.contains(", I'm ") && !output.contains("I'm Bart"), "\(output)")
     }
 
+    /// A short surname after a first name a cue is sure of goes with it: "I'm Bartholomew Ng." leaves no "Ng".
+    @Test func aSelfIntroductionsSurnameGoesWithItsFirstName() throws {
+        for text in ["I'm Bartholomew Ng. My account is locked.\n", "Hi, I'm Bartholomew Ng.\n\nI've been locked out since Friday.\n", "Spoke with Imani Oyelaran-Wu about the refund.\n"] {
+            let (_, output) = try Self.scrub(text, "ticket.txt")
+            #expect(!output.contains("Bartholomew") && !output.contains(" Ng") && !output.contains("Oyelaran"), "\(output)")
+        }
+    }
+
     /// A time's "PM" before a name is no part of it: the sender keeps one stand-in through the thread.
     @Test func aNameAfterATimeKeepsOneStandIn() throws {
         let text = """
