@@ -56,6 +56,8 @@ public enum KeyHints {
         ("codepostal codigopostal codicepostale postnummer postnr", "POSTAL_CODE"),
         ("passwort wachtwoord motdepasse contrasena senha losenord kennwort veiligheidscode creditcardveiligheidscode beveiligingscode sicherheitscode kartensicherheitscode kartenprufnummer prufnummer codedesecurite cryptogramme cryptogrammevisuel codigodeseguridad codicedisicurezza sakerhetskod kreditkortssakerhetskod codigodeseguranca pincode pinnummer pinkod pinkode codigopin codicepin codepin pinnumber accountpin cardpin atmpin currentpin newpin", "SECRET"),
         ("gebruikersnaam benutzername nomdutilisateur nombredeusuario nomeutente anvandarnamn nomedeusuario", "USERNAME"),
+        // A fingerprint's, a face's or an iris's enrolment is its person's.
+        ("biometricid biometricidentifier biometricnumber biometrictemplateid biometricref biometricreference", "ID_NUMBER"),
         ("licenceplate licenseplatenumber kenteken kennzeichen immatriculation plaquedimmatriculation matricula placa targa registreringsnummer", "ID_NUMBER"),
         ("dob dateofbirth birthdate birthday birthyear yearofbirth yob birthmonth monthofbirth dobmonth dobday dayofbirth dobyear birth birthdetails birthinfo", "DATE_OF_BIRTH"),
         // Where someone was born is theirs as their address is.

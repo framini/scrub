@@ -278,6 +278,19 @@ struct IdentifierLeakTests {
         let result = try Scrubber.scrub(Data(log.utf8), name: "service.log", forceFullDetection: false, seed: 1)
         #expect(String(decoding: result.output, as: UTF8.self) == log)
     }
+
+    @Test func aBiometricEnrolmentsIDIsReplaced() throws {
+        // "Biometric ID: BIO-5048597196" stayed as written beside a replaced name and birth date.
+        let card = "**Ottoline Wexcombe, DOB: 1984-03-07, Biometric ID: QX-5048597196**\nBiometric template for Tobiah Quennell, DOB: 1961-06-10, Biometric ID: B7716204953.\n"
+        let check = #"{"result": {"status": "match", "score": 0.97, "subject": {"name": "Ottoline Wexcombe", "biometric_id": "FP-88203117", "biometricTemplateId": "T4410982751"}}}"#
+        for seed in UInt64(0)..<3 {
+            for (document, name) in [(card, "card.txt"), (check, "check.json")] {
+                let output = String(decoding: try Scrubber.scrub(Data(document.utf8), name: name, forceFullDetection: false, seed: seed).output, as: UTF8.self)
+                for gone in ["5048597196", "B7716204953", "88203117", "T4410982751", "Wexcombe"] { #expect(!output.contains(gone), "\(gone) in \(name): \(output)") }
+                #expect(!name.hasSuffix(".json") || output.contains(#""status": "match", "score": 0.97"#), "\(output)")
+            }
+        }
+    }
 }
 
 /// IDs made of a word and a number, written in a sentence with nothing to
