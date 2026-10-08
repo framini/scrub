@@ -367,4 +367,21 @@ struct NonPersonalKeptTests {
             #expect(!text.contains("Kovalchyk") && !text.contains("kovalchyk"), "\(text)")
         }
     }
+
+    @Test func aRequestsHeaderNamesStay() throws {
+        // In a pasted request "-H 'Idempotency-Key: …'" lost its header's name to a city ("Burlington-Key").
+        let request = """
+        curl -X POST https://api.example.com/v2/identity/verify \\
+          -H 'Content-Type: application/json' \\
+          -H 'Idempotency-Key: 6c3f8e2a-91b4-4d7e-b5a0-2f1c9d8e7b6a' \\
+          --header "Correlation-Id: req-77120" \\
+          -d '{"first_name": "Bohdan", "last_name": "Kovalchyk", "date_of_birth": "1971-11-02", "address": {"line1": "Villa 17, Street 23b", "city": "Kharkiv", "country": "UA"}}'
+
+        """
+        for seed in UInt64(0)..<3 {
+            let output = try Self.scrub(request, name: "Pasted text", seed: seed)
+            for kept in ["  -H 'Content-Type: application/json' \\\n", "  -H 'Idempotency-Key: ", "  --header \"Correlation-Id: "] { #expect(output.contains(kept), "\(kept): \(output)") }
+            for gone in ["Bohdan", "Kovalchyk", "1971-11-02"] { #expect(!output.contains(gone), "\(gone): \(output)") }
+        }
+    }
 }

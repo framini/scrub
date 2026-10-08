@@ -502,8 +502,18 @@ public final class Detector {
     private static let titles: Set<String> = ["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "madam"]
     /// A title alone ("Mr.", "Ms") or before a role ("Madam Chair", "Mr Justice") names no one,
     /// and a rank alone ("Constable", "Private") is neither someone nor a place.
+    /// Whether the range is inside a request header's name a command sets ("-H 'Idempotency-Key: …'"), which names nothing.
+    static func inHeaderName(_ range: Range<Int>, in text: String) -> Bool {
+        let ns = text as NSString
+        let start = max(0, range.lowerBound - 48), end = min(ns.length, range.upperBound + 48)
+        let before = ns.substring(with: NSRange(location: start, length: range.lowerBound - start))
+        let after = ns.substring(with: NSRange(location: range.upperBound, length: end - range.upperBound))
+        return before.range(of: #"(?:^|\s)(?:-H|--header)[ \t]+['"]?[A-Za-z0-9-]*$"#, options: .regularExpression) != nil
+            && after.range(of: #"^[A-Za-z0-9-]*:"#, options: .regularExpression) != nil
+    }
     private static func namesNoOne(_ span: Span, in text: String) -> Bool {
         guard span.entity == "PERSON" || span.entity == "LOCATION" else { return false }
+        if inHeaderName(span.range, in: text) { return true }
         let words = TextRanges.substring(text, span.range).split(separator: " ")
         if span.entity == "LOCATION" {
             // A country, a continent or a nationality ("of Norway", "Danish", "Finnish Export Controls") is shared by millions: no one's place.
