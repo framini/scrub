@@ -138,3 +138,56 @@ struct AddressSpanTests {
         #expect(cut("3277 Wexcombe Drive\nSuite 882\nBoise, ID 83702\nThanks, Bram") == ["3277 Wexcombe Drive\nSuite 882\nBoise, ID 83702"])
     }
 }
+
+/// An address never runs on into the phone number, the email or the link written after it: each is
+/// replaced as what it is, its label kept, however the address's reading ends, in several languages.
+struct ContactBesideAddressTests {
+    static let notes: [(String, [String], [String])] = [
+        ("Note de dossier : Mme Albane Rivière a appelé.\nAdresse : 8 allée des Tilleuls, 35000 Rennes. Tél. 02 99 55 01 42 — albane.riviere@example.fr\nMerci.",
+         ["albane.riviere@example.fr", "02 99 55 01 42", "allée des Tilleuls", "Rivière"], ["Tél. ", " — "]),
+        ("Kundennotiz: Herr Henrik Lorenz, Anschrift: Lindenstraße 14, 50674 Köln, Tel. 0221 5550123, E-Mail henrik.lorenz@example.de\nRückruf erbeten.",
+         ["henrik.lorenz@example.de", "0221 5550123", "Lindenstraße", "Lorenz"], [", Tel. ", ", E-Mail "]),
+        ("Domicilio: Calle del Pez 7, 3º B, 28004 Madrid; teléfono 655 501 234; correo marta.ibanez@example.es",
+         ["marta.ibanez@example.es", "655 501 234", "Calle del Pez"], ["; teléfono ", "; correo "]),
+        ("Morada: Rua das Flores 21, 4050-262 Porto, telefone 912 555 038, email rui.tavares@example.pt",
+         ["rui.tavares@example.pt", "912 555 038", "Rua das Flores"], [", telefone ", ", email "]),
+        ("Mailing address: 4821 Juniper Hollow Rd, Boise, ID 83702 phone (208) 555-0147 email dana.whitlock@example.com",
+         ["dana.whitlock@example.com", "555-0147", "Juniper Hollow"], [" phone (", " email "]),
+    ]
+
+    @Test(arguments: [UInt64(1), 4, 11])
+    func contactsBesideAnAddressAreTheirOwn(_ seed: UInt64) throws {
+        for (note, gone, kept) in Self.notes {
+            let result = try Scrubber.scrub(Data(note.utf8), name: "Pasted text", forceFullDetection: false, seed: seed)
+            let output = String(decoding: result.output, as: UTF8.self)
+            for value in gone { #expect(!output.contains(value), "\(value) left: \(output)") }
+            for value in kept { #expect(output.contains(value), "\(value) lost: \(output)") }
+            // The email is replaced as an email, not inside an address's stand-in.
+            let email = try #require(gone.first)
+            #expect(result.findings.contains { $0.original == email && $0.entity == "EMAIL_ADDRESS" }, "\(result.findings.map { "\($0.entity) \($0.original)" })")
+            #expect(!result.findings.contains { $0.entity == "ADDRESS" && $0.original.contains("@") }, "\(output)")
+        }
+    }
+
+    /// The rule alone, on spans as any reading might leave them: one read past its end, one read from inside an email.
+    @Test func anAddressGivesBackTheContactsItTookIn() {
+        let text = "Adresse : 8 allée des Tilleuls, 35000 Rennes. Tél. 02 99 55 01 42 — a.r@example.fr"
+        let ns = text as NSString
+        func range(_ part: String) -> Range<Int> { let r = ns.range(of: part); return r.location..<NSMaxRange(r) }
+        let address = range("8 allée des Tilleuls")
+        let spans = [Span(range: address.lowerBound..<ns.length, entity: "ADDRESS", score: 1),
+                     Span(range: range("02 99 55 01 42"), entity: "PHONE_NUMBER", score: 0.75),
+                     Span(range: range("a.r@example.fr"), entity: "EMAIL_ADDRESS", score: 1)]
+        let cut: [Span] = Detector.contactsOutOfAddresses(spans, in: text)
+        let kept: String? = cut.first { $0.entity == "ADDRESS" }.map { TextRanges.substring(text, $0.range) }
+        #expect(kept == "8 allée des Tilleuls, 35000 Rennes")
+        // A house number and postcode a phone's pattern took stay the address's.
+        let street = "Lieferung an Hauptstraße 12 50674 Köln bitte"
+        let sns = street as NSString
+        let whole = sns.range(of: "Hauptstraße 12 50674 Köln"), numbers = sns.range(of: "12 50674")
+        let numbered: [Span] = Detector.contactsOutOfAddresses([Span(range: whole.location..<NSMaxRange(whole), entity: "ADDRESS", score: 0.9),
+                                                    Span(range: numbers.location..<NSMaxRange(numbers), entity: "PHONE_NUMBER", score: 0.5)], in: street)
+        let range: Range<Int>? = numbered.first { $0.entity == "ADDRESS" }?.range
+        #expect(range == whole.location..<NSMaxRange(whole))
+    }
+}

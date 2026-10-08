@@ -228,6 +228,12 @@ let recognizerSamples: [String: String] = [
     "IMSI": "310123456789012",
     "MEID": "A1 23 45 67 89 01 23 5",
     "ID_NPWP": "12.345.678.2-123.000",
+    "VN_CCCD": "001195012345",
+    "VN_CMND": "012345678",
+    "SA_NATIONAL_ID": "1054321789",
+    "EG_NATIONAL_ID": "29001011234567",
+    "KZ_IIN": "850714300127",
+    "NG_BVN": "22123456789",
 ]
 // Shape-only kinds are drawn as any ID of their shape; a document number of a known shape keeps it.
 @Test func shapeOnlyKindsKeepTheirShape() throws {
@@ -830,5 +836,84 @@ func aPersonsOwnNumberIsReplacedInItsKind(_ name: String, _ key: String, _ phras
             let made = String(output.dropFirst(phrase.count + 8).dropLast(8))
             #expect(made != number && recognizer.passes(made), "\(output)")
         }
+    }
+}
+
+/// Identity numbers KYC records carry under their own country's keys: each is found under them, in a whole
+/// record of the person, and takes a stand-in of its own kind and structure (a Vietnamese citizen's
+/// province, century and sex digit, a resident's iqama still a resident's).
+@Test func nationalIdentityNumbersUnderTheirCountrysKeys() throws {
+    let records: [(String, String, (String) -> Bool)] = [
+        (#"{"khach_hang":{"ho_ten":"Đỗ Thị Hạnh","so_cccd":"001194007726","ngay_sinh":"12/03/1994","dien_thoai":"0912 555 018"}}"#, "001194007726",
+         { Recognizers.all.first { $0.name == "VN_CCCD" }?.passes($0) == true && $0.count == 12 }),
+        (#"[{"cccd":"079188004521","gioi_tinh":"Nam"},{"can_cuoc_cong_dan":"036301000187","gioi_tinh":"Nữ"}]"#, "079188004521",
+         { Recognizers.all.first { $0.name == "VN_CCCD" }?.passes($0) == true }),
+        (#"{"applicant":{"name":"Faisal Al Harbi","iqama_number":"2453187060","nationality":"EG"}}"#, "2453187060",
+         { $0.hasPrefix("2") && Recognizers.all.first { $0.name == "SA_NATIONAL_ID" }?.passes($0) == true }),
+        (#"{"client":{"full_name":"Aigerim Sadykova","iin":"850714300127","city":"Almaty"}}"#, "850714300127",
+         { Recognizers.all.first { $0.name == "KZ_IIN" }?.passes($0) == true }),
+        (#"{"customer":{"first_name":"Chidi","last_name":"Okafor","bvn":"22123456789","status":"VERIFIED"}}"#, "22123456789",
+         { $0.hasPrefix("22") && $0.count == 11 }),
+    ]
+    for (body, original, valid) in records {
+        for seed in [UInt64(3), 8] {
+            let result = try Scrubber.scrub(Data(body.utf8), name: "record.json", forceFullDetection: false, seed: seed)
+            let output = String(decoding: result.output, as: UTF8.self)
+            #expect(!output.contains(original), "\(original) left: \(output)")
+            let finding = result.findings.first { $0.original == original }
+            #expect(finding.map { valid($0.standIn) } == true, "\(original) → \(finding?.standIn ?? "nothing")")
+        }
+    }
+    // A nine-digit card under its key, and a twelve-digit citizen's number in a sentence that names it.
+    let card = try Scrubber.scrub(Data(#"{"so_cmnd":"012345678","noi_cap":"CA Hà Nội"}"#.utf8), name: "record.json", forceFullDetection: false, seed: 4)
+    #expect(!String(decoding: card.output, as: UTF8.self).contains("012345678"))
+    let note = try Scrubber.scrub(Data("Khách hàng cung cấp số CCCD 001194007726 khi mở tài khoản.".utf8), name: "Pasted text", forceFullDetection: false, seed: 4)
+    #expect(!String(decoding: note.output, as: UTF8.self).contains("001194007726"))
+}
+
+/// A Spanish identity or foreigner's number passing its check letter is one wherever it is written,
+/// with no word naming it: in a sentence, under a key that names nothing, in a CSV cell.
+@Test func spanishNumbersAreFoundWithNoWordNamingThem() throws {
+    let texts: [(String, String, [String])] = [
+        ("Pasted text", "Recibimos la copia; el número que figura es Z3108264A y caduca en 2031.", ["Z3108264A"]),
+        ("Pasted text", "Ref. cliente: X1234567L / 12345678Z (ver adjunto)", ["X1234567L", "12345678Z"]),
+        ("holders.json", #"{"holders":[{"ref":"Y7654321G","role":"primary"}]}"#, ["Y7654321G"]),
+        ("holders.csv", "holder,ref,role\nTitular,Z2345678M,primary\n", ["Z2345678M"]),
+    ]
+    for (name, text, gone) in texts {
+        let result = try Scrubber.scrub(Data(text.utf8), name: name, forceFullDetection: false, seed: 6)
+        let output = String(decoding: result.output, as: UTF8.self)
+        for value in gone {
+            #expect(!output.contains(value), "\(value) left: \(output)")
+            let made = result.findings.first { $0.original == value }?.standIn ?? ""
+            #expect(Recognizers.recognizing(made) != nil && made.first?.isLetter == value.first?.isLetter, "\(value) → \(made)")
+        }
+    }
+    // One whose letter fails its check is no one's number.
+    let wrong = try Scrubber.scrub(Data("Lote Z3108264E recibido.".utf8), name: "Pasted text", forceFullDetection: false, seed: 6)
+    #expect(String(decoding: wrong.output, as: UTF8.self).contains("Z3108264E"))
+}
+
+/// A document number under an element whose attribute names its type, in any language, is read as that
+/// type: an NIE under <Documento tipo="NIE"> takes an NIE's stand-in, as one named in its element does.
+@Test func xmlTypedDocumentIsReadAsItsType() throws {
+    let input = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <Solicitud>
+      <Titular><Nombre>Rocío Valverde Soto</Nombre><Documento tipo="NIE">X1234567L</Documento></Titular>
+      <Cotitular><Nombre>Bruno Lagarde</Nombre><Documento tipo="DNI">12345678Z</Documento></Cotitular>
+      <Avalista><NumeroDocumento tipo="NIE">Y7654321G</NumeroDocumento><Doc kind="nie">Z3108264A</Doc><Ausweis typ="nie">X5550123Q</Ausweis></Avalista>
+      <Producto tipo="hipoteca">HIP-2207</Producto>
+    </Solicitud>
+    """
+    for seed in [UInt64(2), 9] {
+        let result = try Scrubber.scrub(Data(input.utf8), name: "solicitud.xml", forceFullDetection: false, seed: seed)
+        let output = String(decoding: result.output, as: UTF8.self)
+        for value in ["X1234567L", "12345678Z", "Y7654321G", "Z3108264A", "X5550123Q"] {
+            #expect(!output.contains(value), "\(value) left: \(output)")
+            let made = result.findings.first { $0.original == value }?.standIn ?? ""
+            #expect(Recognizers.recognizing(made) != nil && made.first == value.first || value.first!.isNumber && made.first!.isNumber, "\(value) → \(made)")
+        }
+        #expect(output.contains(#"<Producto tipo="hipoteca">HIP-2207</Producto>"#) && output.contains(#"<Documento tipo="NIE">"#), "\(output)")
     }
 }

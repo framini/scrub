@@ -209,7 +209,9 @@ enum FormFields {
             // Only a label that is the field's name whole ("Street Address", "City"): "ipv4_address" holds no street.
             guard KeyHints.words(key).count == KeyHints.words(label.folding(options: .diacriticInsensitive, locale: nil)).count else { return [] }
             // The place ends with its sentence or its cell: "Adresse: Waldweg 6a, 80321 München. Handy: …" holds no phone.
-            let clause = TextRanges.matches(placeEnd, in: text).first.map { (text as NSString).substring(to: $0.range.location + $0.range(at: 1).length) } ?? text
+            var clause = TextRanges.matches(placeEnd, in: text).first.map { (text as NSString).substring(to: $0.range.location + $0.range(at: 1).length) } ?? text
+            // Nor a phone or an email after it: "…, 50674 Köln, Tel. 0221 …, E-Mail …" is read as those.
+            if let contact = KeyHints.contactStart(clause) { clause = (clause as NSString).substring(to: contact).trimmingCharacters(in: CharacterSet(charactersIn: " \t,;—–-")) }
             let trimmed = clause.trimmingCharacters(in: .whitespaces)
             guard trimmed.utf16.count <= 100, trimmed.first.map({ $0.isUppercase || $0.isNumber }) == true, KeyHints.fits(key, trimmed),
                   entity == "ADDRESS" || trimmed.split(separator: " ").count <= 5 else { return [] }

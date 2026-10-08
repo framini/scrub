@@ -421,7 +421,9 @@ public enum KeyHints {
     /// Keys whose sibling says what the value is: form fields, typed identifiers
     /// and FHIR contact points (`{"name": "ssn", "value": …}`, `{"system": "phone", "value": …}`).
     static let fieldValueKeys: Set<String> = ["value", "values", "data", "text", "val", "v", "answer", "response", "originalvalue", "extractedvalue", "expectedvalue", "actualvalue", "inputvalue", "submittedvalue", "providedvalue", "returnedvalue", "normalizedvalue"]
-    static let fieldNameKeys: Set<String> = ["name", "key", "k", "field", "fieldname", "fieldid", "fieldkey", "id", "label", "type", "system", "attribute", "property", "question", "code"]
+    static let fieldNameKeys: Set<String> = ["name", "key", "k", "field", "fieldname", "fieldid", "fieldkey", "id", "label", "type", "system", "attribute", "property", "question", "code",
+        // "Type" in other languages, as a document's attribute names its kind (<Documento tipo="NIE">).
+        "kind", "typ", "tipo", "tip", "tipe", "soort", "loai"]
     /// The field a record's value-holding key stands for, from its naming sibling.
     static func namedField(_ key: String, siblings: [(String, String)]) -> String? {
         guard fieldValueKeys.contains(words(key).joined()), hint(key) == nil else { return nil }
@@ -707,8 +709,25 @@ public enum KeyHints {
     /// The value a field's key is judged against: what comes before a note written after it (see `noteStart`).
     /// A secret is whole whatever it holds.
     static func judged(_ key: String?, _ value: String) -> String {
-        guard let entity = hint(key), entity != "SECRET", let cut = noteStart(value) else { return value }
+        guard let entity = hint(key), entity != "SECRET" else { return value }
+        let contact = entity == "ADDRESS" || entity == "LOCATION" ? contactStart(value) : nil
+        guard let cut = [noteStart(value), contact].compactMap({ $0 }).min() else { return value }
         return TextRanges.substring(value, 0..<cut)
+    }
+    private static let contactLabel = TextPattern(#"(?<=[\s,;.|/(—–-])\p{L}[\p{L}-]*\.?:?\s*(?=[+(\d]|[^\s@]+@)"#)
+    private static let email = TextPattern(#"(?<![^\s,;:(<\[—–-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+"#)
+    /// Where a phone number or an email written after a place starts ("Lindenstraße 14, 50674 Köln,
+    /// Tel. 0221 …, E-Mail h.l@example.de"): its label, or the email itself. A place holds neither.
+    static func contactStart(_ value: String) -> Int? {
+        guard value.utf16.count <= 4096 else { return nil }
+        let ns = value as NSString
+        let labelled = TextRanges.matches(contactLabel, in: value).first { match in
+            let word = ns.substring(with: match.range).trimmingCharacters(in: CharacterSet(charactersIn: " \t.:"))
+            return ["PHONE_NUMBER", "EMAIL_ADDRESS"].contains(hint(word) ?? "")
+        }?.range.location
+        let cut = [labelled, TextRanges.matches(email, in: value).first?.range.location].compactMap { $0 }.min()
+        guard let cut, cut > 0, TextRanges.substring(value, 0..<cut).contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
+        return cut
     }
     private static let placeholderOpenings = ["same as", "see ", "as above", "as per", "not ", "no ", "none", "unknown", "n/a", "tbd", "tbc", "redacted", "withheld", "remote", "various", "pending", "to be ", "on file", "same"]
     /// A key that holds a house or a unit's number, which may be written as a bare number.

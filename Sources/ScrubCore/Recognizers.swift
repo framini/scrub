@@ -166,7 +166,8 @@ enum Recognizers {
             return c + [fiscalLetter(c[...])]
         }),
         Recognizer("DNI", keys: ["dni", "nif", "dninumber", "numerodni", "nifnumber"], forms: [
-            .init(#"\b\d{8}-?[A-HJ-NP-TV-Z]\b"#, 0.3),
+            // Eight digits and the letter they check, in capitals: a Spaniard's number wherever it is written.
+            .init(#"\b\d{8}-?[A-HJ-NP-TV-Z]\b"#, 0.3, alone: true),
             .init(#"\bES[ -]{0,2}\d{8}-?[A-HJ-NP-TV-Z]\b"#, 0.3),
         ], context: ["dni", "nif", "documento", "identidad", "tax", "fiscal", "vat", "vatin"], check: { characters in
             // As a Spanish VAT number, written after ES.
@@ -178,9 +179,10 @@ enum Recognizers {
             return (like.count == 11 && like.starts(with: ["E", "S"]) ? ["E", "S"] : []) + characters(d) + [dniLetter(number(d))]
         }),
         Recognizer("NIE", keys: ["nie", "nienumber"], forms: [
-            .init(#"\b[XYZ]-?\d{7}-?[A-HJ-NP-TV-Z]\b"#, 0.3),
+            // Its letters in their places and a check letter: a foreigner's number wherever it is written.
+            .init(#"\b[XYZ]-?\d{7}-?[A-HJ-NP-TV-Z]\b"#, 0.3, alone: true),
             .init(#"\bES[ -]{0,2}[XYZ]-?\d{7}-?[A-HJ-NP-TV-Z]\b"#, 0.3),
-        ], context: ["nie", "nif", "extranjero", "tax", "fiscal", "vat", "vatin"], check: { characters in
+        ], context: ["nie", "nif", "extranjero", "documento", "identidad", "tax", "fiscal", "vat", "vatin"], check: { characters in
             // As a Spanish VAT number, written after ES.
             let body = characters.count == 11 && characters.starts(with: ["E", "S"]) ? Array(characters.dropFirst(2)) : characters
             guard body.count == 9, let lead = "XYZ".firstIndex(of: body[0]), let d = numbers(Array(body[1..<8])) else { return false }
@@ -624,6 +626,79 @@ enum Recognizers {
             let province = thaiProvinces.sorted().randomElement(using: &rng) ?? 10
             let d = [Int.random(in: 1...8, using: &rng), province / 10, province % 10] + randomDigits(9, &rng)
             return characters(d + [thaiDigit(d)])
+        }),
+        // Viet Nam's citizen identity number (CCCD), and the twelve-digit identity card's before it: the province
+        // of birth's code, a digit for the century and sex, the year of birth's last two digits, six more.
+        Recognizer("VN_CCCD", keys: ["cccd", "socccd", "cccdnumber", "cccdno", "cancuoc", "socancuoc", "cancuoccongdan", "socancuoccongdan", "cmnd", "socmnd", "cmndcccd", "socmndcccd", "chungminhnhandan", "sochungminhnhandan", "madinhdanh", "sodinhdanh", "madinhdanhcanhan"], forms: [
+            .init(#"\b0\d{2} ?\d{3} ?\d{6}\b"#, 0.05),
+        ], context: ["cccd", "cmnd", "căn cước", "can cuoc", "căn cước công dân", "chứng minh nhân dân", "chung minh nhan dan", "định danh", "dinh danh", "citizen identity card", "citizen identification"], verifies: false, separators: " ", check: { characters in
+            guard let d = numbers(characters), d.count == 12, vnProvinces.contains(number(Array(d[0..<3]))) else { return false }
+            // Born in this century only as far as this year.
+            return d[3] <= 3 && (d[3] < 2 || d[4] * 10 + d[5] <= 26)
+        }, draw: { like, rng in
+            // Its sex kept, as the stand-in name's is.
+            let female = numbers(like).map { $0.count == 12 && $0[3] % 2 == 1 } ?? false
+            let province = vnProvinces.sorted().randomElement(using: &rng) ?? 1
+            let year = Int.random(in: 1955...2006, using: &rng)
+            let d = [province / 100, province / 10 % 10, province % 10, (year >= 2000 ? 2 : 0) + (female ? 1 : 0)] + twoDigits(year % 100) + randomDigits(6, &rng)
+            return characters(d)
+        }),
+        // Viet Nam's nine-digit identity card (CMND): no check, only where named.
+        Recognizer("VN_CMND", keys: ["cmnd", "socmnd", "chungminhnhandan", "sochungminhnhandan", "cmt", "socmt", "cmtnd"], forms: [
+            .init(#"\b\d{9}\b"#, 0.05),
+        ], context: ["cmnd", "chứng minh nhân dân", "chung minh nhan dan", "cmt"], verifies: false, check: { characters in
+            numbers(characters)?.count == 9
+        }, draw: { _, rng in
+            characters([0] + [Int.random(in: 1...9, using: &rng)] + randomDigits(7, &rng))
+        }),
+        // Saudi Arabia's national ID (1…) and resident's iqama (2…): ten digits, Luhn's check over all of them.
+        Recognizer("SA_NATIONAL_ID", keys: ["iqama", "iqamanumber", "iqamano", "iqamaid", "saudiid", "saudinationalid", "ksaid", "muqeem", "hawiya", "hawiyanumber"], forms: [
+            .init(#"\b[12]\d{9}\b"#, 0.05),
+        ], context: ["iqama", "saudi id", "saudi national id", "hawiya", "الهوية الوطنية", "رقم الهوية", "الإقامة", "رقم الإقامة", "هوية مقيم"], check: { characters in
+            guard let d = numbers(characters), d.count == 10, d[0] == 1 || d[0] == 2 else { return false }
+            return Patterns.luhn(d)
+        }, draw: { like, rng in
+            // A citizen's stays a citizen's, a resident's a resident's.
+            let d = [like.first == "2" ? 2 : 1] + randomDigits(8, &rng)
+            return characters(d + [luhnDigit(d)])
+        }),
+        // Egypt's national number: the century (2 the 1900s, 3 the 2000s), the birth date as YYMMDD, the governorate of birth,
+        // four digits whose last is odd for a man, and one more.
+        Recognizer("EG_NATIONAL_ID", keys: ["raqamqawmi", "alraqamalqawmi", "egyptianid", "egyptnationalid", "egnationalid", "nationalnumberegypt"], forms: [
+            .init(#"\b[23]\d{13}\b"#, 0.05),
+        ], context: ["الرقم القومي", "رقم قومي", "بطاقة الرقم القومي", "egyptian id", "egyptian national id", "raqam qawmi"], verifies: false, check: { characters in
+            guard let d = numbers(characters), d.count == 14, d[0] == 2 || d[0] == 3, egyptGovernorates.contains(d[7] * 10 + d[8]) else { return false }
+            return realDate(year: (d[0] == 2 ? 1900 : 2000) + d[1] * 10 + d[2], month: d[3] * 10 + d[4], day: d[5] * 10 + d[6])
+        }, draw: { _, rng in
+            let date = randomDate(&rng)
+            let governorate = egyptGovernorates.sorted().randomElement(using: &rng) ?? 1
+            return characters([2] + twoDigits(date.year % 100) + twoDigits(date.month) + twoDigits(date.day) + twoDigits(governorate) + randomDigits(5, &rng))
+        }),
+        // Kazakhstan's individual identification number (IIN): the birth date as YYMMDD, the century and sex
+        // (1–6), four digits, and a check digit mod 11 over two rounds of weights.
+        Recognizer("KZ_IIN", keys: ["iin", "iinnumber", "iinno", "zhsn"], forms: [
+            .init(#"\b\d{6}[1-6]\d{5}\b"#, 0.05),
+        ], context: ["iin", "иин", "жсн", "individual identification number"], check: { characters in
+            guard let d = numbers(characters), d.count == 12, (1...6).contains(d[6]) else { return false }
+            let century = [1800, 1800, 1900, 1900, 2000, 2000][d[6] - 1]
+            guard realDate(year: century + d[0] * 10 + d[1], month: d[2] * 10 + d[3], day: d[4] * 10 + d[5]) else { return false }
+            return iinDigit(Array(d[0..<11])) == d[11]
+        }, draw: { like, rng in
+            let female = numbers(like).map { $0.count == 12 && $0[6] % 2 == 0 } ?? false
+            while true {
+                let date = randomDate(&rng)
+                let d = twoDigits(date.year % 100) + twoDigits(date.month) + twoDigits(date.day) + [female ? 4 : 3] + randomDigits(4, &rng)
+                if let mark = iinDigit(d) { return characters(d + [mark]) }
+            }
+        }),
+        // Nigeria's bank verification number: eleven digits banks issue from 22, with no check; only where named.
+        Recognizer("NG_BVN", keys: ["bvn", "bvnnumber", "bvnno", "bankverificationnumber"], forms: [
+            .init(#"\b2\d{10}\b"#, 0.05),
+        ], context: ["bvn", "bank verification number"], verifies: false, check: { characters in
+            guard let d = numbers(characters), d.count == 11 else { return false }
+            return d[0] == 2
+        }, draw: { _, rng in
+            characters([2, 2] + randomDigits(9, &rng))
         }),
         Recognizer("NIN", keys: ["nin", "ninnumber", "nimc", "nimcnumber"], forms: [
             .init(#"\b\d{11}\b"#, 0.05),
@@ -3602,6 +3677,17 @@ enum Recognizers {
     }
     private static func deaDigit(_ d: [Int]) -> Int { (d[0] + d[2] + d[4] + 2 * (d[1] + d[3] + d[5])) % 10 }
     private static let thaiProvinces = Set(Array(10...27) + Array(30...49) + Array(50...58) + Array(60...67) + Array(70...77) + Array(80...86) + Array(90...96))
+    /// Viet Nam's provinces' codes as its citizen identity numbers open with them (Circular 07/2016/TT-BCA).
+    private static let vnProvinces: Set<Int> = [1, 2, 4, 6, 8, 10, 11, 12, 14, 15, 17, 19, 20, 22, 24, 25, 26, 27, 30, 31, 33, 34, 35, 36, 37, 38, 40, 42, 44, 45, 46, 48, 49, 51, 52, 54, 56, 58, 60, 62, 64, 66, 67, 68, 70, 72, 74, 75, 77, 79, 80, 82, 83, 84, 86, 87, 89, 91, 92, 93, 94, 95, 96]
+    /// Egypt's governorates' codes in its national numbers, 88 for one born abroad.
+    private static let egyptGovernorates = Set([1, 2, 3, 4] + Array(11...19) + Array(21...35) + [88])
+    /// The IIN's check: weights 1…11 mod 11, and where that is 10, weights 3…11, 1, 2; a second 10 is no number's.
+    private static func iinDigit(_ body: [Int]) -> Int? {
+        let first = zip(body, 1...11).reduce(0) { $0 + $1.0 * $1.1 } % 11
+        if first < 10 { return first }
+        let second = zip(body, [3, 4, 5, 6, 7, 8, 9, 10, 11, 1, 2]).reduce(0) { $0 + $1.0 * $1.1 } % 11
+        return second < 10 ? second : nil
+    }
     private static func thaiDigit(_ body: [Int]) -> Int {
         let rest = body.enumerated().reduce(0) { $0 + $1.element * (13 - $1.offset) } % 11
         return rest <= 1 ? 1 - rest : 11 - rest

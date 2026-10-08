@@ -149,7 +149,8 @@ public enum XMLFile: FileFormat {
                 // <attribute name="email">…</attribute> names its own text.
                 let attributeTexts = (element.attributes ?? []).compactMap { a in local(a.name).map { ($0, a.stringValue ?? "") } }
                 let named = attributeTexts.first { KeyHints.fieldNameKeys.contains(KeyHints.words($0.0).joined()) }.flatMap { KeyHints.header($0.1) }
-                let textKey = KeyHints.hint(elementKey) == nil ? named ?? elementKey : elementKey
+                // Its type names it more closely than its name does: <NumeroDocumento tipo="NIE"> holds an NIE.
+                let textKey = KeyHints.hint(elementKey) == nil || named.map({ KeyHints.hint($0) == KeyHints.hint(elementKey) }) == true ? named ?? elementKey : elementKey
                 let textRecords = records.isEmpty ? ancestry : records
                 func addRun(_ texts: [XMLNode]) {
                     let joined = texts.map { $0.stringValue ?? "" }.joined()

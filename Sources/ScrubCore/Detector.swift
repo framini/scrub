@@ -189,8 +189,53 @@ public final class Detector {
     }
     /// What `base` finds, and the people it doubts.
     func read(_ text: String, key: String? = nil, contextWords: Set<String> = [], naming: Set<String>? = nil, context: ContextStage.Reading? = nil) -> (spans: [Span], doubts: [Span]) {
-        let spans = base(text, key: key, contextWords: contextWords, naming: naming, context: context)
+        let spans = Self.contactsOutOfAddresses(base(text, key: key, contextWords: contextWords, naming: naming, context: context), in: text)
         return (spans, doubts)
+    }
+    private static let contactKinds: Set<String> = ["EMAIL_ADDRESS", "PHONE_NUMBER", "URL"]
+    /// An address read on into the phone number, the email or the link beside it ("…, 44000 Nantes.
+    /// Tél. 02 40 55 01 27 — h.g@example.fr") ends before them and their label, and one read from inside
+    /// one starts after it: each is then replaced as what it is. A number the address reads as its own
+    /// part (a house number and a postcode a phone's pattern took) stays in it: a phone counts only after
+    /// its label or with nothing but contacts after it.
+    static func contactsOutOfAddresses(_ spans: [Span], in text: String) -> [Span] {
+        let contacts = spans.filter { contactKinds.contains($0.entity) }
+        guard !contacts.isEmpty, spans.contains(where: { $0.entity == "ADDRESS" }) else { return spans }
+        let ns = text as NSString
+        func labelled(_ index: Int, from lower: Int) -> Int? {
+            // The word before `index`, its punctuation dropped, if it names a phone or an email ("Tél.", "E-Mail:").
+            var end = index
+            while end > lower, let scalar = Unicode.Scalar(ns.character(at: end - 1)), !CharacterSet.alphanumerics.contains(scalar) { end -= 1 }
+            var start = end
+            while start > lower, let scalar = Unicode.Scalar(ns.character(at: start - 1)), CharacterSet.alphanumerics.contains(scalar) || scalar == "-" { start -= 1 }
+            guard start < end, let kind = KeyHints.hint(ns.substring(with: NSRange(location: start, length: end - start))), ["PHONE_NUMBER", "EMAIL_ADDRESS"].contains(kind) else { return nil }
+            return start
+        }
+        return spans.compactMap { span in
+            guard span.entity == "ADDRESS" else { return span }
+            var lower = span.range.lowerBound, upper = span.range.upperBound
+            for contact in contacts where contact.range.lowerBound <= lower && lower < contact.range.upperBound { lower = contact.range.upperBound }
+            let inside = contacts.filter { lower < $0.range.lowerBound && $0.range.lowerBound < upper }.sorted { $0.range.lowerBound < $1.range.lowerBound }
+            for (index, contact) in inside.enumerated() {
+                let label = labelled(contact.range.lowerBound, from: lower)
+                // What follows it to the address's end, the contacts after it left out: only their labels, if anything.
+                var rest = "", at = contact.range.upperBound
+                for later in inside[(index + 1)...] where later.range.lowerBound >= at {
+                    rest += ns.substring(with: NSRange(location: at, length: min(later.range.lowerBound, upper) - at)) + " "
+                    at = later.range.upperBound
+                }
+                if at < upper { rest += ns.substring(with: NSRange(location: at, length: upper - at)) }
+                let onlyContacts = rest.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "-" }).allSatisfy { word in
+                    KeyHints.hint(String(word)).map { ["PHONE_NUMBER", "EMAIL_ADDRESS"].contains($0) } == true
+                }
+                guard contact.entity != "PHONE_NUMBER" || label != nil || onlyContacts else { continue }
+                upper = label ?? contact.range.lowerBound
+                break
+            }
+            guard lower != span.range.lowerBound || upper != span.range.upperBound else { return span }
+            guard let kept = trimmed(lower..<upper, in: ns) else { return nil }
+            return Span(range: kept, entity: "ADDRESS", score: span.score)
+        }
     }
     /// Doubted people cut to what a name holds, outside every finding and
     /// link, once each: where two models doubt one name, the likelier guess.
