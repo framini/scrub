@@ -644,7 +644,8 @@ public enum KeyHints {
         let words = lower.split { !$0.isLetter && $0 != "'" && $0 != "’" }
         guard !trimmed.contains(where: \.isNumber), words.count >= 2, trimmed.filter(\.isLetter).count >= 5, !typeWords.contains(lower), !statusWords.contains(lower),
               !placeholderOpenings.contains(where: { lower.hasPrefix($0) }) else { return false }
-        return !lower.contains("_")
+        // A zone's names line under "line1" ("P<GBRADEBAYO<OKAFOR<<…") is the zone's, no street.
+        return !lower.contains("_") && !MachineZone.isShaped(trimmed)
     }
     /// A province's code that `fits` turns down for being no US, Canadian or
     /// Australian region ("NA", "TO" beside an Italian city): replaced only

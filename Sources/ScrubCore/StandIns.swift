@@ -394,6 +394,8 @@ final class StandIns {
     /// none, or the document holds none, it tells nothing and stays.
     /// Each expiry's stand-in, by the part its key says it is and as written: one card's "2029" is one year wherever it is.
     private var expiries: [String: String] = [:]
+    /// A whole expiry date's stand-in, by the day it reads as: a zone's expiry follows it.
+    private var expiryDays: [Day: Day] = [:]
     /// A card's or a document's expiry in its own layout: a year a few years on,
     /// a month of the year, a day every month has, each run of digits as wide as it
     /// was. "0331" is a month and a year, "2030" a year, "6" a month unless its key says year.
@@ -445,6 +447,9 @@ final class StandIns {
             made = output
         }
         expiries[cacheKey] = made
+        if let real = Self.dateParts(trimmed), let month = real.month, let day = real.day, let fake = Self.dateParts(made), let fakeMonth = fake.month, let fakeDay = fake.day {
+            expiryDays[Day(year: real.year, month: month, day: day)] = Day(year: fake.year, month: fakeMonth, day: fakeDay)
+        }
         return made
     }
     private func age(_ original: String) -> String {
@@ -1999,6 +2004,7 @@ extension StandIns {
             case .data:
                 c.replaceSubrange(0..<9, with: zoneNumber(c[0..<9]))
                 c.replaceSubrange(13..<19, with: zoneDate(c[13..<19]))
+                c.replaceSubrange(21..<27, with: zoneExpiry(c[21..<27]))
                 let optional = c.count == 44 ? 28..<42 : 28..<35
                 c.replaceSubrange(optional, with: zoneNumber(c[optional]))
                 c = MachineZone.rechecked(c, kind: .data)
@@ -2038,6 +2044,14 @@ extension StandIns {
         func shape(_ value: String) -> String { String(value.map { $0.isNumber ? "9" : "A" }) }
         if fake.isEmpty || fake == text || shape(fake) != shape(text) { fake = idLike(text) }
         return Array(MachineZone.fit(fake, field.count))
+    }
+    /// A zone's expiry (YYMMDD): the stand-in the document's own expiry took
+    /// where it is written whole beside the zone; as written otherwise.
+    private func zoneExpiry(_ field: ArraySlice<Character>) -> [Character] {
+        let text = String(field)
+        guard text.count == 6, let yy = Int(text.prefix(2)), let mm = Int(text.dropFirst(2).prefix(2)), let dd = Int(text.suffix(2)),
+              let fake = expiryDays[Day(year: 2000 + yy, month: mm, day: dd)] else { return Array(field) }
+        return Array(String(format: "%02d%02d%02d", fake.year % 100, fake.month, fake.day))
     }
     /// A zone's birth date (YYMMDD): the stand-in year of the same birth year,
     /// and the month and day the same date's parts took beside it.

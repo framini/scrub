@@ -371,3 +371,51 @@ func zoneLinesUnderLineKeysStayAZone(_ name: String) throws {
     let surname = try value(output, "extracted", "surname"), given = try value(output, "extracted", "given_names")
     #expect(written.last == surname.filter(\.isLetter) && written.first == given, "\(output)")
 }
+
+/// A zone's names line under "line1", in a document check that also gives the
+/// holder's place of birth or city: the line is the zone's, never an address's
+/// first line beside its city, so it keeps its layout and takes the holder's
+/// stand-in names; and the data line's expiry agrees with the document's own.
+@Test(arguments: ["docv.json", "Pasted text"])
+func zoneNamesLineBesideAPlaceStaysAZone(_ name: String) throws {
+    let full = MRZ.passport(issuer: "GBR", last: "Marchetti-Oyelaran", first: "Tobias", number: "K72QW4819", nationality: "GBR", birth: birth, sex: "M", expiry: expiry)
+    let places = [#""placeOfBirth": "LEEDS","#, #""city": "Norwich","#]
+    for place in places {
+        for seed: UInt64 in 1...3 {
+            let response = """
+            {
+              "checkId": "dv-41a07c",
+              "documentType": "PASSPORT",
+              "issuingCountry": "GBR",
+              "extracted": {
+                "surname": "MARCHETTI-OYELARAN",
+                "givenNames": "TOBIAS",
+                "documentNumber": "K72QW4819",
+                "dateOfBirth": "23 SEP 1981",
+                "dateOfExpiry": "17 APR 2031",
+                \(place)
+                "mrz": {
+                  "line1": "\(full.0)",
+                  "line2": "\(full.1)"
+                }
+              },
+              "checks": {"mrzChecksum": "PASS", "faceMatch": 0.962}
+            }
+            """
+            let output = try scrub(response, as: name, seed: seed)
+            let line1 = try value(output, "extracted", "mrz", "line1"), line2 = try value(output, "extracted", "mrz", "line2")
+            #expect(line1.count == 44 && line1.hasPrefix("P<GBR"), "[\(place) seed \(seed)] \(output)")
+            #expect(MRZ.misfit(full.0 + "\n" + full.1, line1 + "\n" + line2) == nil, "[\(place) seed \(seed)] \(line1) \(line2)")
+            #expect(!output.contains("MARCHETTI") && !output.contains("OYELARAN") && !output.contains("TOBIAS") && !output.contains("K72QW4819"), "[\(place) seed \(seed)] \(output)")
+            // The zone's expiry (YYMMDD at 21) is the date "dateOfExpiry" reads, whether or not it changed.
+            let expires = try value(output, "extracted", "dateOfExpiry").split(separator: " ")
+            let months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+            let month = try #require(months.firstIndex(of: String(expires[1]))) + 1
+            let zoneExpiry = String(Array(line2)[21..<27])
+            #expect(zoneExpiry == String(format: "%02d%02d%02d", Int(expires[2])! % 100, month, Int(expires[0])!), "[\(place) seed \(seed)] \(output)")
+            let written = try #require(MRZ.writtenName(line1), "[\(place) seed \(seed)] \(line1)")
+            let surname = try value(output, "extracted", "surname"), given = try value(output, "extracted", "givenNames")
+            #expect(written.last == surname.filter(\.isLetter) && written.first == given, "[\(place) seed \(seed)] \(output)")
+        }
+    }
+}
