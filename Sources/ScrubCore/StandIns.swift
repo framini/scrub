@@ -153,7 +153,9 @@ final class StandIns {
         // A bare number that the document also writes as a phone number
         // ("4158672290" beside "(415) 867-2290") is that phone, and takes its stand-in.
         let digitKind = actual == "ID_NUMBER" && phones.contains(normalized("PHONE_NUMBER", original)) ? "PHONE_NUMBER" : actual
+        let sixDigits = Self.numbered.contains(actual) ? original.filter { $0.isASCII && $0.isNumber } : ""
         let sameDigits = digitKey(digitKind, original).flatMap { assigned[$0] }.flatMap { pour($0, into: original) }.flatMap { checked($0, identity) }
+            ?? (sixDigits.count == 6 ? sortCodes[sixDigits].flatMap { pour($0, into: original) } : nil)
         for attempt in 0..<8 {
             // A number a bare "last4" ends keeps its fourth-last digit off zero, before
             // it is judged: the ending it is judged by is the one written. The same number
@@ -178,6 +180,7 @@ final class StandIns {
             if assigned[plain] == nil { assigned[plain] = fake }
         }
         if let digitKey = digitKey(digitKind, original), assigned[digitKey] == nil { assigned[digitKey] = normalized(digitKind, fake) }
+        if sixDigits.count == 6, sortCodes[sixDigits] == nil, fake.filter({ $0.isASCII && $0.isNumber }).count == 6 { sortCodes[sixDigits] = fake.filter { $0.isASCII && $0.isNumber } }
         if !original.contains("@"), ["USERNAME", "EMAIL_ADDRESS"].contains(actual), let local = handleKey(original), handles[local] == nil {
             handles[local] = fake
         } else if actual == "EMAIL_ADDRESS", let local = handleKey(String(original.prefix { $0 != "@" })), handles[local] == nil, let made = fake.split(separator: "@").first {
@@ -232,6 +235,8 @@ final class StandIns {
         let digits = normalized(entity, original)
         return digits.count >= 7 ? "DIGITS\u{0}" + (entity == "PHONE_NUMBER" ? entity : "NUMBER") + "\u{0}" + digits : nil
     }
+    /// The stand-in digits of each sort code, as six digits, so one written alone ("20-20-15") and inside an IBAN agree.
+    private var sortCodes: [String: String] = [:]
     private func pour(_ digits: String, into original: String) -> String? {
         let count = original.filter { $0.isASCII && $0.isNumber }.count
         let source = count == digits.count + 1 ? "1" + digits : digits
@@ -1721,8 +1726,16 @@ final class StandIns {
         guard Patterns.iban(String(raw)) else { return nil }
         let country = String(raw.prefix(2))
         func number(_ text: some Sequence<Character>) -> [Int] { text.compactMap(\.wholeNumberValue) }
+        // A British or Irish IBAN holds a sort code and an account number the document may write on their own:
+        // each keeps the stand-in it takes there, and gives it there when the IBAN comes first.
+        let sorted = ["GB", "IE"].contains(country) && raw.count == 22 && raw[8...].allSatisfy(\.isNumber)
+        let realSort = String(raw[8..<min(14, raw.count)]), realAccount = String(raw.suffix(8))
+        let knownSort = sorted ? sortCodes[realSort] : nil
+        let knownAccount = sorted ? digitKey("ID_NUMBER", realAccount).flatMap { assigned[$0] } : nil
         for _ in 0..<32 {
             var account = Array(raw.dropFirst(4).prefix(4)) + raw.dropFirst(8).map { $0.isNumber ? Character(digit()) : $0 }
+            if let knownSort { account.replaceSubrange(4..<10, with: knownSort) }
+            if let knownAccount { account.replaceSubrange(10..<18, with: knownAccount) }
             let all = number(account)
             switch country {
             case "BE" where all.count == 12:
@@ -1745,6 +1758,10 @@ final class StandIns {
             let check = 98 - moved.reduce(0) { ($0 * 10 + $1.wholeNumberValue!) % 97 }
             let made = Array(country + String(format: "%02d", check)) + account
             guard made != raw, Patterns.iban(String(made)) else { continue }
+            if sorted {
+                if knownSort == nil { sortCodes[realSort] = String(made[8..<14]) }
+                if knownAccount == nil, let key = digitKey("ID_NUMBER", realAccount) { assigned[key] = String(made[14..<22]) }
+            }
             var drawn = made.makeIterator()
             return String(original.map { written in
                 guard written.isASCII, written.isLetter || written.isNumber, let next = drawn.next() else { return written }

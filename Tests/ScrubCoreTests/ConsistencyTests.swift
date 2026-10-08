@@ -260,4 +260,25 @@ struct ConsistencyTests {
             #expect(!output.contains("1966"), "[seed \(seed)] \(output)")
         }
     }
+
+    /// A British account's sort code and number, written on their own and inside its IBAN, take
+    /// stand-ins that agree in either order, and the IBAN's check digits are right for them.
+    @Test func anIBANHoldsTheStandInsOfItsSortCodeAndAccountNumber() throws {
+        let ibanFirst = #"{"accounts": [{"holder_name": "Imogen Treadwell", "iban": "GB64CTBK30977148201736", "bic": "CTBKGB2L", "sort_code": "30-97-71", "account_number": "48201736", "currency": "GBP"}]}"#
+        let ibanLast = #"{"accounts": [{"holder_name": "Imogen Treadwell", "sort_code": "309771", "account_number": "48201736", "iban": "GB64 CTBK 3097 7148 2017 36", "currency": "GBP"}]}"#
+        for (text, sortKey) in [(ibanFirst, #""sort_code": "(\d{2})-(\d{2})-(\d{2})""#), (ibanLast, #""sort_code": "(\d{2})(\d{2})(\d{2})""#)] {
+            for seed: UInt64 in 0..<6 {
+                let result = try Scrubber.scrub(Data(text.utf8), name: "accounts.json", forceFullDetection: false, seed: seed)
+                let output = String(decoding: result.output, as: UTF8.self)
+                #expect(!output.contains("309771") && !output.contains("30-97-71") && !output.contains("48201736"), "[seed \(seed)] \(output)")
+                let iban = try #require(output.firstMatch(of: /"iban": "([A-Z0-9 ]+)"/), "\(output)")
+                let compact = String(iban.1.filter { $0 != " " })
+                #expect(Patterns.iban(compact), "[seed \(seed)] \(output)")
+                let sort = try #require(output.firstMatch(of: try Regex(sortKey)), "\(output)")
+                let sortDigits = (1...3).map { sort.output[$0].substring.map(String.init) ?? "" }.joined()
+                let account = try #require(output.firstMatch(of: /"account_number": "(\d{8})"/), "\(output)")
+                #expect(compact.hasSuffix(sortDigits + account.1), "[seed \(seed)] \(output)")
+            }
+        }
+    }
 }
