@@ -485,6 +485,8 @@ public enum KeyHints {
         if typeWords.contains(trimmed.lowercased()) { return false }
         if digestKinds.contains(entity), isDigest(trimmed) { return true }
         if entity == "USERNAME" { return !describes(trimmed) }
+        // A zone's line under a line's key ("mrz": {"line2": "EJ4728193…"}), its check digits right, is the zone's, no street.
+        if entity == "ADDRESS", MachineZone.isZone(trimmed) { return false }
         // A second address line is a unit ("Apt 4B", "Suite 210", "#12"), not a measure.
         if entity == "ADDRESS", unitKeys.contains(compactKey(key)) || unitKeys.contains(words(key).last ?? "") || unitKeys.contains(words(key).suffix(2).joined()) {
             let first = trimmed.split(whereSeparator: { $0 == " " || $0 == "." }).first.map { $0.lowercased() } ?? ""

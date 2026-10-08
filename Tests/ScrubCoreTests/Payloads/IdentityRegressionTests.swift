@@ -338,3 +338,36 @@ func alikeZoneLinesAreEachTheirHolders(_ name: String) throws {
         }
     }
 }
+
+/// A document check's zone stored as "line1" and "line2" under "mrz": the
+/// data line is the zone's, never an address's second line, so it takes the
+/// stand-in passport number and birth date with its check digits right.
+@Test(arguments: ["docv.json", "Pasted text"])
+func zoneLinesUnderLineKeysStayAZone(_ name: String) throws {
+    let full = MRZ.passport(issuer: "NZL", last: "Ferncastle", first: "Imogen", number: "LH5520917", nationality: "NZL", birth: birth, sex: "F", expiry: expiry)
+    let response = """
+    {
+      "verification_id": "docv_51c0e2",
+      "status": "approved",
+      "document": {
+        "type": "passport",
+        "issuing_country": "NZL",
+        "number": "LH5520917",
+        "mrz": {"line1": "\(full.0)", "line2": "\(full.1)", "checksums_valid": true}
+      },
+      "extracted": {"surname": "FERNCASTLE", "given_names": "IMOGEN", "date_of_birth": "1981-09-23", "nationality": "NZL"}
+    }
+    """
+    let output = try scrub(response, as: name)
+    let line1 = try value(output, "document", "mrz", "line1"), line2 = try value(output, "document", "mrz", "line2")
+    #expect(!output.contains("LH5520917") && !output.contains("FERNCASTLE"), "\(output)")
+    #expect(line2.count == 44 && MachineZone.isZone(line2), "\(line2)")
+    #expect(MRZ.misfit(full.0 + "\n" + full.1, line1 + "\n" + line2) == nil, "\(line1) \(line2)")
+    let number = try value(output, "document", "number")
+    #expect(MRZ.data(line2).number == number, "\(output)")
+    let born = try value(output, "extracted", "date_of_birth").split(separator: "-").compactMap { Int($0) }
+    #expect(MRZ.data(line2).birth == String(format: "%02d%02d%02d", born[0] % 100, born[1], born[2]), "\(output)")
+    let written = try #require(MRZ.writtenName(line1))
+    let surname = try value(output, "extracted", "surname"), given = try value(output, "extracted", "given_names")
+    #expect(written.last == surname.filter(\.isLetter) && written.first == given, "\(output)")
+}
