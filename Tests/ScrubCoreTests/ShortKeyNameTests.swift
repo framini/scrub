@@ -167,6 +167,10 @@ struct ShortKeyNameTests {
         let (_, output, parsed) = try Self.scrub(#"{"applicant": {"nameKanji": "森田 彩花", "nameRomaji": "MORITA AYAKA", "nameKana": "モリタ アヤカ"}}"#)
         let applicant = try #require((parsed as? [String: Any])?["applicant"] as? [String: String], "\(output)")
         #expect(applicant["nameRomaji"] == applicant["nameKanji"]?.uppercased() && applicant["nameKana"] == applicant["nameKanji"], "\(output)")
+        // A romanised name written family name first, in capitals, keeps that order.
+        let (_, romaji, romajiParsed) = try Self.scrub(#"{"name": "森田 健二", "romaji": "MORITA Kenji", "birth": "1973/02/12"}"#)
+        let written = try #require((romajiParsed as? [String: String])?["romaji"]).split(separator: " ")
+        #expect(written.count == 2 && written[0] == written[0].uppercased() && written[1] != written[1].uppercased(), "\(romaji)")
         // In a log line too.
         let (_, line, _) = try Self.scrub("2026-10-06 INFO lookup {\"name\":\"黄丽华\",\"pinyin\":\"HUANG LIHUA\"}\n", "lookup.log")
         #expect(!line.contains("HUANG") && !line.contains("LIHUA"), "\(line)")
