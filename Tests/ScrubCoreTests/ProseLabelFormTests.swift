@@ -29,6 +29,9 @@ private func written(_ output: Data, _ rendering: String) throws -> String {
 }
 
 private let cases: [FormCase] = [
+    FormCase(name: "an address's sentence ends before the next label",
+             text: "Meine neue Adresse: Lindenweg 4b, 80331 München. Handy: +49 1512 5550147.",
+             gone: ["Lindenweg 4b", "1512 5550147"], kept: ["Meine neue Adresse: ", ". Handy: +49 "]),
     FormCase(name: "a bold label with its colon inside the marks",
              text: "**Payment**\n- **CVV:** 418\n- **Postcode:** 60614\n- **User Name**: quillmere88\n- **License Plate**: KD 514 RX 30\n- **City:** Port Elwyn",
              gone: ["418", "60614", "quillmere88", "KD 514 RX 30", "514 RX"], kept: ["- **CVV:** ", "- **Postcode:** ", "- **User Name**: ", "- **License Plate**: "]),

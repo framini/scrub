@@ -52,11 +52,17 @@ public enum KeyHints {
         ("ssn socialsecuritynumber socialsecurity ssnnumber", "US_SSN"),
         ("address streetaddress street addressline1 addressline2 addressline line1 line2 addr address1 street1 addr1 streetline1 street2 address2 addr2 streetline2 addressline3 line3 address3 addr3 street3 extendedaddress streetaddress2 aptsuite apartmentnumber aptnumber suitenumber unitnumber flatnumber unit apt apartment housenumber housenum houseno primarynumber housename flat flatno buildingnumber buildingno streetnumber streetnum streetno civicnumber premisenumber streetname thoroughfare buildingname formattedaddress fulladdress physicaladdress mailingaddress homeaddress residentialaddress billingaddress shippingaddress addressupdates addresshistory", "ADDRESS"),
         // The same fields as forms in other languages label them, written without their accents.
-        ("geboortedatum geburtsdatum datedenaissance fechadenacimiento fechanacimiento datadinascita fodelsedatum datadenascimento datanascimento fodselsdato ngaysinh", "DATE_OF_BIRTH"),
-        ("hoten naam", "PERSON"),
-        ("diachi", "ADDRESS"),
-        ("noisinh", "LOCATION"),
-        ("codepostal codigopostal codicepostale postnummer postnr", "POSTAL_CODE"),
+        ("geboortedatum geburtsdatum datedenaissance datenaissance fechadenacimiento fechanacimiento fechanac fechadenac datadinascita datanascita fodelsedatum datadenascimento datanascimento datanasc fodselsdato ngaysinh dogumtarihi dataurodzenia datumnarozeni datumnarodenia syntymaaika szuletesidatum tanggallahir tarikhlahir", "DATE_OF_BIRTH"),
+        ("isim imie imiona voornaam voornamen fornamn fornavn etunimi prenume", "FIRST_NAME"),
+        ("soyad soyadi soyisim soyismi kizliksoyadi nazwisko achternaam geslachtsnaam efternamn etternavn efternavn sukunimi apelido", "LAST_NAME"),
+        ("hoten naam adsoyad adisoyadi isimsoyisim nama namalengkap imienazwisko volledigenaam nomcomplet", "PERSON"),
+        ("diachi adres adresse direccion domicilio indirizzo residenza endereco morada anschrift wohnadresse adresa alamat ikametadresi", "ADDRESS"),
+        ("straat strasse calle ulica", "ADDRESS"),
+        ("noisinh dogumyeri geburtsort geboorteplaats lieudenaissance lieunaissance luogodinascita luogonascita lugardenacimiento lugarnacimiento localdenascimento localnascimento fodelseort", "LOCATION"),
+        ("ciudad cidade citta ville stadt plaats woonplaats wohnort miasto miejscowosc municipio comune localidad localita sehir ilce mahalle", "LOCATION"),
+        ("codepostal codigopostal codicepostale postnummer postnr plz postleitzahl postakodu kodpocztowy", "POSTAL_CODE"),
+        ("telefon telefono telefone telefoon telefonnummer telefoonnummer celular cellulare movil gsm ceptelefonu dienthoai sodienthoai tlf tfno", "PHONE_NUMBER"),
+        ("eposta courriel correo correoelectronico epost epostadress", "EMAIL_ADDRESS"),
         ("passwort wachtwoord motdepasse contrasena senha losenord kennwort veiligheidscode creditcardveiligheidscode beveiligingscode sicherheitscode kartensicherheitscode kartenprufnummer prufnummer codedesecurite cryptogramme cryptogrammevisuel codigodeseguridad codicedisicurezza sakerhetskod kreditkortssakerhetskod codigodeseguranca pincode pinnummer pinkod pinkode codigopin codicepin codepin pinnumber accountpin cardpin atmpin currentpin newpin", "SECRET"),
         ("gebruikersnaam benutzername nomdutilisateur nombredeusuario nomeutente anvandarnamn nomedeusuario", "USERNAME"),
         // A fingerprint's, a face's or an iris's enrolment is its person's.
@@ -99,7 +105,8 @@ public enum KeyHints {
     public static func hint(_ key: String?) -> String? {
         guard var key, !key.isEmpty else { return nil }
         // "Código postal", "Födelsedatum": a key's accents dropped, as the names above are written.
-        if key.utf8.contains(where: { $0 >= 0x80 }) { key = key.folding(options: .diacriticInsensitive, locale: nil) }
+        // A dotless "ı" has no accent to drop: "Soyadı" is "soyadi".
+        if key.utf8.contains(where: { $0 >= 0x80 }) { key = key.replacingOccurrences(of: "ı", with: "i").folding(options: .diacriticInsensitive, locale: nil) }
         var compact = key.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
         if compact.hasSuffix("field"), compact.count > 5, case let inner = words(key).joined(), inner.count < compact.count { compact = inner }
         if let exact = hints[compact] { return exact }
@@ -149,11 +156,15 @@ public enum KeyHints {
     private static func relativesName(_ parts: [String]) -> String? {
         guard parts.count >= 2, parts.count <= 6, parts.contains(where: relatives.contains) else { return nil }
         let rest = parts.filter { !relatives.contains($0) && !linkingWords.contains($0) }
-        guard !rest.isEmpty, rest.count < parts.count, let field = hint(rest.joined(separator: "_")), ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(field) else { return nil }
-        return ["name", "nm", "nome", "nombre", "nom", "naam", "names", "nomes", "nombres"].contains(rest.joined()) ? "PERSON" : field
+        guard !rest.isEmpty, rest.count < parts.count else { return nil }
+        if bareNames.contains(rest.joined()) { return "PERSON" }
+        guard let field = hint(rest.joined(separator: "_")), ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(field) else { return nil }
+        return field
     }
+    /// A word for a name a relative's key closes with ("babaAdi", "imie_ojca"): their whole name.
+    private static let bareNames: Set<String> = ["name", "nm", "nome", "nombre", "nom", "naam", "names", "nomes", "nombres", "ad", "adi", "isim", "imie"]
     private static let relatives: Set<String> = ["mother", "mothers", "father", "fathers", "mom", "moms", "dad", "dads", "parent", "parents", "spouse", "spouses", "husband", "husbands", "wife", "wifes",
-                                                 "mae", "pai", "madre", "padre", "mere", "pere", "mutter", "vater", "moeder", "vader", "pita", "mata", "pati", "patni"]
+                                                 "mae", "pai", "madre", "padre", "mere", "pere", "mutter", "vater", "moeder", "vader", "pita", "mata", "pati", "patni", "anne", "baba", "matki", "ojca"]
     private static let linkingWords: Set<String> = ["of", "ka", "ki", "ke", "de", "do", "da", "del", "la", "du", "des", "der", "van", "von", "s"]
     /// A field named with a qualifier in front ("billing_email", "home_phone",
     /// "applicant_dob") hints like the field. Only fields that mean the same
@@ -242,7 +253,8 @@ public enum KeyHints {
         case "PERSON":
             if ["first", "given", "givennames", "forenames", "firstnames"].contains(compact) { return "first_name" }
             if ["middle", "middlenames", "middles"].contains(compact) { return "middle_name" }
-            if ["last", "family", "familynames", "lastnames", "surnames"].contains(compact) { return "last_name" }
+            // A name's parts include the surname someone was born with: "names": {"family": …, "maiden": …}.
+            if ["last", "family", "familynames", "lastnames", "surnames", "maiden", "birth", "birthname"].contains(compact) { return "last_name" }
             if ["full", "display", "formatted", "text"].contains(compact) { return "full_name" }
             if let part = shortNameParts[compact] { return part }
         case "PHONE_NUMBER" where ["number", "digits", "e164", "national", "nationalnumber", "international", "internationalnumber", "formatted", "raw", "full"].contains(compact): return parent
@@ -305,7 +317,8 @@ public enum KeyHints {
     static func namePartKey(_ key: String?) -> String? {
         pairedNameParts[words(key).filter { !["name", "nm", "nme", "n"].contains($0) }.joined()]
     }
-    private static let pairedNameParts: [String: String] = ["first": "first_name", "given": "first_name", "fn": "first_name", "fnm": "first_name", "gn": "first_name",
+    /// A Turkish record's "ad" and "adi" are a first name beside a surname ("soyad"), and no advert's.
+    private static let pairedNameParts: [String: String] = ["first": "first_name", "given": "first_name", "fn": "first_name", "fnm": "first_name", "gn": "first_name", "ad": "first_name", "adi": "first_name",
                                                             "middle": "middle_name", "mn": "middle_name",
                                                             "last": "last_name", "family": "last_name", "ln": "last_name", "lnm": "last_name", "sur": "last_name"]
     /// A word or two of a name, in any case: letters, an apostrophe or a hyphen, none of them an ordinary word or a weekday.
@@ -712,7 +725,7 @@ public enum KeyHints {
     private static let bareUnits: Set<String> = ["unit", "apt", "flat"]
     // "primary_number": a US address's house number, as address validation splits it.
     static let houseNumberKeys: Set<String> = ["housenumber", "housenum", "houseno", "primarynumber", "buildingnumber", "buildingno", "streetnumber", "streetnum", "streetno", "civicnumber", "premisenumber"]
-    static let streetNameKeys: Set<String> = ["streetname", "thoroughfare", "buildingname", "street", "housename"]
+    static let streetNameKeys: Set<String> = ["streetname", "thoroughfare", "buildingname", "street", "housename", "straat", "strasse", "calle", "ulica"]
     private static let unitKeys: Set<String> = ["unit", "apt", "apartment", "street2", "address2", "addr2", "line2", "addressline2", "streetline2", "aptsuite", "apartmentnumber", "aptnumber", "suitenumber", "unitnumber", "flatnumber", "addressline3", "line3", "flat", "flatno", "address3", "addr3", "street3"]
     private static let lineKeys: Set<String> = ["street2", "address2", "addr2", "line2", "addressline2", "streetline2", "addressline3", "line3", "address3", "addr3", "street3", "extendedaddress", "streetaddress2"]
     private static func compactKey(_ key: String?) -> String { (key ?? "").lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) } }

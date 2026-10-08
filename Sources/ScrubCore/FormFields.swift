@@ -208,7 +208,9 @@ enum FormFields {
         case "ADDRESS", "LOCATION":
             // Only a label that is the field's name whole ("Street Address", "City"): "ipv4_address" holds no street.
             guard KeyHints.words(key).count == KeyHints.words(label.folding(options: .diacriticInsensitive, locale: nil)).count else { return [] }
-            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            // The place ends with its sentence or its cell: "Adresse: Waldweg 6a, 80321 München. Handy: …" holds no phone.
+            let clause = TextRanges.matches(placeEnd, in: text).first.map { (text as NSString).substring(to: $0.range.location + $0.range(at: 1).length) } ?? text
+            let trimmed = clause.trimmingCharacters(in: .whitespaces)
             guard trimmed.utf16.count <= 100, trimmed.first.map({ $0.isUppercase || $0.isNumber }) == true, KeyHints.fits(key, trimmed),
                   entity == "ADDRESS" || trimmed.split(separator: " ").count <= 5 else { return [] }
             let start = range.lowerBound + (text.utf16.count - text.drop(while: { $0 == " " || $0 == "\t" }).utf16.count)
@@ -218,6 +220,8 @@ enum FormFields {
         }
     }
 
+    /// A sentence's end after a word, not an abbreviation's dot ("Cad.", "Str."), or a cell's or a clause's mark.
+    private static let placeEnd = TextPattern(#"(\p{L}{5,})\.(?=[ \t]+\S)|[ \t]+\|[ \t]|;[ \t]"#)
     private static func substring(_ ns: NSString, _ range: Range<Int>) -> String { ns.substring(with: NSRange(location: range.lowerBound, length: range.count)) }
     private static let tokenEnd = CharacterSet(charactersIn: ".,;:)]}\"'`*")
 

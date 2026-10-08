@@ -440,17 +440,25 @@ final class People {
         let words = value.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
         var result: [(name: String, joiner: String)] = []
         var current: [String] = []
-        for word in words {
-            if ["&", "+", "and"].contains(word.lowercased()) {
+        var foreign = false
+        for (index, word) in words.enumerated() {
+            // "Inês Moura e Rui Tavares", "Ana Ruiz y Luis Gil": another language's "and" joins two names of two
+            // words or more, so "Ortega y Gasset" and "Silva e Souza" stay one surname.
+            let joins = ["&", "+", "and"].contains(word.lowercased())
+                || otherAnds.contains(word) && current.count >= 2 && index + 2 < words.count && words[index + 1].first?.isUppercase == true
+            if joins {
                 guard !current.isEmpty else { return nil }
+                foreign = foreign || otherAnds.contains(word)
                 result.append((current.joined(separator: " "), " " + word + " "))
                 current = []
             } else { current.append(word) }
         }
-        guard !result.isEmpty, !current.isEmpty else { return nil }
+        guard !result.isEmpty, !current.isEmpty, !foreign || current.count >= 2 else { return nil }
         result.append((current.joined(separator: " "), ""))
         return result.allSatisfy({ $0.name.contains(where: \.isLetter) && $0.name.split(separator: " ").count <= 4 }) ? result : nil
     }
+    /// "And" in the languages a joint account's holders are written in.
+    private static let otherAnds: Set<String> = ["e", "y", "et", "und", "en", "i", "och", "og", "ve", "u"]
     /// Each name of a joint value in full, a first name alone taking the surname after it
     /// ("AISHA & CHIDI OKAFOR"), with what joins it to the next and whether it was alone.
     private static func jointNames(_ value: String) -> [(name: String, joiner: String, alone: Bool)]? {

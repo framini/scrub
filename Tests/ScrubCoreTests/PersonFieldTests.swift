@@ -254,3 +254,74 @@ struct XMLNamePartTests {
         #expect(String(decoding: result.output, as: UTF8.self).contains("<first>Monday</first><last>Friday</last>"))
     }
 }
+
+/// A record keyed in another language is read as one keyed in English: a Turkish
+/// applicant's given name, surname, parents' names, birth date, birthplace and
+/// address, and a birth date under its key in the languages forms are filled in.
+struct OtherLanguageRecordTests {
+    @Test func aTurkishApplicantsRecordIsReplacedWhole() throws {
+        let json = #"""
+        {
+          "basvuruNo": "BSV-2026-004417",
+          "durum": "ONAYLANDI",
+          "musteri": {
+            "ad": "Elif",
+            "soyad": "Karagöz",
+            "dogumTarihi": "14.09.1991",
+            "dogumYeri": "Eskişehir",
+            "babaAdi": "Tarık",
+            "anneAdi": "Nurhan",
+            "telefon": "+90 555 010 47 21",
+            "eposta": "elif.karagoz@example.com",
+            "adres": "Çınar Sok. No:18 D:3, Moda, Kadıköy/İstanbul"
+          },
+          "kanal": "MOBIL"
+        }
+        """#
+        for seed in UInt64(0)..<4 {
+            let result = try Scrubber.scrub(Data(json.utf8), name: "basvuru.json", forceFullDetection: false, seed: seed)
+            let text = String(decoding: result.output, as: UTF8.self)
+            let object = try #require(try JSONSerialization.jsonObject(with: result.output) as? [String: Any], "seed \(seed): no longer parses")
+            let record = try #require(object["musteri"] as? [String: String])
+            for gone in ["Elif", "Karagöz", "14.09.1991", "Eskişehir", "Tarık", "Nurhan", "Çınar", "Moda", "elif.karagoz"] {
+                #expect(!text.contains(gone), "seed \(seed): \(gone) left in \(text)")
+            }
+            let date = try #require(record["dogumTarihi"])
+            #expect(date.range(of: #"^\d{2}\.\d{2}\.\d{4}$"#, options: .regularExpression) != nil, "seed \(seed): \(date)")
+            #expect(object["durum"] as? String == "ONAYLANDI" && object["kanal"] as? String == "MOBIL" && object["basvuruNo"] as? String == "BSV-2026-004417")
+            // Replaced outright, not left for a person's look.
+            for finding in result.findings where ["Karagöz", "14.09.1991", "Tarık"].contains(finding.original) {
+                #expect(!finding.suspected && !finding.needsReview, "seed \(seed): \(finding.original) only offered for review")
+            }
+        }
+    }
+
+    @Test(arguments: [
+        ("dossier.json", #"{"dossier": "OUV-2026-1182", "titulaire": {"prenom": "Maëlle", "nom": "Quintard", "date_naissance": "1987-11-23"}}"#, "1987-11-23"),
+        ("pratica.json", #"{"pratica": "PRA-2026-3310", "cliente": {"nome": "Ottavia", "cognome": "Brenzi", "data_nascita": "23/11/1987"}}"#, "23/11/1987"),
+        ("solicitud.json", #"{"solicitud": "SOL-2026-7720", "titular": {"nombre_completo": "Remedios Alcaraz Pons", "fecha_nac": "23/11/1987"}}"#, "23/11/1987"),
+        ("basvuru.json", #"{"basvuru": "BSV-2026-5512", "kisi": {"adSoyad": "Elif Karagöz", "dogum_tarihi": "23.11.1987"}}"#, "23.11.1987"),
+        ("wniosek.json", #"{"wniosek": "WN-2026-0915", "osoba": {"imie": "Zofia", "nazwisko": "Wróblewska", "data_urodzenia": "1987-11-23"}}"#, "1987-11-23"),
+    ])
+    func aBirthDateUnderItsKeyInAnotherLanguageIsReplaced(_ name: String, _ json: String, _ date: String) throws {
+        let result = try Scrubber.scrub(Data(json.utf8), name: name, forceFullDetection: false, seed: 5)
+        let text = String(decoding: result.output, as: UTF8.self)
+        #expect(!text.contains(date), "\(name): \(text)")
+        let finding = try #require(result.findings.first { $0.original == date }, "\(name): \(result.findings.map(\.original))")
+        #expect(finding.entity == "DATE_OF_BIRTH" && !finding.suspected && !finding.needsReview, "\(name): \(finding.entity)")
+        #expect(finding.standIn.count == date.count && finding.standIn.filter(\.isNumber).count == date.filter(\.isNumber).count, "\(name): \(finding.standIn)")
+    }
+
+    /// The surname someone was born with, among their name's parts, is theirs as their family name is.
+    @Test func aMaidenNameAmongANamesPartsIsReplaced() throws {
+        let json = #"{"parties": [{"role": "applicant", "names": {"given": "Halina", "family": "Wierzbowska", "maiden": "Grabarczyk"}, "born": "1984-02-19"}, {"role": "spouse", "names": {"given": "Ove", "family": "Lindhagen"}}]}"#
+        for seed in UInt64(0)..<4 {
+            let result = try Scrubber.scrub(Data(json.utf8), name: "parties.json", forceFullDetection: false, seed: seed)
+            let text = String(decoding: result.output, as: UTF8.self)
+            for gone in ["Halina", "Wierzbowska", "Grabarczyk", "Lindhagen"] { #expect(!text.contains(gone), "seed \(seed): \(gone) left in \(text)") }
+            let parties = try #require((try JSONSerialization.jsonObject(with: result.output) as? [String: Any])?["parties"] as? [[String: Any]])
+            let maiden = try #require((parties[0]["names"] as? [String: String])?["maiden"])
+            #expect(PersonFields.looksLikeName("Ann " + maiden), "seed \(seed): \(maiden)")
+        }
+    }
+}
