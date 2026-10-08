@@ -9,7 +9,9 @@ public enum CSVFile: FileFormat {
         var text = try TextFile.decode(data)
         let (delimiter, quoteCharacter) = sniffFormat(text)
         let newline = text.contains("\r\n") ? "\r\n" : text.contains("\r") ? "\r" : "\n"
-        var rows = try parse(text, delimiter: delimiter, quoteCharacter: quoteCharacter)
+        // The cells written in quotes, by row and column, which stay quoted as written.
+        var quotedCells: Set<Int> = []
+        var rows = try parse(text, delimiter: delimiter, quoteCharacter: quoteCharacter) { row, column in quotedCells.insert(row << 20 | column) }
         text = ""
         guard !rows.isEmpty else { throw ScrubError.unsupported("empty_file") }
         let width = rows.map(\.count).max() ?? 0
@@ -194,17 +196,17 @@ public enum CSVFile: FileFormat {
             }
             var output = Data()
             output.reserveCapacity(data.count + data.count / 4)
-            func append(_ row: [String]) {
+            func append(_ row: [String], at line: Int) {
                 for column in row.indices {
                     if column > 0 { output.append(contentsOf: String(delimiter).utf8) }
-                    output.append(contentsOf: quote(row[column], delimiter: delimiter, quoteCharacter: quoteCharacter).utf8)
+                    output.append(contentsOf: quote(row[column], delimiter: delimiter, quoteCharacter: quoteCharacter, always: quotedCells.contains(line << 20 | column)).utf8)
                 }
                 output.append(contentsOf: newline.utf8)
             }
-            if hasHeader { append(columns) }
+            if hasHeader { append(columns, at: 0) }
             for (index, row) in rows.enumerated() {
                 if index.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
-                append(row)
+                append(row, at: index + (hasHeader ? 1 : 0))
             }
             return ScrubResult(format: "csv", output: output, preview: .table(columns: previewColumns, rows: Array(rows.prefix(previewRows)), rowCount: rows.count, marks: marks), counts: counts, unresolved: unresolved, neutralized: neutralized)
         }
@@ -241,7 +243,7 @@ public enum CSVFile: FileFormat {
         }
         return best
     }
-    static func parse(_ text: String, delimiter: Character, quoteCharacter: Character = "\"", incompleteFinalRecord: Bool = false, onQuotedField: (() -> Void)? = nil) throws -> [[String]] {
+    static func parse(_ text: String, delimiter: Character, quoteCharacter: Character = "\"", incompleteFinalRecord: Bool = false, onQuotedField: ((_ row: Int, _ column: Int) -> Void)? = nil) throws -> [[String]] {
         var rows: [[String]] = []
         var row: [String] = []
         var field = ""
@@ -258,7 +260,7 @@ public enum CSVFile: FileFormat {
                     if index + 1 < chars.count && chars[index + 1] == quote { field.unicodeScalars.append(char); index += 1 }
                     else { quoted = false }
                 } else { field.unicodeScalars.append(char) }
-            } else if char == quote && field.isEmpty { quoted = true; onQuotedField?() }
+            } else if char == quote && field.isEmpty { quoted = true; onQuotedField?(rows.count, row.count) }
             else if char == separator { row.append(field); field = "" }
             else if char == "\n" || char == "\r" {
                 row.append(field); field = ""
@@ -301,8 +303,9 @@ public enum CSVFile: FileFormat {
         }
         return nil
     }
-    private static func quote(_ cell: String, delimiter: Character, quoteCharacter: Character) -> String {
-        guard cell.contains(delimiter) || cell.contains(quoteCharacter) || cell.contains("\r") || cell.contains("\n") else { return cell }
+    /// `always`: the cell was written in quotes it didn't need, and keeps them.
+    private static func quote(_ cell: String, delimiter: Character, quoteCharacter: Character, always: Bool = false) -> String {
+        guard always || cell.contains(delimiter) || cell.contains(quoteCharacter) || cell.contains("\r") || cell.contains("\n") else { return cell }
         let quote = String(quoteCharacter)
         return quote + cell.replacingOccurrences(of: quote, with: quote + quote) + quote
     }

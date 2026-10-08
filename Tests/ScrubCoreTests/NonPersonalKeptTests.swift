@@ -384,4 +384,24 @@ struct NonPersonalKeptTests {
             for gone in ["Bohdan", "Kovalchyk", "1971-11-02"] { #expect(!output.contains(gone), "\(gone): \(output)") }
         }
     }
+
+    @Test func aCSVsQuotedCellsKeepTheirQuotes() throws {
+        // A note written in quotes it didn't need lost them, though only its name changed; cells naming no one lost theirs too.
+        let cases = """
+        case_id,customer,notes,status,amount
+        C-1002,Bohdan Kovalchyk,"Bohdan's brother called",open,75.00
+        C-1003,"Ilse Marrow","Awaiting documents","pending review",120.50
+        "C-1004",Ilse Marrow,"Called back, no answer",closed,0.00
+
+        """
+        for seed in UInt64(0)..<3 {
+            let output = try Self.scrub(cases, name: "cases.csv", seed: seed)
+            let lines = output.components(separatedBy: "\n")
+            #expect(lines.count == 5 && lines[0] == "case_id,customer,notes,status,amount", "\(output)")
+            #expect(lines[1].hasPrefix("C-1002,") && lines[1].hasSuffix("'s brother called\",open,75.00") && lines[1].contains(",\""), "\(output)")
+            #expect(lines[2].hasPrefix("C-1003,\"") && lines[2].hasSuffix("\",\"Awaiting documents\",\"pending review\",120.50"), "\(output)")
+            #expect(lines[3].hasPrefix("\"C-1004\",") && lines[3].hasSuffix(",\"Called back, no answer\",closed,0.00"), "\(output)")
+            for gone in ["Bohdan", "Kovalchyk", "Marrow"] { #expect(!output.contains(gone), "\(gone): \(output)") }
+        }
+    }
 }
