@@ -797,6 +797,11 @@ final class StandIns {
             // "624, chemin des Chênes": a house number on its own, a street named as another language does.
             else if piece.allSatisfy(\.isNumber) { written = addressNumbered(piece) }
             else if AddressBlock.isStreet(piece), !piece.first!.isNumber { written = foreignStreet(like: piece, country: parts.country.flatMap(AddressBlock.countryName) ?? Places.country(city: parts.city, region: parts.region, postal: parts.postal, country: nil)) }
+            // "77b AVENUE DU PARC": a street named kind first, after its number, is named as the same street in a field of its own is.
+            else if let number = piece.range(of: #"^\d{1,5}[A-Za-z]?[ \t]+"#, options: .regularExpression), Self.kindFirst(String(piece[number.upperBound...])) {
+                let digits = piece[number].trimmingCharacters(in: .whitespaces)
+                written = addressNumbered(digits) + piece[number].dropFirst(digits.count) + foreignStreet(like: String(piece[number.upperBound...]), country: place.country)
+            }
             // "384 rue Saint-Denis" in Montréal: named as the same street in a field of its own is.
             else if Self.french(piece), !AddressBlock.isUnit(piece) { written = foreignStreet(like: piece, country: place.country) }
             else { written = unit(piece) ?? (AddressBlock.isUnit(piece) ? renumbered(piece) : street(like: piece)) }
@@ -844,6 +849,12 @@ final class StandIns {
     /// A street named the French way, its kind in small letters before its name: "4520 rue Saint-Denis", "avenue du Parc".
     static func french(_ street: String) -> Bool {
         street.split(separator: " ").contains { ["rue", "avenue", "boulevard", "chemin", "allée", "impasse", "montée", "côte", "rang", "place", "quai"].contains(String($0)) }
+    }
+    /// A street written kind first ("AVENUE DU PARC", "Calle Mayor"), not an English one ending in its kind ("Avenue Road").
+    static func kindFirst(_ street: String) -> Bool {
+        let words = street.lowercased().split(separator: " ").map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".,")) }
+        guard words.count >= 2, let first = words.first, let last = words.last else { return false }
+        return AddressBlock.streetKinds.contains(first) && !AddressBlock.englishKinds.contains(last) && !words.contains(where: { $0.contains(where: \.isNumber) })
     }
     private static func english(_ country: String?) -> Bool { country.map { ["US", "CA", "GB", "AU", "NZ", "IE", "ZA", "IN", "SG"].contains($0) } ?? true }
 

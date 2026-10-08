@@ -281,4 +281,18 @@ struct ConsistencyTests {
             }
         }
     }
+
+    /// A street a Quebec record names kind first, in its own field and again in the one-line address
+    /// after its number, is one street: the line names it as the field does.
+    @Test func aStreetNamedKindFirstIsOneStreetInItsFieldAndItsLine() throws {
+        for seed: UInt64 in 0..<6 {
+            let text = #"{"previousAddresses": [{"street": "AVENUE DES CORMIERS", "streetNumber": "214b", "address2": "APP. 12", "city": "MONTRÉAL", "state": "QC", "zipCode": "H2V 1K8", "country": "CAN", "fullAddress": "214b AVENUE DES CORMIERS, MONTRÉAL, QC H2V 1K8"}]}"#
+            let result = try Scrubber.scrub(Data(text.utf8), name: "check.json", forceFullDetection: false, seed: seed)
+            let output = String(decoding: result.output, as: UTF8.self)
+            #expect(!output.contains("CORMIERS"), "[seed \(seed)] \(output)")
+            let street = try #require(output.firstMatch(of: /"street": "([^"]+)"/), "\(output)")
+            let number = try #require(output.firstMatch(of: /"streetNumber": "([^"]+)"/), "\(output)")
+            #expect(output.contains(#""fullAddress": "\#(number.1) \#(street.1), "#), "[seed \(seed)] \(output)")
+        }
+    }
 }
