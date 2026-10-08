@@ -454,3 +454,19 @@ func germanCardNumberWithXsKeepsItsCheck(_ name: String) throws {
         }
     }
 }
+
+/// A bare "name" beside a street address is the person living there even when
+/// one of its words is a rare dictionary entry the name lists don't hold ("Ilka
+/// Sztojka"), in JSON as in plain text, the street first or the number first;
+/// a business's name beside one stays as written.
+@Test(arguments: renderings)
+func aRareWordNameBesideAnAddressIsReplaced(_ name: String) throws {
+    for address in ["Hegedűs Gyula utca 76, 1136 Budapest", "76 Hegedűs Gyula utca, 1136 Budapest"] {
+        let response = #"{"ref":"rec_5Rk2Wq","name":"Ilka Sztojka","address":"\#(address)","status":"REVIEW"}"#
+        let output = try scrub(response, as: name)
+        #expect(!output.contains("Sztojka") && !output.contains("Ilka"), "\(output)")
+        #expect(try scrub(#"{"name":"Halcyon Bakery","address":"\#(address)"}"#, as: name).contains("Halcyon Bakery"))
+    }
+    let pasted = String(decoding: try Scrubber.scrub(Data("Name: Ilka Sztojka\nAddress: Hegedűs Gyula utca 76, 1136 Budapest\n".utf8), name: "Pasted text", forceFullDetection: false, seed: 5).output, as: UTF8.self)
+    #expect(!pasted.contains("Sztojka"), "\(pasted)")
+}

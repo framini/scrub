@@ -646,8 +646,14 @@ public enum KeyHints {
     }
     /// Whether a bare "name" beside a street address is the person living there: written as
     /// a person's name, none of its words an ordinary one ("Anđa Tomić", not "Riverside Clinic").
+    /// A name the lists don't hold may have a rare dictionary word in it ("Ilka Sztojka"): it is
+    /// still the addressee when no word of it is ordinary nor a business's (see `Detector.readsAsAddressee`).
     private static func housed(_ value: String, siblings: [String], parent: String?) -> Bool {
-        siblings.contains { !isBareName($0) && hint($0) == "ADDRESS" } && writtenAsName(value, parent: parent) && onlyNames(value)
+        guard siblings.contains(where: { !isBareName($0) && hint($0) == "ADDRESS" }), !isNotPeople(parent) else { return false }
+        if writtenAsName(value, parent: parent) && onlyNames(value) { return true }
+        let trimmed = value.trimmingCharacters(in: .whitespaces), words = trimmed.split(separator: " ").map(String.init)
+        return (2...4).contains(words.count) && Detector.writtenName(trimmed) == 0..<(trimmed as NSString).length
+            && !words.contains { NameLists.isOrdinary($0) || NameLists.isWordlike($0) } && Detector.readsAsAddressee(words)
     }
     /// `bareNameIsPerson` under no parent, with `isPersonsRecord` of its
     /// siblings read once for every value beside them.
