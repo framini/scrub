@@ -269,6 +269,8 @@ public enum KeyHints {
         // A birth's record holds its date: "birth": [{"date": {"year": …}}].
         // "Date" in a record's other languages: "naissance": {"date": …}, "dogum": {"tarih": …}, "ngay_sinh": {"ngay": …}.
         case "DATE_OF_BIRTH" where ["date", "fulldate", "dates", "data", "fecha", "datum", "tarih", "ngay", "dato", "datadinascita"].contains(compact): return parent
+        // Its place is a birthplace, in any language: "naissance": {"lieu": …}, "birth": {"place": …}, "nacimiento": {"lugar": …}.
+        case "DATE_OF_BIRTH" where birthPlaceParts.contains(compact): return "birthplace"
         // A card's expiry in parts: "expiration": {"month": 1, "year": 28}.
         case "EXPIRY_DATE" where ["month", "mm"].contains(compact): return "expiry_month"
         case "EXPIRY_DATE" where ["year", "yy", "yyyy"].contains(compact): return "expiry_year"
@@ -280,6 +282,10 @@ public enum KeyHints {
         return own == nil && valueKeys.contains(compact) ? parent : key
     }
     private static let valueKeys: Set<String> = ["value", "data"]
+    /// A place's word as a birth's record keys it (see `resolve`).
+    private static let birthPlaceParts: Set<String> = ["place", "city", "town", "country", "location", "municipality", "state", "province", "region",
+                                                       "lieu", "ville", "commune", "pays", "lugar", "ciudad", "municipio", "provincia", "pais", "local", "cidade", "estado", "uf",
+                                                       "luogo", "citta", "comune", "paese", "ort", "stadt", "land", "plaats", "gemeente", "yer", "il", "ilce", "sehir", "noi", "miejsce", "miejscowosc", "misto"]
     /// A name's parts by their letters, as a short-keyed payload writes them under the name.
     private static let shortNameParts: [String: String] = ["f": "first_name", "fn": "first_name", "g": "first_name", "m": "middle_name", "mn": "middle_name", "mi": "middle_name",
                                                            "l": "last_name", "ln": "last_name", "s": "last_name", "sn": "last_name"]

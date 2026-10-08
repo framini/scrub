@@ -190,4 +190,21 @@ struct ContactBesideAddressTests {
         let range: Range<Int>? = numbered.first { $0.entity == "ADDRESS" }?.range
         #expect(range == whole.location..<NSMaxRange(whole))
     }
+
+    /// An address ends at its postcode's city, before the full stop and the sentence after it, in any language.
+    @Test(arguments: [UInt64(2), 9])
+    func anAddressEndsAtItsCityBeforeTheNextSentence(_ seed: UInt64) throws {
+        let notes: [(String, String)] = [
+            ("Bitte schicken Sie die Unterlagen an Hildegard Brenner, Lindenallee 14, 50674 Köln. Der Vogel im Garten singt jeden Morgen.", " Der Vogel im Garten singt jeden Morgen."),
+            ("Er wohnt seit Mai in der Rosenstraße 3, 80331 München. Morgen fahre ich nach Hause.", " Morgen fahre ich nach Hause."),
+            ("Elle habite 12 rue des Lilas, 75011 Paris. La semaine prochaine elle part en vacances.", " La semaine prochaine elle part en vacances."),
+        ]
+        for (note, sentence) in notes {
+            let result = try Scrubber.scrub(Data(note.utf8), name: "note.txt", forceFullDetection: false, seed: seed)
+            let output = String(decoding: result.output, as: UTF8.self)
+            #expect(output.hasSuffix(sentence), "\(output)")
+            for part in ["Lindenallee 14", "Rosenstraße 3", "12 rue des Lilas", "50674", "80331", "75011"] where note.contains(part) { #expect(!output.contains(part), "\(part): \(output)") }
+            #expect(!result.findings.contains { $0.entity == "ADDRESS" && $0.original.contains(". ") }, "\(result.findings.map { "\($0.entity) \($0.original)" })")
+        }
+    }
 }

@@ -370,6 +370,14 @@ final class AddressModel: Sendable {
         func text(_ index: Int) -> String { String(String.UnicodeScalarView(tokens[index].scalars)) }
         func lowercaseWord(_ index: Int) -> Bool { tokens[index].isWord && tokens[index].scalars.allSatisfy { isLetter($0) || $0 == "'" || $0 == "’" } && tokens[index].scalars.first?.properties.isLowercase == true }
         func marked(_ index: Int) -> Bool { tokens[index].scalars.contains(where: isDigit) || tokens[index].scalars.first?.properties.isUppercase == true }
+        // A postcode's city ends the address before a full stop and the sentence after it ("…, 50674 Köln. Der Vogel …").
+        if let stop = (first...last).first(where: { index in
+            guard text(index) == ".", index + 1 <= last, index - 2 > first, tokens[index + 1].range.lowerBound > tokens[index].range.upperBound,
+                  tokens[index + 1].scalars.first?.properties.isUppercase == true else { return false }
+            var city = index - 1
+            while city > first, tokens[city].isWord, tokens[city].scalars.first?.properties.isUppercase == true, !tokens[city].scalars.contains(where: isDigit), index - city <= 3 { city -= 1 }
+            return city < index - 1 && city > first && (4...5).contains(tokens[city].scalars.count) && tokens[city].scalars.allSatisfy(isDigit)
+        }) { last = stop - 1 }
         // The last piece: what follows the last comma or line break.
         var pieceStart = ((first...last).last { [",", "\n", ";"].contains(text($0)) }).map { $0 + 1 } ?? first
         // In a written address, a last piece of lowercase words alone is the sentence going on

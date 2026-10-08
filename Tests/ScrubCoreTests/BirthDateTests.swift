@@ -144,3 +144,21 @@ func birthDatesUnderOtherLanguagesKeysAreReplaced(_ format: String) throws {
         }
     }
 }
+
+/// A place in a birth's own object is a birthplace, whatever language keys it ("naissance": {"lieu": …},
+/// "nacimiento": {"lugar": …}, "birth": {"place": …}): replaced, with the birth date beside it.
+@Test func aPlaceInABirthObjectIsABirthplace() throws {
+    let bodies = [
+        (#"{"personne":{"nom":"Dufrasne","prenom":"Agathe","naissance":{"date":"1984-06-12","lieu":"Namur"}}}"#, "Namur"),
+        (#"{"solicitante":{"nombre":"Inés Garrido","nacimiento":{"fecha":"1991-02-27","lugar":"Salamanca"}}}"#, "Salamanca"),
+        (#"{"applicant":{"name":"Corwin Ashby","birth":{"date":"1977-10-05","place":"Bristol"}}}"#, "Bristol"),
+        (#"{"cliente":{"nome":"Davi Moura","nascimento":{"data":"2001-09-14","cidade":"Recife"}}}"#, "Recife"),
+    ]
+    for (body, place) in bodies {
+        let result = try Scrubber.scrub(Data(body.utf8), name: "record.json", forceFullDetection: false, seed: 8)
+        let output = String(decoding: result.output, as: UTF8.self)
+        #expect(!output.contains(place), "\(place) left: \(output)")
+        #expect(result.findings.first { $0.original == place }.map { $0.entity != "DATE_OF_BIRTH" && !$0.needsReview } == true, "\(place): \(result.findings.map { "\($0.entity) \($0.original) \($0.needsReview)" })")
+        #expect(try JSONSerialization.jsonObject(with: result.output) is [String: Any])
+    }
+}

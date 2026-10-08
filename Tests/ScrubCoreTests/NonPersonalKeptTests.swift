@@ -641,6 +641,25 @@ struct NonPersonalKeptTests {
         }
     }
 
+    /// A load balancer's log keeps every line's status and sizes when another line of it has something replaced,
+    /// and a failed request's "-1 -1 -1" timings are no phone number running into its status and sizes.
+    @Test func aWholeLoadBalancerLogKeepsItsStatusesAndSizes() throws {
+        let log = """
+        https 2026-10-09T10:00:01.123456Z app/web-lb/4e5f6a7b 203.0.113.10:51432 10.0.1.5:8080 0.000 0.001 0.000 200 200 34 3661 "GET https://www.example.com:443/api/items HTTP/1.1" "Mozilla/5.0" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2
+        https 2026-10-09T10:00:02.223456Z app/web-lb/4e5f6a7b 203.0.113.11:51433 - -1 -1 -1 502 - 34 3661 "GET https://www.example.com:443/api/items HTTP/1.1" "Mozilla/5.0" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2
+        h2 2026-10-09T10:00:03.323456Z app/web-lb/4e5f6a7b 203.0.113.12:51434 10.0.1.6:8080 0.000 0.002 0.000 404 404 34 512 "GET https://www.example.com:443/accounts?email=ilse.varga@example.com HTTP/2.0" "curl/8.0" - -
+        """
+        for seed: UInt64 in [3, 6] {
+            for name in ["web-lb.log", "Pasted text"] {
+                let output = try Self.scrub(log, name: name, seed: seed)
+                for kept in ["0.000 0.001 0.000 200 200 34 3661 \"", "- -1 -1 -1 502 - 34 3661 \"", "0.000 0.002 0.000 404 404 34 512 \""] {
+                    #expect(output.contains(kept), "[\(name) seed \(seed)] \(kept): \(output)")
+                }
+                #expect(!output.contains("ilse.varga"), "[\(name) seed \(seed)] \(output)")
+            }
+        }
+    }
+
     /// Replacing a value never takes the text around it: the quote that opens a logged email
     /// ("email='…'") and the field after a bar on its line ("Email: … | Mobile: …") stay, and the number there is replaced on its own.
     @Test func textAroundAReplacedValueStays() throws {

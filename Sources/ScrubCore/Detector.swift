@@ -86,7 +86,8 @@ public final class Detector {
                 return Span(range: span.range.lowerBound..<end, entity: span.entity, score: span.score)
             }
             var kept = HomeFolders.over(Standards.outside(Links.outside(cut, in: text, links: foundLinks), in: text), in: text)
-            kept.removeAll { Self.machineAccount($0, in: ns) }
+            // An access log's status and sizes, also in a sweep over a whole log that something else on it was replaced in.
+            kept.removeAll { Self.machineAccount($0, in: ns) || Self.served($0, in: text) }
             if !doubts.isEmpty { doubts = Self.doubted(doubts, besides: kept, in: text, links: foundLinks) }
             if !doubts.isEmpty { (kept, doubts) = Self.joined(doubts, onto: kept, in: text) }
             // A person written in pieces is one person (see `JoinedNames`).
@@ -209,10 +210,13 @@ public final class Detector {
         guard ["PHONE_NUMBER", "ID_NUMBER", "US_SSN"].contains(span.entity), span.range.lowerBound > 0, span.range.count <= 40 else { return false }
         let ns = text as NSString
         let value = ns.substring(with: NSRange(location: span.range.lowerBound, length: span.range.count))
-        guard value.range(of: #"^\d+(?:[ \t]+\d+){0,3}$"#, options: .regularExpression) != nil else { return false }
+        guard value.range(of: #"^\d+(?:[ \t]+(?:\d+|-)){0,4}$"#, options: .regularExpression) != nil else { return false }
         let start = max(0, span.range.lowerBound - 160)
-        return ns.substring(with: NSRange(location: start, length: span.range.lowerBound - start)).range(of: servedLead, options: .regularExpression) != nil
+        if ns.substring(with: NSRange(location: start, length: span.range.lowerBound - start)).range(of: servedLead, options: .regularExpression) != nil { return true }
+        // One that starts inside the timings: a failed request's "-1 -1 -1 502 - 34 3661".
+        return ns.substring(with: NSRange(location: start, length: span.range.upperBound - start)).range(of: servedRun, options: .regularExpression) != nil
     }
+    private static let servedRun = #"(?<![\w.])(?:(?:-?\d+\.\d{3,}|-1)[ \t]+){2}(?:-?\d+\.\d{3,}|-1)(?:[ \t]+(?:\d+|-))+$"#
     private static let contactKinds: Set<String> = ["EMAIL_ADDRESS", "PHONE_NUMBER", "URL"]
     /// An address read on into the phone number, the email or the link beside it ("…, 44000 Nantes.
     /// Tél. 02 40 55 01 27 — h.g@example.fr") ends before them and their label, and one read from inside
