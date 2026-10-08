@@ -515,3 +515,24 @@ func jsonMeasurementsAreNoIdentifiers(_ key: String) throws {
     #expect(output.contains("-9223372036854775809") && !output.contains("4111111111111111") && !output.contains("-12345"), "\(output)")
     _ = try JSONSource.read(output)
 }
+
+/// A bank-account check's response that saved the IBAN as its form lowercased it: replaced as one in
+/// capitals is, its stand-in in small letters and checksum-valid, the same in the note that spaces it out.
+@Test func lowercaseIBANInAResponseIsReplaced() throws {
+    let json = """
+    {
+      "account": {"holder": "Maren Oakhurst", "iban": "gb33bukb20201555555555", "currency": "GBP", "status": "verified"},
+      "note": "customer confirmed gb33 bukb 2020 1555 5555 55 by phone",
+      "checkedAt": "2026-04-11T08:15:00Z"
+    }
+    """
+    let result = try Scrubber.scrub(Data(json.utf8), name: "account-check.json")
+    let output = try #require(String(data: result.output, encoding: .utf8))
+    let object = try #require(try JSONSerialization.jsonObject(with: result.output) as? [String: Any])
+    let iban = try #require((object["account"] as? [String: Any])?["iban"] as? String)
+    #expect(iban != "gb33bukb20201555555555" && iban == iban.lowercased() && Patterns.iban(iban) && iban.count == 22, "\(iban)")
+    #expect(!output.contains("1555555555") && !output.contains("1555 5555 55"), "\(output)")
+    let spaced = stride(from: 0, to: iban.count, by: 4).map { String(iban.dropFirst($0).prefix(4)) }.joined(separator: " ")
+    #expect((object["note"] as? String) == "customer confirmed \(spaced) by phone", "\(output)")
+    #expect(output.contains(#""currency": "GBP", "status": "verified"},"#) && output.contains("2026-04-11T08:15:00Z"))
+}

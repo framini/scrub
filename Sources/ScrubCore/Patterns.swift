@@ -8,14 +8,14 @@ enum Patterns {
         // Written into a link's query, its "@" escaped ("jo.pratt%40example.org").
         ("EMAIL_ADDRESS", #"(?<![\w.%+-])[a-zA-Z0-9][a-zA-Z0-9._+-]*%40[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}\b"#, 1, [], []),
         ("CREDIT_CARD", #"(?<![\w-])(?:\d[ -]?){12,18}\d(?![\w-])"#, 0.6, ["card", "credit", "visa", "mastercard", "payment"], []),
-        ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2} ?\d{2}(?:[ -]?[A-Z0-9]{4}){2,6}(?:[ -]?[A-Z0-9]{4})?(?:[ -]?[A-Z0-9]{1,3})?(?![A-Z0-9])"#, 0.6, ["iban", "bank", "account"], []),
+        ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2} ?\d{2}(?:[ -]?[A-Z0-9]{4}){2,6}(?:[ -]?[A-Z0-9]{4})?(?:[ -]?[A-Z0-9]{1,3})?(?![A-Z0-9])"#, 0.6, ["iban", "bank", "account"], [.caseInsensitive]),
         // Its country set apart and its check digits opening the first group ("ME 2551 0000 0000 0623 4133").
-        ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2}(?: [A-Z0-9]{4}){3,8}(?: [A-Z0-9]{1,3})?(?![A-Z0-9])"#, 0.6, ["iban", "bank", "account"], []),
+        ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2}(?: [A-Z0-9]{4}){3,8}(?: [A-Z0-9]{1,3})?(?![A-Z0-9])"#, 0.6, ["iban", "bank", "account"], [.caseInsensitive]),
         // In its bank's own grouping ("ES10 0075 0080 11 0600658108", "ES72 2013-0692-81-0201150993").
-        ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2}\d{2}(?:[ -][A-Z0-9]{1,10}){2,8}(?![A-Z0-9])"#, 0.6, ["iban", "bank", "account"], []),
+        ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2}\d{2}(?:[ -][A-Z0-9]{1,10}){2,8}(?![A-Z0-9])"#, 0.6, ["iban", "bank", "account"], [.caseInsensitive]),
         // Digits grouped however their writer grouped them, by spaces, dots or dashes, its country set apart
         // ("NO 19 4920 06 96270", "NO07.8380.08.06006", "MK072 5012 0000 0589 84", "TL 38 008 00123456789101 57").
-        ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2} ?\d{2,30}(?: ?[ .-] ?\d{1,30}){1,9}(?![A-Z0-9.-])"#, 0.6, ["iban", "bank", "account"], []),
+        ("IBAN_CODE", #"(?<![A-Z0-9])[A-Z]{2} ?\d{2,30}(?: ?[ .-] ?\d{1,30}){1,9}(?![A-Z0-9.-])"#, 0.6, ["iban", "bank", "account"], [.caseInsensitive]),
         ("IP_ADDRESS", #"(?<![\w:.]|[A-Za-z]/)(?:[0-9A-Fa-f:]+:)?(?:\d{1,3}\.){3}\d{1,3}(?![\w:.])|(?<![\w:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f:]{0,4}(?![\w:])"#, 0.6, ["ip", "address"], []),
         // A client's address written into its host's name ("198-51-100-23.cust.example.net"), as reverse DNS writes it.
         ("IP_ADDRESS", #"(?<![\w.-])(?:\d{1,3}-){3}\d{1,3}(?=\.[A-Za-z][\w-]*\.[A-Za-z])"#, 0.85, [], []),
@@ -84,6 +84,9 @@ enum Patterns {
                 var range = match.range.location..<NSMaxRange(match.range)
                 if entity == "IBAN_CODE" {
                     guard let trimmed = longestIBAN(in: text, range: range) else { return }
+                    // Written in capitals or, as a form that lowercases its input saves it, all in small letters ("gb82west…").
+                    let letters = TextRanges.substring(text, trimmed).filter(\.isLetter)
+                    guard letters == letters.uppercased() || letters == letters.lowercased() else { return }
                     range = trimmed
                 }
                 if entity == "IP_ADDRESS", range.upperBound < length {
