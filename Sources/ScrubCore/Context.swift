@@ -52,13 +52,13 @@ public enum KeyHints {
         ("ssn socialsecuritynumber socialsecurity ssnnumber", "US_SSN"),
         ("address streetaddress street addressline1 addressline2 addressline line1 line2 addr address1 street1 addr1 streetline1 street2 address2 addr2 streetline2 addressline3 line3 address3 addr3 street3 extendedaddress streetaddress2 aptsuite apartmentnumber aptnumber suitenumber unitnumber flatnumber unit apt apartment housenumber housenum houseno primarynumber housename flat flatno buildingnumber buildingno streetnumber streetnum streetno civicnumber premisenumber streetname thoroughfare buildingname formattedaddress fulladdress physicaladdress mailingaddress homeaddress residentialaddress billingaddress shippingaddress addressupdates addresshistory", "ADDRESS"),
         // The same fields as forms in other languages label them, written without their accents.
-        ("geboortedatum geburtsdatum datedenaissance datenaissance fechadenacimiento fechanacimiento fechanac fechadenac datadinascita datanascita fodelsedatum datadenascimento datanascimento datanasc fodselsdato ngaysinh dogumtarihi dataurodzenia datumnarozeni datumnarodenia syntymaaika szuletesidatum tanggallahir tarikhlahir", "DATE_OF_BIRTH"),
+        ("geboortedatum geburtsdatum datedenaissance datenaissance fechadenacimiento fechanacimiento fechanac fechadenac datadinascita datanascita fodelsedatum datadenascimento datanascimento datanasc fodselsdato ngaysinh dogumtarihi dataurodzenia datumnarozeni datumnarodenia syntymaaika szuletesidatum tanggallahir tarikhlahir naissance datenaiss dtnaissance nascimento dtnascimento dtnasc nacimiento fnacimiento fecnac nascita gebdatum gebdat geboren geboorte fodd fodt narozeni urodzenia datanasterii datumrodenja datumrojstva synniaeg gimimodata dogum dogumgunu dogumyili namsinh sinhngay", "DATE_OF_BIRTH"),
         ("isim imie imiona voornaam voornamen fornamn fornavn etunimi prenume", "FIRST_NAME"),
         ("soyad soyadi soyisim soyismi kizliksoyadi nazwisko achternaam geslachtsnaam efternamn etternavn efternavn sukunimi apelido", "LAST_NAME"),
         ("hoten naam adsoyad adisoyadi isimsoyisim nama namalengkap imienazwisko volledigenaam nomcomplet", "PERSON"),
         ("diachi adres adresse direccion domicilio indirizzo residenza endereco morada anschrift wohnadresse adresa alamat ikametadresi", "ADDRESS"),
         ("straat strasse calle ulica", "ADDRESS"),
-        ("noisinh dogumyeri geburtsort geboorteplaats lieudenaissance lieunaissance luogodinascita luogonascita lugardenacimiento lugarnacimiento localdenascimento localnascimento fodelseort", "LOCATION"),
+        ("noisinh dogumyeri geburtsort geboorteplaats lieudenaissance lieunaissance luogodinascita luogonascita lugardenacimiento lugarnacimiento localdenascimento localnascimento fodelseort paisnacimiento paisdenacimiento ciudadnacimiento ciudaddenacimiento provincianacimiento paesenascita paesedinascita cittanascita cittadinascita comunenascita comunedinascita provincianascita cidadenascimento cidadedenascimento paisnascimento paisdenascimento estadonascimento ufnascimento municipionascimento naturalidade villenaissance villedenaissance paysnaissance paysdenaissance communenaissance geburtsland geboorteland dogumili", "LOCATION"),
         ("ciudad cidade citta ville stadt plaats woonplaats wohnort miasto miejscowosc municipio comune localidad localita sehir ilce mahalle", "LOCATION"),
         ("codepostal codigopostal codicepostale postnummer postnr plz postleitzahl postakodu kodpocztowy", "POSTAL_CODE"),
         ("telefon telefono telefone telefoon telefonnummer telefoonnummer celular cellulare movil gsm ceptelefonu dienthoai sodienthoai tlf tfno", "PHONE_NUMBER"),
@@ -267,7 +267,8 @@ public enum KeyHints {
         case "DATE_OF_BIRTH" where ["year", "month", "day", "yyyy", "mm", "dd"].contains(compact):
             return ["year": "birth_year", "yyyy": "birth_year", "month": "birth_month", "mm": "birth_month", "day": "day_of_birth", "dd": "day_of_birth"][compact]
         // A birth's record holds its date: "birth": [{"date": {"year": …}}].
-        case "DATE_OF_BIRTH" where ["date", "fulldate", "dates"].contains(compact): return parent
+        // "Date" in a record's other languages: "naissance": {"date": …}, "dogum": {"tarih": …}, "ngay_sinh": {"ngay": …}.
+        case "DATE_OF_BIRTH" where ["date", "fulldate", "dates", "data", "fecha", "datum", "tarih", "ngay", "dato", "datadinascita"].contains(compact): return parent
         // A card's expiry in parts: "expiration": {"month": 1, "year": 28}.
         case "EXPIRY_DATE" where ["month", "mm"].contains(compact): return "expiry_month"
         case "EXPIRY_DATE" where ["year", "yy", "yyyy"].contains(compact): return "expiry_year"

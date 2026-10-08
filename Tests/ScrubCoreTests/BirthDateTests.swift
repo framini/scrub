@@ -1,5 +1,5 @@
 import Foundation
-import ScrubCore
+@testable import ScrubCore
 import Testing
 
 @Test(arguments: [
@@ -92,4 +92,55 @@ func birthDatesInFreeText(_ sentence: String, _ original: String, _ shape: Strin
     }
     for kept in [", Ticket: 88213, Address: ", ". Vaccine: MMR, Provider: Dr. ", " will be retained for 10 years. **Credit Card Numbers**: "] { #expect(text.contains(kept), "\(kept): \(text)") }
     #expect(text.firstMatch(of: /DOB: \d{4}-\d{2}-\d{2}, Ticket/) != nil && text.firstMatch(of: /\*\*Date of Births\*\*: \d{4}-\d{2}-\d{2} and \d{4}-\d{2}-\d{2} will/) != nil, "\(text)")
+}
+
+/// A birth date under a key that names one in another language ("naissance", "nascimento", "doğum",
+/// "năm sinh") is replaced as one under "date_of_birth" is, not left for review; a birthplace under
+/// such a key ("pays_de_naissance", "cidade_nascimento") is a place, not a date.
+@Test(arguments: ["json", "csv"])
+func birthDatesUnderOtherLanguagesKeysAreReplaced(_ format: String) throws {
+    let records: [[(String, String)]] = [
+        [("nom", "Lemaire"), ("prenom", "Solène"), ("naissance", "14/02/1986"), ("pays_de_naissance", "Belgique")],
+        [("nome", "Thiago Moura"), ("nascimento", "1979-11-03"), ("cidade_nascimento", "Recife"), ("dt_nasc", "03/11/1979")],
+        [("ad_soyad", "Elif Aydın"), ("dogum", "21.06.1990"), ("dogum_yeri", "Bursa")],
+        [("ho_ten", "Trần Thị Thu"), ("nam_sinh", "1988"), ("noi_sinh", "Huế")],
+        [("nombre", "Iker Salazar"), ("nacimiento", "1975-03-09"), ("pais_nacimiento", "Chile")],
+        [("nome", "Chiara Bassi"), ("nascita", "07/08/1983"), ("luogo_nascita", "Parma")],
+        [("naam", "Daan Smit"), ("geboren", "12-04-1969"), ("geboorteplaats", "Utrecht")],
+    ]
+    for fields in records {
+        let body: String, name: String
+        if format == "json" {
+            body = "{" + fields.map { #""\#($0.0)": "\#($0.1)""# }.joined(separator: ", ") + "}"; name = "record.json"
+        } else {
+            body = fields.map(\.0).joined(separator: ",") + "\n" + fields.map(\.1).joined(separator: ",") + "\n"; name = "record.csv"
+        }
+        let result = try Scrubber.scrub(Data(body.utf8), name: name, forceFullDetection: false, seed: 12)
+        let output = String(decoding: result.output, as: UTF8.self)
+        for (key, value) in fields where KeyHints.hint(key) == "DATE_OF_BIRTH" {
+            #expect(!output.contains(value), "[\(format)] \(key): \(value) left: \(output)")
+            let finding = result.findings.first { $0.original == value }
+            #expect(finding?.entity == "DATE_OF_BIRTH" && finding?.needsReview == false, "[\(format)] \(key): \(finding.map { "\($0.entity) review \($0.needsReview)" } ?? "none")")
+        }
+        for (key, value) in fields where ["pays_de_naissance", "cidade_nascimento", "pais_nacimiento", "luogo_nascita"].contains(key) {
+            #expect(result.findings.first { $0.original == value }?.entity != "DATE_OF_BIRTH", "[\(format)] \(key): \(value)")
+        }
+    }
+}
+
+/// A birth written as an object of its own under such a key ("naissance": {"date": …}) holds the birth date.
+@Test func aBirthObjectUnderAnotherLanguagesKeyHoldsTheDate() throws {
+    let bodies = [
+        (#"{"titulaire":{"nom":"Lemaire","naissance":{"date":"14/02/1986","lieu":"Namur"}},"conjoint":{"nom":"Lemaire","naissance":"1984-07-30"}}"#, ["14/02/1986", "1984-07-30"]),
+        (#"{"cliente":{"nome":"Thiago Moura","nascimento":{"data":"03/11/1979","cidade":"Recife"}},"dependentes":[{"nome":"Davi Moura","nascimento":"2012-05-19"}]}"#, ["03/11/1979", "2012-05-19"]),
+        (#"{"musteri":{"ad":"Elif","soyad":"Aydın","dogum":{"tarih":"21.06.1990","yer":"Bursa"}}}"#, ["21.06.1990"]),
+    ]
+    for (body, dates) in bodies {
+        let result = try Scrubber.scrub(Data(body.utf8), name: "record.json", forceFullDetection: false, seed: 5)
+        let output = String(decoding: result.output, as: UTF8.self)
+        for date in dates {
+            #expect(!output.contains(date), "\(date) left: \(output)")
+            #expect(result.findings.first { $0.original == date }.map { $0.entity == "DATE_OF_BIRTH" && !$0.needsReview } == true, "\(date): \(result.findings.map { "\($0.entity) \($0.original) \($0.needsReview)" })")
+        }
+    }
 }

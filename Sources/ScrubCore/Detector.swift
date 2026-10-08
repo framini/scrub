@@ -189,8 +189,18 @@ public final class Detector {
     }
     /// What `base` finds, and the people it doubts.
     func read(_ text: String, key: String? = nil, contextWords: Set<String> = [], naming: Set<String>? = nil, context: ContextStage.Reading? = nil) -> (spans: [Span], doubts: [Span]) {
-        let spans = Self.contactsOutOfAddresses(base(text, key: key, contextWords: contextWords, naming: naming, context: context), in: text)
+        let spans = Self.contactsOutOfAddresses(base(text, key: key, contextWords: contextWords, naming: naming, context: context), in: text).filter { !Self.served($0, in: text) }
         return (spans, doubts)
+    }
+    /// A number an access log writes after the request it answers: its status and sizes, whatever
+    /// reading took them for a phone, an ID or an SSN (see `servedLead`).
+    static func served(_ span: Span, in text: String) -> Bool {
+        guard ["PHONE_NUMBER", "ID_NUMBER", "US_SSN"].contains(span.entity), span.range.lowerBound > 0, span.range.count <= 40 else { return false }
+        let ns = text as NSString
+        let value = ns.substring(with: NSRange(location: span.range.lowerBound, length: span.range.count))
+        guard value.range(of: #"^\d+(?:[ \t]+\d+){0,3}$"#, options: .regularExpression) != nil else { return false }
+        let start = max(0, span.range.lowerBound - 160)
+        return ns.substring(with: NSRange(location: start, length: span.range.lowerBound - start)).range(of: servedLead, options: .regularExpression) != nil
     }
     private static let contactKinds: Set<String> = ["EMAIL_ADDRESS", "PHONE_NUMBER", "URL"]
     /// An address read on into the phone number, the email or the link beside it ("…, 44000 Nantes.
@@ -930,7 +940,7 @@ public final class Detector {
                 let before = (text as NSString).substring(to: match.range.location)
                 if before.range(of: #"(?i)\bport[ \t]*[:=]?[ \t]*$"#, options: .regularExpression) != nil, value.allSatisfy({ $0.isASCII && $0.isNumber }),
                    Int(value).map({ $0 <= 65_535 }) == true { return nil }
-                if before.range(of: #"HTTP/\d(?:\.\d)?"[ \t]+$"#, options: .regularExpression) != nil, value.range(of: #"^[1-5]\d\d(?:[ \t]+\d+)?$"#, options: .regularExpression) != nil { return nil }
+                if before.range(of: Self.servedLead, options: .regularExpression) != nil, value.range(of: #"^\d+(?:[ \t]+\d+){0,3}$"#, options: .regularExpression) != nil { return nil }
                 // A bare run of digits may as well be an account, SSN or ID, so its
                 // stand-in keeps the digits instead of becoming "+1 555-…".
                 entity = value.allSatisfy(\.isNumber) ? "ID_NUMBER" : "PHONE_NUMBER"; score = 0.75
@@ -947,6 +957,10 @@ public final class Detector {
             return Span(range: match.range.location..<NSMaxRange(match.range), entity: entity, score: score)
         }
     }
+    /// What an access log writes before a response's status and sizes: the request it answers
+    /// ("GET /x HTTP/1.1" 200 1877), a proxy's timers (0/0/1/42/43 200 1532), a load balancer's
+    /// timings in seconds (0.000 0.001 0.000 200 200 34 366), with any statuses or "-" between.
+    private static let servedLead = #"(?:HTTP/\d(?:\.\d)?"|(?<![\w/])(?:-?\d+/){2,}\+?-?\d+|(?<![\w.])(?:(?:-?\d+\.\d{3,}|-1)[ \t]+){2}(?:-?\d+\.\d{3,}|-1))(?:[ \t]+(?:\d+|-))*[ \t]+$"#
     /// A line that opens a message or closes one: "Hi Saoirse,", "Dear Ms Lind", "Thanks, Bram".
     private static let greetingLine = TextPattern(#"(?i)^[ \t>]*(?:hi|hello|hey|hiya|dear|greetings|good (?:morning|afternoon|evening)|thanks|thank you|many thanks|cheers|regards|kind regards|best regards|warm regards|sincerely|yours sincerely|yours truly)(?![\p{L}\p{N}])"#)
     /// A number something is filed under ("order 77120", "Invoice #4412", "case no. 88"), which no house or postcode is.

@@ -618,6 +618,29 @@ struct NonPersonalKeptTests {
         }
     }
 
+    /// A response's status and sizes stay in every common access log layout, whatever stands before them:
+    /// a proxy's timers ("0/0/1/42/43 200 1532"), a load balancer's timings in seconds, a request then a "-"
+    /// and the sizes. A phone number in a sentence beside them is still replaced.
+    @Test func everyAccessLogLayoutKeepsItsStatusAndSizes() throws {
+        let log = """
+        Oct  9 10:12:01 lb01 proxy[2211]: 203.0.113.45:51234 [09/Oct/2026:10:12:01.123] fe_https~ be_api/api02 0/0/1/42/43 200 1532 - - ---- 12/10/2/1/0 0/0 "GET /v1/status HTTP/1.1"
+        Oct  9 10:12:02 lb01 proxy[2211]: 198.51.100.7:40112 [09/Oct/2026:10:12:02.871] fe_https~ be_api/api01 0/0/0/-1/3001 504 194 - - sH-- 3/3/1/0/0 0/0 "POST /v1/verify HTTP/1.1"
+        2026-10-09T10:15:00.123Z 198.51.100.4:51012 web-lb 10.0.1.5:8080 0.000043 0.001337 0.000057 404 404 0 1871 "GET https://www.example.com:443/missing HTTP/1.1"
+        [2026-10-09T10:16:00.000Z] "GET /v1/accounts HTTP/1.1" 200 - 0 15320 43 41 "-" "curl/8.0"
+        203.0.113.9 - - [09/Oct/2026:10:13:44 +0000] "GET /index.html HTTP/1.1" 304 0 "-" "Mozilla/5.0"
+        note: caller Odalys Ferriter asked for a callback on 555 0123 4567
+        """
+        for seed: UInt64 in 1...3 {
+            for name in ["proxy.log", "Pasted text"] {
+                let output = try Self.scrub(log, name: name, seed: seed)
+                for kept in ["0/0/1/42/43 200 1532 -", "0/0/0/-1/3001 504 194 -", "0.000057 404 404 0 1871 \"", #"HTTP/1.1" 200 - 0 15320 43 41 "-""#, #"HTTP/1.1" 304 0 "-""#] {
+                    #expect(output.contains(kept), "[\(name) seed \(seed)] \(kept): \(output)")
+                }
+                #expect(!output.contains("555 0123 4567") && !output.contains("Odalys"), "[\(name) seed \(seed)] \(output)")
+            }
+        }
+    }
+
     /// Replacing a value never takes the text around it: the quote that opens a logged email
     /// ("email='…'") and the field after a bar on its line ("Email: … | Mobile: …") stay, and the number there is replaced on its own.
     @Test func textAroundAReplacedValueStays() throws {
