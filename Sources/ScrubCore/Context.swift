@@ -653,6 +653,8 @@ public enum KeyHints {
     static func regionCode(_ key: String?, _ value: String) -> Bool {
         guard hint(key) == "REGION", !fits(key, value) else { return false }
         let trimmed = value.trimmingCharacters(in: .whitespaces)
+        // A country's three letters ("issuing_state": "NLD") name its country, never a province.
+        if trimmed.count == 3, Places.code(trimmed) != nil { return false }
         return (2...3).contains(trimmed.count) && trimmed.allSatisfy { $0.isASCII && $0.isUppercase }
     }
     /// A plan's or a product's name in words ("Team plan (monthly)", "Pro annual"):

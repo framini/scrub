@@ -558,4 +558,30 @@ struct NonPersonalKeptTests {
             }
         }
     }
+
+    @Test func aDocumentsIssuingCountryStaysItsThreeLetters() throws {
+        // "issuing_state": "NLD" became "IN" or "OH": a country's code read as a province's beside the holder.
+        let check = #"{"document": {"type": "passport", "issuing_state": "NLD", "issuingCountry": "DEU"}, "holder": {"name": "Ysolde Brakenridge", "dob": "1984-02-19"}}"#
+        for seed: UInt64 in 1...3 {
+            for name in ["check.json", "Pasted text"] {
+                let output = try Self.scrub(check, name: name, seed: seed)
+                #expect(output.contains(#""issuing_state": "NLD", "issuingCountry": "DEU""#), "[\(name) seed \(seed)] \(output)")
+                #expect(!output.contains("Brakenridge") && !output.contains("1984-02-19"), "[\(name) seed \(seed)] \(output)")
+            }
+        }
+    }
+
+    @Test func aSessionsIDKeepsItsTypesPrefix() throws {
+        // "sess_a91c0f2e77" became 24 random letters: the session's ID is replaced, but keeps its type's prefix and shape as "cus_" does.
+        let signal = #"{"session_id": "sess_7c40e1b9d2", "account": {"email": "ottilie.brannagh@example.net"}, "risk_score": 12}"#
+        for seed: UInt64 in 1...3 {
+            for name in ["signal.json", "Pasted text"] {
+                let output = try Self.scrub(signal, name: name, seed: seed)
+                let json = try JSONSerialization.jsonObject(with: Data(output.utf8)) as! [String: Any]
+                let session = try #require(json["session_id"] as? String)
+                #expect(session != "sess_7c40e1b9d2" && session.range(of: #"^sess_[0-9a-f]{10}$"#, options: .regularExpression) != nil, "[\(name) seed \(seed)] \(output)")
+                #expect(!output.contains("7c40e1b9d2") && !output.contains("brannagh"), "[\(name) seed \(seed)] \(output)")
+            }
+        }
+    }
 }

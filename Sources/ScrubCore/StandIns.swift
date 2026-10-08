@@ -1,6 +1,7 @@
 import Foundation
 
 final class StandIns {
+    private static let typedSecret = TextPattern(#"^([a-z]{2,8}_)[A-Za-z0-9]{6,64}$"#)
     private static let secretPrefix = TextPattern(#"^(?:(?:sk|pk|rk)_(?:live|test)_|gh[pousr]_|github_pat_|AKIA|ASIA|xox[abposr]-|eyJ|-----BEGIN [A-Z ]*PRIVATE KEY-----)"#)
     let people: People
     private var assigned: [String: String] = [:]
@@ -1725,6 +1726,17 @@ final class StandIns {
                 let upper = original.contains(where: \.isUppercase) && !original.contains(where: \.isLowercase)
                 let hex = Array(upper ? "0123456789ABCDEF" : "0123456789abcdef")
                 return String(original.map { _ in pick(hex) ?? "0" })
+            }
+            // A session's ID behind its type's prefix ("sess_a91c0f2e77") keeps the prefix, its length and its letters' kind, as "cus_" does.
+            if TextRanges.matches(Self.secretPrefix, in: original).isEmpty, let match = TextRanges.matches(Self.typedSecret, in: original).first {
+                let cut = original.index(original.startIndex, offsetBy: match.range(at: 1).length)
+                let rest = original[cut...], hex = rest.allSatisfy(\.isHexDigit) && !rest.contains(where: \.isUppercase)
+                return String(original[..<cut]) + String(rest.map { char -> Character in
+                    if hex { return pick(Array("0123456789abcdef")) ?? "0" }
+                    if char.isNumber { return Character(digit(true)) }
+                    if char.isLowercase { return pick(Array("abcdefghijklmnopqrstuvwxyz")) ?? "a" }
+                    return pick(Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")) ?? "A"
+                })
             }
             let prefix = TextRanges.matches(Self.secretPrefix, in: original).first.map { TextRanges.substring(original, $0.range.location..<NSMaxRange($0.range)) } ?? ""
             let kept = prefix.utf16.count < original.utf16.count ? prefix : ""
