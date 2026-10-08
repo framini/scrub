@@ -846,8 +846,8 @@ final class StandIns {
         let lead = original.firstIndex(where: \.isNumber)
         func draw() -> String { String(original.indices.map { index in original[index].isNumber ? Character(digit(index == lead)) : original[index] }) }
         var made = draw()
-        // Like `digits`: four digits never spell a real number's ending or another real value.
-        for _ in 0..<8 where made.filter(\.isNumber).count == 4 && (originalEndings.contains(made.filter(\.isNumber)) || originals.contains(made.filter(\.isNumber))) { made = draw() }
+        // Never the number it replaces ("3. OG" drawn as "3. OG"); and, like `digits`, four digits never spell a real number's ending or another real value.
+        for _ in 0..<16 where made == original || made.filter(\.isNumber).count == 4 && (originalEndings.contains(made.filter(\.isNumber)) || originals.contains(made.filter(\.isNumber))) { made = draw() }
         return made
     }
 
@@ -1138,6 +1138,14 @@ final class StandIns {
         assigned[key] = fake
         return fake
     }
+    /// A stand-in drawn for one spelling, in the case another is written in:
+    /// letter for letter where the two line up, else in capitals or small letters as it is.
+    static func recased(_ made: String, like original: String) -> String {
+        if made.count == original.count {
+            return zip(made, original).map { new, old in old.isLowercase ? new.lowercased() : old.isUppercase ? new.uppercased() : String(new) }.joined()
+        }
+        return shouted(original) ? made.uppercased() : hushed(original) ? made.lowercased() : made
+    }
     /// Written all in capitals: letters with a case, none of them small. "上海" has no case to keep.
     static func shouted(_ text: String) -> Bool { text != text.lowercased() && text == text.uppercased() }
     /// Written all in small letters, as `shouted` is in capitals.
@@ -1212,7 +1220,8 @@ final class StandIns {
     /// A second address line stays one: "Apt 2B" → "Apt 7C", "Suite 400" → "Suite 213", "#12" → "#48".
     private func unit(_ original: String) -> String? {
         let key = "UNIT\u{0}" + original.lowercased()
-        if let known = assigned[key] { return known }
+        // "Flat 5B" after "FLAT 5B" is the same flat, written in its own case.
+        if let known = assigned[key] { return Self.recased(known, like: original) }
         // Shared by every mention, so drawn clear of all real values up front.
         var made = freshUnit(original)
         for _ in 0..<16 { guard let current = made, !unused(current, original) else { break }; made = freshUnit(original) }

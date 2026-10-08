@@ -377,3 +377,16 @@ func aSplitAddressAndItsOneLineFormAgree(_ name: String) throws {
         #expect(written.hasPrefix(lead) && !written.lowercased().contains("gries") && !written.lowercased().contains("alster"), "\(street) → \(written)")
     }
 }
+
+/// One flat written in capitals in one address and as a word in another
+/// takes one stand-in, each in its own case; and a floor's one-digit number
+/// ("3. OG") always takes another digit, never a placeholder.
+@Test func aUnitKeepsItsCaseAndAlwaysTakesANumber() throws {
+    let output = try scrub(#"{"address":{"streetAddress":"108 WHITELADIES ROAD","line2":"FLAT 5B","town":"BRISTOL","postcode":"BS8 1TH"},"previousAddresses":[{"thoroughfare":"Kingsley Road","houseNumber":"814","apt":"Flat 5B","town":"Leeds","postcode":"LS6 3HN"}]}"#, as: "check.json")
+    let caps = try value(output, "address", "line2"), word = try value(output, "previousAddresses", "0", "apt")
+    #expect(caps.hasPrefix("FLAT ") && word.hasPrefix("Flat ") && caps == word.uppercased() && caps != "FLAT 5B", "\(caps) / \(word)")
+    for seed in UInt64(1)...40 {
+        let floor = try value(scrub(#"{"address":{"street":"Lindenallee 12","address2":"3. OG","city":"München","postcode":"80538","country":"DE"}}"#, as: "check.json", seed: seed), "address", "address2")
+        #expect(floor.range(of: #"^\d\. OG$"#, options: .regularExpression) != nil && floor != "3. OG", "seed \(seed): \(floor)")
+    }
+}
