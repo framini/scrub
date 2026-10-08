@@ -150,8 +150,11 @@ enum NameTagger {
                 guard tag == .personalName else { return true }
                 let tokens = TextRanges.matches(asciiWord, in: TextRanges.substring(original, mapped)).map { TextRanges.substring(original, (mapped.lowerBound + $0.range.location)..<(mapped.lowerBound + NSMaxRange($0.range))).lowercased() }
                 // A known first name before a word that is no name ("amber alert", "will power") is no full name.
-                let knownFullName = tokens.count >= 2 && tokens.first.map { Names.firstFolded.contains($0) && !NameLists.isWordlike($0) } == true
-                    && !tokens.contains { NameLists.isOrdinary($0) && !NameLists.isFirst($0) && !NameLists.isSurname($0) }
+                // A first name that is also a word counts before a surname that is none ("scott schneider"); a title is no word here.
+                let named = tokens.filter { !People.isTitle($0) }
+                let surnamed = named.last.map { NameLists.isSurname($0) && !NameLists.isOrdinary($0) && !NameLists.isWordlike($0) } == true
+                let knownFullName = tokens.count >= 2 && named.first.map { Names.firstFolded.contains($0) && (!NameLists.isWordlike($0) || surnamed) } == true
+                    && !named.contains { NameLists.isOrdinary($0) && !NameLists.isFirst($0) && !NameLists.isSurname($0) }
                 guard knownFullName || cued(mapped, in: original) else { return true }
             }
             let found = TextRanges.substring(original, mapped)

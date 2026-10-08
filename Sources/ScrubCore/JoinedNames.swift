@@ -132,9 +132,12 @@ enum JoinedNames {
         for (index, group) in groups.enumerated() {
             if tangled.contains(index) {
                 // One reading holding every other of the name is the name: "David M. Klein" over "Klein".
-                if let whole = group.first(where: { whole in whole.sure && !whole.place && group.allSatisfy { whole.range.lowerBound <= $0.range.lowerBound && $0.range.upperBound <= whole.range.upperBound } }),
-                   let opening = NameShape.words(whole.range, in: text).first, !greetings.contains(opening.bare), !NameShape.commands.contains(opening.bare) {
-                    people.append(Span(range: unsuffixed(whole.range, in: text), entity: whole.span.entity, score: max(whole.score, group.filter(\.sure).map(\.score).max() ?? 0)))
+                // Readings that only overlap, each sure, are one name over them all: "Miss LEESA" and "LEESA ANN VITEK".
+                let union = group.map(\.range.lowerBound).min()!..<group.map(\.range.upperBound).max()!
+                let whole = group.first(where: { whole in whole.sure && !whole.place && whole.range == union })?.range
+                    ?? (group.allSatisfy { $0.sure && !$0.place } && !word(union).contains(where: \.isNewline) ? union : nil)
+                if let whole, let opening = NameShape.words(whole, in: text).first, !greetings.contains(opening.bare), !NameShape.commands.contains(opening.bare) {
+                    people.append(Span(range: unsuffixed(whole, in: text), entity: "PERSON", score: group.filter(\.sure).map(\.score).max() ?? 0))
                     joinedPlaces += group.filter(\.place).map(\.range)
                     continue
                 }

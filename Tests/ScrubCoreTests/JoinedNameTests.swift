@@ -72,6 +72,17 @@ import Testing
         }
     }
 
+    /// Overlapping readings of one name, a title's and the name's in capitals, are one name; and in
+    /// lowercase a first name that is also a word counts before a surname that is none.
+    @Test(arguments: Path.allCases)
+    func overlappingReadingsAndLowercaseNamesGoWhole(_ path: Path) throws {
+        for (note, parts) in [("customer name Miss MARCIA LYNN FERRITER", ["marcia", "lynn", "ferriter"]), ("scott whitfield", ["scott", "whitfield"])] {
+            let (_, output) = try ProseNameTests.scrub(note, path)
+            let words = PersonFields.lowerWords(output)
+            #expect(parts.allSatisfy { !words.contains($0) }, "[\(path)] \(note) → \(output)")
+        }
+    }
+
     /// A suffix stays after the stand-in, its full stop with it.
     @Test func aSuffixStaysAsWritten() throws {
         let (_, output) = try ProseNameTests.scrub("Signed by Arthur Wendell King Jr. at the branch.", .text)
