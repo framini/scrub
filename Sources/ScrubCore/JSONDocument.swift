@@ -145,6 +145,8 @@ final class JSONDocument {
             nextRecord += 1
             let ancestry = KeyHints.isWrapper(pairs.map(\.0)) && !records.isEmpty ? records : records + [nextRecord]
             let named = pairs.compactMap { pair in pair.1.stringValue.map { (pair.0, $0) } }
+            // A name's parts side by side under keys of their own ({"fn": "TOMASZ", "ln": "WISNIEWSKI"}).
+            let nameParts = KeyHints.nameParts(named)
             // A name's given names beside its family name ({"family": "Lind", "given": ["Ama", "Rose"]})
             // are one person's, not several people's: the first is the record's first name.
             let surnamed = pairs.contains { if case .array = $0.1 { true } else { false } } && named.contains { pair in
@@ -181,6 +183,7 @@ final class JSONDocument {
                 if let expiry = KeyHints.expiry(pair.0, siblings: pairs.map(\.0), parent: ([key ?? ""] + keys).joined(separator: "_"), kind: kind.union(typed)) { inherited = expiry }
                 // A document's own number in a record whose kind names the document ({"object": "driver_license", "number": …}).
                 if KeyHints.hint(inherited) == nil, KeyHints.isDocumentNumber(pair.0), !kind.isDisjoint(with: KeyHints.documentKinds) { inherited = "document_number" }
+                if KeyHints.hint(inherited) == nil, let part = nameParts[pair.0] { inherited = part }
                 if KeyHints.hint(inherited) == nil, let born = KeyHints.birthField(pair.0, value: pair.1.stringValue ?? pair.1.numberText, siblings: named, kind: kind) { inherited = born }
                 if KeyHints.isBareName(pair.0), case .string(let name) = pair.1,
                    !KeyHints.bareNameIsPerson(name, siblings: pairs.map(\.0), parent: key, values: named.map(\.1)) {

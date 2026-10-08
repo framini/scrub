@@ -87,4 +87,43 @@ struct ShortKeyNameTests {
             #expect(others.count == 2 && !others.contains { person.contains($0) }, "seed \(seed): \(output)")
         }
     }
+
+    /// A record with no name key of its own writes a person's two names side by side under keys
+    /// that only say which part each is: a credit header's request, a household's people, a
+    /// screening's subject. Every part goes, in a file and pasted, and the phone beside them too.
+    @Test func aNamesTwoPartsSideBySideAreReplaced() throws {
+        let documents: [(String, [String])] = [
+            (#"{"inquiry": {"ref": "Q-20417", "subj": {"fn": "RADOSLAW", "ln": "KOWALCZYK", "dob": "19811203", "ph": 3125550147}}}"#, ["RADOSLAW", "KOWALCZYK", "3125550147"]),
+            (#"{"case": "HH-881", "subject": {"first": "ORLAITH", "last": "DUNPHY", "dob": "03/14/1962"}, "spouse": {"first": "BREANDAN", "last": "DUNPHY"}}"#, ["ORLAITH", "DUNPHY", "BREANDAN"]),
+            (#"{"screening": {"id": "scr_5521", "subject": {"given": "Marisol", "family": "Etxeberria", "nationality": "ES"}}}"#, ["Marisol", "Etxeberria"]),
+            (#"{"request_id": "rq-7", "applicant": {"first_nm": "Sigrun", "last_nm": "Haldorsen", "dob": "1984-05-09"}}"#, ["Sigrun", "Haldorsen"]),
+        ]
+        for (document, originals) in documents {
+            for file in ["response.json", "Pasted text"] {
+                let (result, output, parsed) = try Self.scrub(document, file)
+                #expect(parsed != nil, "\(output)")
+                for original in originals {
+                    #expect(!output.contains(original), "[\(file)] \(original) kept: \(output)")
+                }
+                // A surname is a name's stand-in, never a place's.
+                #expect(!result.findings.contains { originals.contains($0.original) && !["FIRST_NAME", "LAST_NAME", "PERSON", "PHONE_NUMBER"].contains($0.entity) },
+                        "[\(file)] \(result.findings.map { "\($0.entity) \($0.original)" })")
+            }
+        }
+    }
+
+    /// "first" and "last" say where a page, a range or a week starts and ends as often:
+    /// what they hold there is no name, and stays.
+    @Test func aPagesOrAWeeksFirstAndLastStay() throws {
+        let documents = [
+            #"{"page": {"first": 1, "last": 9, "size": 50}}"#,
+            #"{"hours": {"first": "Monday", "last": "Friday", "open": "09:00"}}"#,
+            #"{"events": {"first": "evt_8KxQ21aa", "last": "evt_9LmR04bb"}}"#,
+            #"{"links": {"first": "/v1/checks?page=1", "last": "/v1/checks?page=7"}}"#,
+        ]
+        for document in documents {
+            let (_, output, _) = try Self.scrub(document)
+            #expect(output == document, "\(output)")
+        }
+    }
 }

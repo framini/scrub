@@ -48,7 +48,7 @@ public enum KeyHints {
         ("firstname givenname middlename fname forename preferredname namefirst namemiddle namegiven forenames firstnames nombre nombres primernombre segundonombre prenom prenoms vorname vornamen nome primeironome", "FIRST_NAME"),
         ("lastname surname familyname lname maidenname namelast namefamily apellido apellidos apellidopaterno apellidomaterno primerapellido segundoapellido nom nomdefamille nomdusage nachname familienname cognome sobrenome", "LAST_NAME"),
         ("email emailaddress emailaddr mail", "EMAIL_ADDRESS"),
-        ("phone phonenumber mobile cell telephone tel fax mobilenumber mobilephone cellphone cellnumber phoneno telno telephonenumber contactnumber msisdn nationalformat internationalformat e164", "PHONE_NUMBER"),
+        ("phone phonenumber mobile cell telephone tel ph fax mobilenumber mobilephone cellphone cellnumber phoneno telno telephonenumber contactnumber msisdn nationalformat internationalformat e164", "PHONE_NUMBER"),
         ("ssn socialsecuritynumber socialsecurity ssnnumber", "US_SSN"),
         ("address streetaddress street addressline1 addressline2 addressline line1 line2 addr address1 street1 addr1 streetline1 street2 address2 addr2 streetline2 addressline3 line3 address3 addr3 street3 extendedaddress streetaddress2 aptsuite apartmentnumber aptnumber suitenumber unitnumber flatnumber unit apt apartment housenumber housenum houseno primarynumber housename flat flatno buildingnumber buildingno streetnumber streetnum streetno civicnumber premisenumber streetname thoroughfare buildingname formattedaddress fulladdress physicaladdress mailingaddress homeaddress residentialaddress billingaddress shippingaddress addressupdates addresshistory", "ADDRESS"),
         // The same fields as forms in other languages label them, written without their accents.
@@ -139,7 +139,7 @@ public enum KeyHints {
             case "name", "nm": if people.contains(qualifier) || roles.contains(qualifier) || ["primary", "secondary"].contains(qualifier) { return entity }
             case "address", "addr": if addressQualifiers.contains(qualifier) { return entity }
             // "primary_mobile", "customer_cell": a phone, as "is_mobile" and "mobile_app" are not.
-            case "mobile", "cell", "tel": if people.contains(qualifier) || roles.contains(qualifier) || addressQualifiers.contains(qualifier) || phoneQualifiers.contains(qualifier) { return entity }
+            case "mobile", "cell", "tel", "ph": if people.contains(qualifier) || roles.contains(qualifier) || addressQualifiers.contains(qualifier) || phoneQualifiers.contains(qualifier) { return entity }
             case "mail", "handle", "login", "pin", "otp", "cookie", "authorization", "passport", "credential", "credentials", "secret", "token": continue
             default: return entity
             }
@@ -225,6 +225,35 @@ public enum KeyHints {
     /// A name's parts by their letters, as a short-keyed payload writes them under the name.
     private static let shortNameParts: [String: String] = ["f": "first_name", "fn": "first_name", "g": "first_name", "m": "middle_name", "mn": "middle_name", "mi": "middle_name",
                                                            "l": "last_name", "ln": "last_name", "s": "last_name", "sn": "last_name"]
+    /// The keys of a name's two parts written side by side in a record with no name of their own:
+    /// "first"/"last", "fn"/"ln", "given"/"family", "first_nm"/"last_nm". Either alone may be a
+    /// list's or a page's end, so only the pair, both holding a word or two of a name, reads as
+    /// one person's first and last names. Keys the table already names are left to it.
+    static func nameParts(_ siblings: [(String, String)]) -> [String: String] {
+        var found: [String: String] = [:]
+        for (key, value) in siblings where hint(key) == nil {
+            let core = words(key).filter { !["name", "nm", "nme", "n"].contains($0) }.joined()
+            guard let part = pairedNameParts[core], namePartShaped(value) else { continue }
+            found[key] = part
+        }
+        let parts = Set(found.values)
+        return parts.contains("first_name") && parts.contains("last_name") ? found : [:]
+    }
+    private static let pairedNameParts: [String: String] = ["first": "first_name", "given": "first_name", "fn": "first_name", "fnm": "first_name", "gn": "first_name",
+                                                            "middle": "middle_name", "mn": "middle_name",
+                                                            "last": "last_name", "family": "last_name", "ln": "last_name", "lnm": "last_name", "sur": "last_name"]
+    /// A word or two of a name, in any case: letters, an apostrophe or a hyphen, none of them an ordinary word or a weekday.
+    private static func namePartShaped(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        let parts = trimmed.split(separator: " ")
+        guard (1...3).contains(parts.count), trimmed.filter(\.isLetter).count >= 2, trimmed.allSatisfy({ $0.isLetter || " '’-.".contains($0) }),
+              !isCommonValue(trimmed), !NameTagger.namesOrganisation(trimmed) else { return false }
+        return trimmed.split(whereSeparator: { !$0.isLetter }).allSatisfy { part in
+            let word = String(part)
+            if NameShape.weekdays.contains(word.lowercased()) || NameShape.months.contains(word.lowercased()) { return false }
+            return word.count < 2 || NameLists.isFirst(word) || NameLists.isSurname(word) || !NameLists.isWord(word)
+        }
+    }
     private static let writtenForms: Set<String> = ["latin", "cyrillic", "arabic", "greek", "hebrew", "chinese", "japanese", "korean", "kana", "kanji", "hangul", "thai", "native", "local", "localized", "localised",
                                                     "original", "originalstring", "originalvalue", "translit", "transliterated", "transliteration", "romanized", "romanised", "ascii", "english", "en", "raw", "rawvalue"]
     private static let objectReference = TextPattern(#"^[A-Z]{1,5}-[A-Za-z0-9]{5,40}$"#)
