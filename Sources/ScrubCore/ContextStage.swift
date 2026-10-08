@@ -168,6 +168,8 @@ enum ContextStage {
             guard digits >= 4, !amount(range, in: text), TextRanges.matches(decimal, in: value).isEmpty, !value.contains("\t"), !value.contains("  ") else { return nil }
             // A calendar date ("Last backup 2022-11-28") is a date, not an ID; a birth date is DOB's.
             guard TextRanges.matches(calendarDate, in: value).isEmpty else { return nil }
+            // Nor is a reading, a code or a reference no one is filed under (see `notFiledUnder`).
+            guard !notFiledUnder(value) else { return nil }
             // A bare run of digits is someone's only where the sentence ties it to
             // someone: a deal, notice or ticket number in a business email is not.
             if value.allSatisfy(\.isNumber) {
@@ -258,6 +260,33 @@ enum ContextStage {
     private static let secretWord = TextPattern(#"(?i)(?:pass(?:word|wd|code|phrase)?|pwd|secret|token|key|credential|auth|bearer)"#)
     /// An amount ("12.50") or a measure or score ("0.874", "3.14159"): one
     /// point, at most three digits before it.
+    /// A value no person is filed under, however much it looks like an ID: a
+    /// reading ("BP 156/62"), a diagnosis code ("R07.89"), a reference its prefix
+    /// names as an application's, a request's, an order's or a ticket's
+    /// ("APP-95146469", "ref-55af36d14d"), or a tracker's key, a project's
+    /// capitals and a short number ("PAY-1693"). A prefix that names an
+    /// account, a customer or a member ("ACC-0610949") still marks an ID.
+    static func notFiledUnder(_ value: String) -> Bool {
+        if !TextRanges.matches(reading, in: value).isEmpty || !TextRanges.matches(diagnosis, in: value).isEmpty { return true }
+        guard let match = TextRanges.matches(referenced, in: value).first else { return false }
+        let ns = value as NSString
+        let prefix = ns.substring(with: match.range(at: 1)), number = ns.substring(with: match.range(at: 2))
+        if RecordIDs.personPrefixes.contains(prefix.lowercased()) { return false }
+        return referencePrefixes.contains(prefix.lowercased())
+            || prefix == prefix.uppercased() && (1...5).contains(number.count) && number.allSatisfy(\.isNumber)
+    }
+    /// A value whose prefix names a request's, an order's or a ticket's reference ("ref-55af36d14d", "REQ-20417").
+    static func referencePrefixed(_ value: String) -> Bool {
+        guard let match = TextRanges.matches(referenced, in: value).first else { return false }
+        // "app_" opens an applicant's ID as often as an application's reference.
+        let prefix = (value as NSString).substring(with: match.range(at: 1)).lowercased()
+        return referencePrefixes.contains(prefix) && !["app", "application"].contains(prefix)
+    }
+    private static let reading = TextPattern(#"^(?:[A-Za-z][A-Za-z0-9]{0,4}[ \t:]+)?\d{2,3}/\d{2,3}$"#)
+    private static let diagnosis = TextPattern(#"^[A-Z]\d{2}\.[0-9A-Z]{1,4}$"#)
+    private static let referenced = TextPattern(#"^([A-Za-z]{2,10})[-_]([A-Za-z0-9]+)$"#)
+    private static let referencePrefixes: Set<String> = ["app", "application", "ref", "reference", "req", "request", "rq", "ticket", "tkt", "case", "order", "ord", "inv", "invoice",
+                                                         "txn", "trx", "tx", "quote", "rma", "inc", "chg", "task", "bug", "issue", "job", "run", "batch", "build", "msg", "evt", "event", "trace", "corr"]
     private static let decimal = TextPattern(#"^[-+]?(?:\d+[.,]\d{1,2}|\d{1,3}\.\d+)$"#)
     private static let calendarDate = TextPattern(#"^(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{4})$"#)
     /// Days of the year read as places: "visit at Easter".

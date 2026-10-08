@@ -166,7 +166,7 @@ enum RecordIDs {
     }
 
     /// Type prefixes of people's and accounts' identifiers.
-    private static let personPrefixes: Set<String> = ["cus", "cust", "customer", "usr", "user", "acct", "acc", "account", "pat", "patient", "mem", "member", "emp", "employee",
+    static let personPrefixes: Set<String> = ["cus", "cust", "customer", "usr", "user", "acct", "acc", "account", "pat", "patient", "mem", "member", "emp", "employee",
                                                       "sub", "subscriber", "person", "per", "prof", "profile", "contact", "ctc", "stu", "student", "applicant"]
 
     /// A person's or account's ID by its type prefix, in any text: "cus_4TUvJhQkMeNW", "usr_19f3a8b2".
@@ -397,6 +397,8 @@ enum RecordIDs {
         if idKey(key), leaf.contextWords.contains("address"), !leaf.text.contains(" "), leaf.text.split(separator: "_").count >= 4,
            leaf.text.contains(where: \.isNumber), leaf.text.contains(where: \.isLetter), leaf.text.count <= 128 { return true }
         guard shaped(leaf.text), !crossReference(leaf.text) else { return false }
+        // A value its own prefix calls a request's, an application's or an order's reference ("ref-55af36d14d") is filed under no one.
+        if ContextStage.referencePrefixed(leaf.text) { return false }
         // A sample that writes its own field's name ("accountRef": "ACCOUNTREF", "user": "USER_1") holds no one's ID;
         // a number after the field's code is one ("mrn": "MRN-00482913").
         if KeyHints.words(leaf.text).joined() == KeyHints.words(key).joined()

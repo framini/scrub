@@ -1567,6 +1567,11 @@ final class StandIns {
         case "SECRET":
             // A CVV, PIN or one-time code stays a short number.
             if (1...8).contains(original.count), original.allSatisfy({ $0.isASCII && $0.isNumber }) { return (0..<original.count).map { _ in digit() }.joined() }
+            // A session's or a device's UUID stays a UUID, in the case it was written in.
+            if original.range(of: #"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"#, options: .regularExpression) != nil {
+                let hex = Array(original.contains(where: \.isUppercase) ? "0123456789ABCDEF" : "0123456789abcdef")
+                return String(original.map { $0 == "-" ? "-" : pick(hex) ?? "0" })
+            }
             // A key written in hex ("9c41d0e2a7b3…", a machine's or a session's) stays hex of its length and case.
             if original.count >= 16, original.count <= 128, original.allSatisfy(\.isHexDigit), original.contains(where: \.isNumber) {
                 let upper = original.contains(where: \.isUppercase) && !original.contains(where: \.isLowercase)

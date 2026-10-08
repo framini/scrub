@@ -205,4 +205,59 @@ struct NonPersonalKeptTests {
             }
         }
     }
+
+    @Test func aClinicalNotesReadingsAndCodesStay() throws {
+        // "BP 156/62" became "WO 836/76" and "R07.89" became "K19.98": readings and a diagnosis code read as IDs.
+        let note = """
+        PROGRESS NOTE
+        Patient: Wexcombe, Ottoline    MRN#: 48213907
+        DOB: 03/21/1953    Sex: F
+        Address: 4821 Juniper Hollow Rd, # 22, Tacoma, WA 98402
+        Phone: (253) 555-0144
+        Date of service: 04/27/2026
+        Attending: Dr. Tobiah Quennell
+
+        S: Ottoline is a 73-year-old who presents with a three-day history of productive cough. Lives with her daughter, Marisol Quent, who also attended.
+        O: BP 156/62, HR 82, RR 18/min, T 37.4 C. SpO2 90% on room air.
+        A: Mechanical low back pain (M54.50), cough (R05.9).
+        P: Started amoxicillin 500 mg TID x 7 days. Follow up with Ama Okafor, RN in 10 days.
+        Ins: Northgale Mutual member ID W053165199.
+
+        Electronically signed by Tobiah Quennell, DO on 2026-05-28T10:57:38Z
+
+        """
+        for seed in UInt64(0)..<3 {
+            let output = try Self.scrub(note, name: "note.txt", seed: seed)
+            for kept in ["O: BP 156/62, HR 82, RR 18/min, T 37.4 C. SpO2 90% on room air.", "(M54.50), cough (R05.9)."] { #expect(output.contains(kept), "\(kept): \(output)") }
+            #expect(!output.contains("Wexcombe") && !output.contains("48213907"), "\(output)")
+        }
+    }
+
+    @Test func referencesAndReasonCodesInProseStay() throws {
+        // An application's reference, a tracker's key and a check's reason code after an address were replaced;
+        // a firm named for its trade was read as a person. An account's number is still replaced.
+        let notes = """
+        Case note: spoke to Ottoline Wexcombe regarding account ACC-0610949. Her application reference APP-95146469 is on hold.
+        Action: Tobiah to follow up with Brackwater Telecom about reason code ID-SYN-3, tracked on the onboarding board (ONB-1693).
+        [12:22] tobiah: ok. looks like ottoline's address 9769 Larchmont Ave, Apt 4D, Albany, NY 12203 failed ID-SYN-3
+        [12:24] tobiah: and the old one Lindenauerring 33b, 72194 Regensburg failed WL_FUZZY_HIT
+
+        """
+        for seed in UInt64(0)..<3 {
+            let output = try Self.scrub(notes, name: "notes.txt", seed: seed)
+            for kept in ["APP-95146469", "Brackwater Telecom", "(ONB-1693)", "failed ID-SYN-3\n", "failed WL_FUZZY_HIT\n"] { #expect(output.contains(kept), "\(kept): \(output)") }
+            for gone in ["Wexcombe", "0610949", "Larchmont", "Lindenauerring"] { #expect(!output.contains(gone), "\(gone): \(output)") }
+        }
+    }
+
+    @Test func aRequestsOwnReferenceStaysAndASessionKeepsItsShape() throws {
+        // A client's reference to its request ("ref-55af36d14d") was replaced as a person's ID, and a session's UUID became 24 random letters.
+        let request = #"{"client_reference": "ref-55af36d14d", "workflow": "kyc_standard", "consumer": {"name": {"first": "Ottoline", "last": "Wexcombe"}, "customer_id": "cus_Q8vZr2LmT0aBcD"}, "device": {"session_id": "54a2c09b-a704-46f4-89a6-2f3d5dde9c1b", "ip": "203.0.113.24"}}"#
+        for seed in UInt64(0)..<3 {
+            let output = try Self.scrub(request, name: "request.json", seed: seed)
+            #expect(output.contains(#""client_reference": "ref-55af36d14d""#) && !output.contains("Wexcombe") && !output.contains("cus_Q8vZr2LmT0aBcD"), "\(output)")
+            let session = try #require(output.firstMatch(of: /"session_id": "([^"]*)"/)?.1)
+            #expect(session != "54a2c09b-a704-46f4-89a6-2f3d5dde9c1b" && session.wholeMatch(of: /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/) != nil, "\(output)")
+        }
+    }
 }

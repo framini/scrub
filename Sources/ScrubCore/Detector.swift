@@ -797,11 +797,17 @@ public final class Detector {
             }
             at = next
         }
-        // A sentence after the postcode ("…, NY 11215. Done in admin") is no part of the address.
-        if let stop = TextRanges.matches(sentenceAfterPostcode, in: ns.substring(with: range)).first { range.length = stop.range.location }
+        // A sentence after the postcode ("…, NY 11215. Done in admin", "…, NY 70544 failed ID-SYN-3") is no part of the address.
+        // So is one after the town that follows it ("…, 72194 Regensburg failed WL_FUZZY_HIT").
+        let written = ns.substring(with: range)
+        // In an address written with capitals, a word in small letters after its postcode or its town is the sentence's.
+        let cased = written.contains(where: \.isUppercase)
+        if let stop = TextRanges.matches(sentenceAfterPostcode, in: written).first ?? (cased ? TextRanges.matches(wordAfterPostcode, in: written).first ?? TextRanges.matches(sentenceAfterTown, in: written).first : nil) { range.length = stop.range.location }
         return range.location..<NSMaxRange(range)
     }
+    private static let sentenceAfterTown = TextPattern(#"(?<=(?:\d{4,5}|\d[A-Z]{2})(?:[ \t]{1,3}\p{Lu}[\p{L}'’.-]{0,30}){1,3})(?=[ \t]+(?!(?:upon|unter|sous|over)\b)\p{Ll}{4,}\b)"#)
     private static let sentenceAfterPostcode = TextPattern(#"(?<=\d{4}|\d[A-Z]{2})\.(?=[ \t]+(?!(?:Apt|Apartment|Suite|Ste|Unit|Flat|Floor|St|Ave|Rd|Box)\b)\p{Lu}\p{Ll})"#)
+    private static let wordAfterPostcode = TextPattern(#"(?<=\d{4}|\d[A-Z]{2})(?=[ \t]+(?!(?:upon|unter|sous|over)\b)\p{Ll}{4,}\b)"#)
     private static let nameBefore = TextPattern(#"\p{Lu}[\p{L}'’.-]*[ \t]+$"#)
     private static let nameAfter = TextPattern(#"^[ \t]+\p{Lu}"#)
     private static func withinList(_ range: Range<Int>, _ ns: NSString) -> Bool {
