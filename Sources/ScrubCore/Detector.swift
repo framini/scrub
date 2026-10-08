@@ -789,6 +789,8 @@ public final class Detector {
                 guard TextRanges.matches(Self.decimal, in: value).isEmpty else { return nil }
                 // Four dotted groups of up to three digits are an address or a version ("256.256.256.256"), never a phone.
                 if value.range(of: #"^\d{1,3}(?:\.\d{1,3}){3}$"#, options: .regularExpression) != nil { return nil }
+                // A day written year first ("input=1984-03-07", "2026/09/14") is a date, never a phone.
+                if value.range(of: #"^(?:19|20)\d\d([-/.])(?:0?[1-9]|1[0-2])\1(?:0?[1-9]|[12]\d|3[01])$"#, options: .regularExpression) != nil { return nil }
                 // Ten digits from 1 are a Unix time (2001 to 2033), never a North
                 // American number, whose area code starts from 2.
                 if value.count == 10 || value.count == 13, value.first == "1", value.allSatisfy({ $0.isASCII && $0.isNumber }) { return nil }

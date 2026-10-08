@@ -263,4 +263,41 @@ struct NonPersonalKeptTests {
             #expect(session != "54a2c09b-a704-46f4-89a6-2f3d5dde9c1b" && session.wholeMatch(of: /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/) != nil, "\(output)")
         }
     }
+
+    @Test func aDateInALogsKeyAndValueIsNoPhoneNumber() throws {
+        // A matcher's log wrote the birth dates it compared as "input=1984-03-07", and both became phone-shaped digits ("6245-56-21").
+        let log = """
+        2026-09-14T10:22:31.519Z WARN [matcher] dob mismatch input=1984-03-07 bureau=1984-07-03 email=t.okonkwo@example.com
+        2026-09-14T10:22:31.611Z INFO [matcher] retry=2 source=credit_header matched_on=name,address
+        2026-09-14T10:22:32.004Z WARN [matcher] dob mismatch input=1990/11/23 bureau=1990/11/28 email=r.lindqvist@example.org
+
+        """
+        let day = /(?:19|20)\d\d([-\/])(?:0[1-9]|1[0-2])\1(?:0[1-9]|[12]\d|3[01])/
+        for seed in UInt64(0)..<3 {
+            for name in ["matcher.log", "Pasted text"] {
+                let output = try Self.scrub(log, name: name, seed: seed)
+                for gone in ["1984-03-07", "1984-07-03", "1990/11/23", "1990/11/28", "okonkwo", "lindqvist"] { #expect(!output.contains(gone), "\(gone): \(output)") }
+                for kept in ["2026-09-14T10:22:31.519Z WARN [matcher] dob mismatch input=", "retry=2 source=credit_header matched_on=name,address\n"] { #expect(output.contains(kept), "\(kept): \(output)") }
+                let values = output.matches(of: /(?:input|bureau)=(\S+)/).map { String($0.1) }
+                #expect(values.count == 4 && values.allSatisfy { $0.wholeMatch(of: day) != nil }, "\(values): \(output)")
+            }
+        }
+    }
+
+    @Test func aChatsLineTimesStayWhenItAsksForABirthDate() throws {
+        // Asking for a "dob" made every line's time "[2026-09-14 14:02:40]" a birth date, rewritten everywhere.
+        let chat = """
+        [2026-09-14 14:02:11] agent_mara: hi! how can i help today?
+        [2026-09-14 14:02:40] customer: hey its tobiah quarrington, my id check keeps failing
+        [2026-09-14 14:03:05] agent_mara: sorry about that tobiah. can you confirm your email and dob?
+        [2026-09-14 14:03:31] customer: t.quarrington@example.net and my dob is 1991-04-12
+        [2026-09-14 14:04:30] agent_mara: thanks, passing this to the risk team.
+
+        """
+        for seed in UInt64(0)..<3 {
+            let output = try Self.scrub(chat, name: "Pasted text", seed: seed)
+            #expect(Self.count("[2026-09-14 14:0", in: output) == 5, "\(output)")
+            for gone in ["quarrington", "1991-04-12"] { #expect(!output.contains(gone), "\(gone): \(output)") }
+        }
+    }
 }

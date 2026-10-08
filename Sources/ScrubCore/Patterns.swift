@@ -89,6 +89,10 @@ enum Patterns {
                     let tail = TextRanges.substring(text, range.upperBound..<min(length, range.upperBound + 2))
                     if tail.range(of: #"^\.[0-9]|^:[0-9A-Fa-f]"#, options: .regularExpression) != nil { return }
                 }
+                // A day with its time of day ("[2026-09-14 14:03:05]") stamps a line or an event; one at midnight may be a birth date stored as a time.
+                if entity == "DATE_OF_BIRTH", range.upperBound < length,
+                   case let after = TextRanges.substring(text, range.upperBound..<min(length, range.upperBound + 6)),
+                   after.range(of: #"^[ T]\d\d:\d\d"#, options: .regularExpression) != nil, !after.hasSuffix("00:00") { return }
                 if entity == "SECRET", let cut = URLs.queryValueEnd(ns, range) { range = range.lowerBound..<cut }
                 if entity == "EMAIL_ADDRESS", let start = addressStart(ns, range) { range = start..<range.upperBound }
                 // A piece of a longer identifier ("O72" of "O72-2331-924-76") is that identifier: replaced
