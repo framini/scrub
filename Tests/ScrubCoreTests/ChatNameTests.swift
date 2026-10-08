@@ -104,4 +104,20 @@ import Testing
         let (quiet, kept) = try Self.scrub(plain, path)
         #expect(quiet.findings.filter { Review.names.contains($0.entity) }.isEmpty, "[\(path)] \(quiet.findings.map(\.original)) → \(kept)")
     }
+
+    @Test(arguments: Path.allCases)
+    func aNameAfterASentencesSmallWordsIsReadWithoutThem(_ path: Path) throws {
+        // "ik ben Kristin Anke Hein" was read whole, the sentence's "ik ben" with it, so the first name
+        // the agent answers with later was never tied to the person and stayed as written.
+        let chat = """
+        Agent: Goedemiddag, hoe kan ik u helpen?
+        Klant: Goedemiddag, ik ben Marijke Lotte Verhoeven en ik kan niet inloggen.
+        Agent: Ik ben hier om te helpen, Marijke. Wat is uw adres?
+        Klant: Het is 14 Tavistock Mews.
+        Agent: Dank je wel, Marijke. Tot ziens!
+        """
+        let (_, output) = try Self.scrub(chat, path)
+        for gone in ["Marijke", "Verhoeven"] { #expect(!output.contains(gone), "[\(path)] \(gone): \(output)") }
+        #expect(output.contains("ik ben ") && output.contains("Ik ben hier om te helpen, "), "[\(path)] \(output)")
+    }
 }

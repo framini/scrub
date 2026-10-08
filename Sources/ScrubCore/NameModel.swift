@@ -153,16 +153,23 @@ final class NameModel: Sendable {
                   Self.onlySpaces(text, tokens[end].range.upperBound..<tokens[end + 1].range.lowerBound) {
                 end += 1
             }
+            // A sentence's words in small letters before a name written with capitals are not of it ("ik ben Kristin"),
+            // though a surname's particle opening it is ("van Dijk").
+            var first = index
+            if tokens[index...end].contains(where: { $0.scalars.first?.properties.isUppercase == true }),
+               !JoinedNames.particles.contains(String(String.UnicodeScalarView(tokens[index].scalars))) {
+                while first < end, tokens[first].scalars.first?.properties.isLowercase == true { first += 1 }
+            }
             var upper = tokens[end].range.upperBound
             let last = tokens[end].scalars
             // "Priya's" names Priya.
             if last.count > 2, last[last.count - 1] == "s", last[last.count - 2] == "'" || last[last.count - 2] == "’" { upper -= 2 }
-            let range = tokens[index].range.lowerBound..<upper
-            let handle = index == end && Self.looksLikeHandle(tokens[index].scalars)
+            let range = tokens[first].range.lowerBound..<upper
+            let handle = first == end && Self.looksLikeHandle(tokens[first].scalars)
             // A file's name ("./bin/tool-cli.js") is no one's handle.
             if handle, let dot = last.lastIndex(of: "."), ContextStage.fileExtensions.contains(String(String.UnicodeScalarView(last[(dot + 1)...])).lowercased()) { index = end + 1; continue }
             let alone = !tokens[..<index].contains(where: \.isWord) && !tokens[(end + 1)...].contains(where: \.isWord)
-            if !alone, Self.couldName(tokens[index...end]), handle || !NameTagger.partOfOrganisation(range, in: text) {
+            if !alone, Self.couldName(tokens[first...end]), handle || !NameTagger.partOfOrganisation(range, in: text) {
                 spans.append(Span(range: range, entity: handle ? "USERNAME" : "PERSON", score: Self.score))
             }
             index = end + 1
