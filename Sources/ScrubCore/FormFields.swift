@@ -579,7 +579,20 @@ enum FormFields {
     /// A point written with its hemispheres needs no word to name it: "57.7692525 S, 48.945249 W".
     private static let hemispheres = TextPattern(#"(?<![\w.-])([-+]?\d{1,2}\.\d{3,})[ \t]*°?[ \t]*[NS](?![\p{L}\p{N}])[ \t]*,?[ \t]*([-+]?\d{1,3}\.\d{3,})[ \t]*°?[ \t]*[EW](?![\p{L}\p{N}])"#)
 
+    /// A question that asks for a birth date ("can you confirm your email and dob?"), to its line's end.
+    private static let birthQuestion = TextPattern(#"(?i)\b(?:dob|d\.o\.b|date of birth|birth ?date|birthday)\b[^\n?]{0,40}\?[^\n]*\n"#)
+    /// A date in numbers, its year of two digits or four, standing alone ("12/9/95", "03/07/1984"), no time after it.
+    private static let answeredDate = TextPattern(#"(?<![\w/.:-])\d{1,2}([/.-])\d{1,2}\1(?:\d{4}|\d{2})(?![\w/.-]|:\d)"#)
+
     private static func cues(_ text: String, _ ns: NSString, into found: inout ProseLabels.Found, isCancelled: () -> Bool) {
+        // The answer to it, on one of the next two lines ("customer: priya.r@example.com and 12/9/95"), is the birth date asked for.
+        for hit in TextRanges.matches(birthQuestion, in: text, isCancelled: isCancelled) {
+            var end = NSMaxRange(hit.range), lines = 0
+            while end < ns.length, lines < 2 { if ns.character(at: end) == 10 { lines += 1 }; end += 1 }
+            let reply = NSRange(location: NSMaxRange(hit.range), length: end - NSMaxRange(hit.range))
+            guard let date = TextRanges.matches(answeredDate, in: ns.substring(with: reply)).first else { continue }
+            found.spans.append(Span(range: (reply.location + date.range.location)..<(reply.location + NSMaxRange(date.range)), entity: "DATE_OF_BIRTH", score: 0.9))
+        }
         for hit in TextRanges.matches(hemispheres, in: text, isCancelled: isCancelled) {
             let latitude = hit.range(at: 1), longitude = hit.range(at: 2)
             guard let a = Double(ns.substring(with: latitude)), let b = Double(ns.substring(with: longitude)), abs(a) <= 90, abs(b) <= 180 else { continue }

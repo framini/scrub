@@ -58,3 +58,22 @@ func birthDatesInFreeText(_ sentence: String, _ original: String, _ shape: Strin
     let bureau = try #require(text.firstMatch(of: /bureau's (\d{2})\/(\d{2})\/(\d{4})/))
     #expect(entered.1 == bureau.2 && entered.2 == bureau.1 && entered.3 == bureau.3, "\(text)")
 }
+
+/// A chat where the agent asks for the birth date and the customer answers on
+/// the next line, with a year of two digits: the answer is the birth date, in
+/// its own spelling; a date the chat names otherwise stays.
+@Test func aBirthDateGivenInAnswerToTheQuestionIsReplaced() throws {
+    let chat = """
+    [14:03:05] agent_lena: thanks for waiting. can you confirm your email and dob?
+    [14:03:31] customer: ottoline.w@example.com and 12/9/95
+    [14:04:10] agent_lena: got it. your parcel from 10/2/26 is still on hold
+    [14:05:20] agent_lena: i'll pass this to the risk team
+
+    """
+    let result = try Scrubber.scrub(Data(chat.utf8), name: "Pasted text")
+    let text = String(decoding: result.output, as: UTF8.self)
+    #expect(!text.contains("12/9/95"), "\(text)")
+    let answer = try #require(text.firstMatch(of: /example\.\w+ and (\d{1,2})\/(\d{1,2})\/(\d{2})\n/), "\(text)")
+    #expect(Int(answer.1).map { (1...12).contains($0) } == true && Int(answer.2).map { (1...31).contains($0) } == true, "\(text)")
+    #expect(text.contains("your parcel from 10/2/26 is still on hold"), "\(text)")
+}
