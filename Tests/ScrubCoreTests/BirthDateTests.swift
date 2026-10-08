@@ -77,3 +77,19 @@ func birthDatesInFreeText(_ sentence: String, _ original: String, _ shape: Strin
     #expect(Int(answer.1).map { (1...12).contains($0) } == true && Int(answer.2).map { (1...31).contains($0) } == true, "\(text)")
     #expect(text.contains("your parcel from 10/2/26 is still on hold"), "\(text)")
 }
+
+@Test func aBirthDateWrittenInlineEndsWhereTheLineGoesOn() throws {
+    // The value after "DOB:" ran to the line's end, so the stand-in date kept the rest of the line as written,
+    // the address and the card numbers after it among them.
+    let note = """
+    Ottoline Wexcombe, DOB: 1984-03-07, Ticket: 88213, Address: 4821 Juniper Hollow Rd, Tacoma, WA 98402.
+    Vaccination record for Tobiah Quennell, DOB: 1961-06-10. Vaccine: MMR, Provider: Dr. Ama Okafor, Larchmont Family Clinic, 9769 Larchmont Ave, Albany, NY 12203.
+    **Date of Births**: 1958-08-17 and 1961-02-03 will be retained for 10 years. **Credit Card Numbers**: 4111111111111111 and 5500005555555559 will be stored.
+    """
+    let text = String(decoding: try Scrubber.scrub(Data(note.utf8), name: "notes.txt").output, as: UTF8.self)
+    for gone in ["1984-03-07", "Juniper Hollow", "1961-06-10", "Larchmont Ave", "1958-08-17", "1961-02-03", "4111111111111111", "5500005555555559"] {
+        #expect(!text.contains(gone), "\(gone): \(text)")
+    }
+    for kept in [", Ticket: 88213, Address: ", ". Vaccine: MMR, Provider: Dr. ", " will be retained for 10 years. **Credit Card Numbers**: "] { #expect(text.contains(kept), "\(kept): \(text)") }
+    #expect(text.firstMatch(of: /DOB: \d{4}-\d{2}-\d{2}, Ticket/) != nil && text.firstMatch(of: /\*\*Date of Births\*\*: \d{4}-\d{2}-\d{2} and \d{4}-\d{2}-\d{2} will/) != nil, "\(text)")
+}

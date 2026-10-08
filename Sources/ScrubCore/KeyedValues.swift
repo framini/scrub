@@ -158,6 +158,30 @@ enum KeyedValues {
         value.count >= 12 && value.contains(where: \.isNumber) && value.contains(where: { $0.isLetter }) || value.count >= 16 && value.allSatisfy(\.isNumber)
             ? value.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "-_.+/=%~".contains($0)) }) : false
     }
+    /// The length of the birth date, or the list of them, that opens an unquoted value going on to
+    /// something else ("2004-08-23, Ticket: 05252042103", "2015-06-17 and 1926-08-09 will be kept"),
+    /// or nil when the value is all date. What comes before the first word no date is written with
+    /// must hold a whole date, with its four-digit year: "12 März 1984" is left whole.
+    static func birthDateLength(_ value: String) -> Int? {
+        let ns = value as NSString
+        var end = 0, cut: Int?
+        for word in TextRanges.matches(wordPattern, in: value) {
+            let bare = ns.substring(with: word.range).lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ",.;*"))
+            let dated = bare.isEmpty || bare.allSatisfy({ $0.isNumber || "-/.:+,tz".contains($0) }) && bare.contains(where: \.isNumber)
+                || NameShape.months.contains(bare) || ["and", "or", "&", "of", "am", "pm", "utc", "gmt"].contains(bare)
+                || bare.range(of: #"^\d{1,2}(?:st|nd|rd|th)$"#, options: .regularExpression) != nil
+            if !dated { cut = end; break }
+            end = NSMaxRange(word.range)
+        }
+        guard let cut, cut > 0 else { return nil }
+        var length = cut
+        while length > 0, " \t,.;*".utf16.contains(ns.character(at: length - 1)) { length -= 1 }
+        let date = ns.substring(to: length)
+        guard date.range(of: #"(?<!\d)\d{4}(?!\d)"#, options: .regularExpression) != nil,
+              date.range(of: #"\d+\D+\d+\D+\d+|\p{L}"#, options: .regularExpression) != nil else { return nil }
+        return length
+    }
+    private static let wordPattern = TextPattern(#"\S+"#)
     static func find(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
         scan(text, isCancelled: isCancelled).spans
     }
@@ -312,6 +336,10 @@ enum KeyedValues {
                 guard let first = tokens.first else { return }
                 let scheme = ["bearer", "basic", "token", "digest", "apikey"].contains(string(first).lowercased())
                 content = scheme && tokens.count > 1 ? tokens[1] : first
+            }
+            // A birth date written inline ends where the line goes on to another field or a sentence ("DOB: 2004-08-23, Ticket: …").
+            if unquoted, decoded == nil, KeyHints.hint(key) == "DATE_OF_BIRTH", let length = birthDateLength(string(content)) {
+                content = content.lowerBound..<(content.lowerBound + length)
             }
             let taken = decoded ?? string(content)
             if var entity = KeyHints.hint(key), KeyHints.fits(key, taken) {
