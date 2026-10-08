@@ -520,6 +520,9 @@ public final class Detector {
             if ContextStage.nations.contains(ContextStage.normalPlace(TextRanges.substring(text, span.range))) { return true }
             return words.allSatisfy { NameShape.isRole(String($0)) && (WrittenNames.ranks.contains($0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ". "))) || WrittenNames.wordRanks.contains($0.lowercased())) }
         }
+        // An identifier's scheme named as its label ("Her Aadhaar is 2345…") is no one, though no list knows the word.
+        if words.count == 1, let kind = KeyHints.hint(String(words[0])), ["ID_NUMBER", "US_SSN"].contains(kind),
+           !NameLists.isFirst(String(words[0])), !NameLists.isSurname(String(words[0])) { return true }
         return words.allSatisfy { word in
             let bare = word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ". "))
             return titles.contains(bare) || WrittenNames.isRole(bare) || WrittenNames.wordRanks.contains(bare) && word.first?.isUppercase == true

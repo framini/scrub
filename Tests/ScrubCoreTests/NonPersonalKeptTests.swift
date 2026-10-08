@@ -584,4 +584,17 @@ struct NonPersonalKeptTests {
             }
         }
     }
+
+    @Test func anIdentifiersSchemeNamedAsALabelIsNoOne() throws {
+        // "Her Aadhaar is 2345 6789 0124" became "Her Tiffany is …": the scheme's name read as a person.
+        let note = "Customer Wilhelmina Escobedo-Rourke called. Her Aadhaar is 2345 6789 0124, and her PESEL 85031207154.\n"
+        let ticket = #"{"ticket": {"id": 7712, "body": "Customer Wilhelmina Escobedo-Rourke called. Her Aadhaar is 2345 6789 0124."}}"#
+        for seed: UInt64 in 1...3 {
+            for (document, name) in [(note, "note.txt"), (ticket, "ticket.json"), (ticket, "Pasted text")] {
+                let output = try Self.scrub(document, name: name, seed: seed)
+                #expect(output.contains("Her Aadhaar is "), "[\(name) seed \(seed)] \(output)")
+                for gone in ["Wilhelmina", "Escobedo", "2345 6789 0124"] { #expect(!output.contains(gone), "[\(name) seed \(seed)] \(gone): \(output)") }
+            }
+        }
+    }
 }
