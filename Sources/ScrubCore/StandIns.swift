@@ -1844,13 +1844,14 @@ final class StandIns {
         }
         // "02/11/1971" beside "1971-11-02": a date that reads either way is the day the document writes
         // unmistakably, when only one of its readings is one, and takes that day's stand-in in its own order.
+        // When both are, as beside a date written the other way round, the month-first reading's day is it.
         var readsDayFirst: Bool?
         if let either = Self.eitherWay(original) {
             let monthFirst = days[Day(year: either.year, month: either.first, day: either.second)]
             let dayFirst = days[Day(year: either.year, month: either.second, day: either.first)]
-            if let known = monthFirst ?? dayFirst, (monthFirst == nil) != (dayFirst == nil) {
+            if let known = monthFirst ?? dayFirst {
                 (month, day) = (known.month, known.day)
-                readsDayFirst = dayFirst != nil
+                readsDayFirst = monthFirst == nil
             }
         }
         let trimmed = original.trimmingCharacters(in: .whitespacesAndNewlines)
