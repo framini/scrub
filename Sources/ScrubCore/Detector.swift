@@ -21,6 +21,10 @@ public final class Detector {
     /// the streets or houses named alone (see `AddressModel.read`): left as
     /// written, and put to a person in review.
     private(set) var doubts: [Span] = []
+    /// The language the document around the text is written in, when known (see `NameEvidence`).
+    var language: NLLanguage?
+    /// What the rules that read a cue found in the last `base` call: a label, a mail header, an email spelling the name.
+    private var evidenced: [Range<Int>] = []
     public init() {
         isCancelled = { Task.isCancelled }
         addresses = AddressModel.active && !Coverage.withheld.contains(.addressModel)
@@ -44,6 +48,7 @@ public final class Detector {
     func base(_ text: String, key: String? = nil, contextWords: Set<String> = [], naming: Set<String>? = nil, modelled: Bool = true, context: ContextStage.Reading? = nil) -> [Span] {
         autoreleasepool {
             doubts = []
+            evidenced = []
             foundLinks = nil
             // A person a reading detector found, cut to what a name can hold (see NameShape).
             // A rule's person keeps its words, but not the verb that opens its sentence ("Call Odalys").
@@ -92,7 +97,13 @@ public final class Detector {
                 kept += called
                 doubts.removeAll { doubt in called.contains { $0.range.overlaps(doubt.range) } }
             }
-            return Self.wholeName(kept, in: text)
+            // A person only guessed is replaced only with evidence where the text's language says what its words are.
+            // A value under a key that names a person is evidence enough ("cliente": "Lucía").
+            let whole = Self.wholeName(kept, in: text)
+            if NameEvidence.namesPerson(key) { return whole }
+            let gated = NameEvidence.gate(whole, doubts: doubts, evidenced: evidenced, in: text, document: language)
+            doubts = gated.doubts
+            return gated.spans
         }
     }
     /// "rose" alone in a chat that named "rose martinez": a person written all in small letters is
@@ -330,7 +341,9 @@ public final class Detector {
             var spans = Patterns.find(text, contextWords: keyWords.union(contextWords), naming: naming.map(keyWords.union), isCancelled: isCancelled).compactMap { span in
                 span.entity == "ADDRESS" ? Self.addressRange(span.range, in: text as NSString).map { Span(range: $0, entity: span.entity, score: span.score) } : span
             }
-            spans.append(contentsOf: Self.spelledByEmail(spans, in: text, isCancelled: isCancelled))
+            let spelled = Self.spelledByEmail(spans, in: text, isCancelled: isCancelled)
+            evidenced += spelled.map(\.range)
+            spans.append(contentsOf: spelled)
             if text.contains(".") { spans.append(contentsOf: Self.namedFiles(in: text)) }
             spans.append(contentsOf: RecordIDs.spans(in: text))
             spans.append(contentsOf: ConnectionStrings.scan(text))
@@ -385,12 +398,14 @@ public final class Detector {
             let labelled = ProseLabels.scan(text, isCancelled: isCancelled)
             spans = spans.filter { span in Self.certain(span) || !labelled.labels.contains { $0.overlaps(span.range) } }
             spans.append(contentsOf: labelled.spans)
+            evidenced += labelled.spans.map(\.range)
             // Names a mail header, an office path or a title holds; the path and a header's date hold none.
             let written = WrittenNames.scan(text, isCancelled: isCancelled)
             if !written.quiet.isEmpty {
                 spans = spans.filter { span in Self.certain(span) || !written.quiet.contains { $0.overlaps(span.range) } }
             }
             spans.append(contentsOf: written.spans)
+            evidenced += written.spans.map(\.range)
             // People a greeting, a signature or a known first name and surname hold, where nothing says otherwise.
             // The tagger calls a lone word on a line an organisation as often as not ("Best,⏎Rafael"),
             // so only a known pair defers to it.

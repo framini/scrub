@@ -177,6 +177,8 @@ enum URLs {
             // Nor is a word for a part of the site ("/authors/id/T/TOMC"), and a
             // two-letter handle is too likely a word to replace wherever it is written.
             if pages.contains(value.lowercased()) || value.count < 3 && !bare || isFileName(value) { return nil }
+            // An ordinary word in small letters is what the site does there ("/accounts/verify", "/customers/lookup"), not who.
+            if !bare, value.allSatisfy({ $0.isLetter && $0.isLowercase }), NameLists.isOrdinary(value), !NameLists.isFirst(value), !NameLists.isSurname(value) { return nil }
             return TextRanges.matches(handle, in: value).isEmpty ? nil : "USERNAME"
         }
     }

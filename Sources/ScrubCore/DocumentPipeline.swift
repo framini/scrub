@@ -60,9 +60,22 @@ struct DocumentLeaf: Sendable {
     /// A value written as a code in capitals joined by underscores ("NO_MATCH", "KEIN_TREFFER") under a key that
     /// names no one: a status or an enum, which no name, read in it or elsewhere, rewrites (see `DocumentPipeline.namesCode`).
     var isCode: Bool {
-        !["PERSON", "FIRST_NAME", "LAST_NAME"].contains(KeyHints.hint(key) ?? "") && text.contains("_") && text.utf16.count <= 64
-            && !TextRanges.matches(Self.code, in: text).isEmpty
+        guard !["PERSON", "FIRST_NAME", "LAST_NAME"].contains(KeyHints.hint(key) ?? "") else { return false }
+        return text.contains("_") && text.utf16.count <= 64 && !TextRanges.matches(Self.code, in: text).isEmpty || namesAKind
     }
+    /// Whether the value's key says it is a relationship, a status, a type, a code or a kind, in any of the
+    /// languages Scrub reads ("parentesco": "filho", "relationship": "spouse", "estado": "activo"): a word
+    /// from a short list of the record's own, never anyone's name.
+    var namesAKind: Bool {
+        let words = KeyHints.words(key ?? rawKey)
+        guard let last = words.last, KeyHints.hint(key) == nil, text.utf16.count <= 40, !text.contains("@") else { return false }
+        return Self.kindWords.contains(last.folding(options: .diacriticInsensitive, locale: nil))
+    }
+    private static let kindWords: Set<String> = ["relationship", "relation", "relationshiptype", "relacion", "relacao", "parentesco", "parentela", "verwandtschaft", "verwandtschaftsgrad",
+                                                 "beziehung", "relatie", "verwantschap", "relazione", "lien", "parente", "akrabalik", "yakinlik", "pokrewienstwo", "relacja", "slaktskap",
+                                                 "kinship", "status", "estado", "estatus", "situacao", "stato", "statut", "durum", "type", "tipo", "typ", "tur", "kind", "art", "soort",
+                                                 "code", "codigo", "kod", "category", "categoria", "kategorie", "categorie", "civil", "estadocivil",
+                                                 "maritalstatus", "familienstand", "burgerlijkestaat", "statocivile", "situationfamiliale"]
     private static let code = TextPattern(#"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$"#)
     /// How the span tagger reads the value once the rules are done; nil where it never does (keys, headers).
     var reading: TaggerReading?
@@ -912,11 +925,21 @@ enum DocumentPipeline {
         // Read here, in the scrub's task: the worker threads below see no task-local values.
         let addresses = AddressModel.active && !Coverage.withheld.contains(.addressModel), learned = PersonScorer.learned
         let names = !Coverage.withheld.contains(.nameModel)
+        // The document's language, for values too short to tell their own (see `NameEvidence`).
+        var sample = ""
+        // Only values written as sentences: a list of names and towns would make the names decide it.
+        for leaf in leaves where leaf.numericEntity == nil && !leaf.fieldName && KeyHints.hint(leaf.key) == nil && leaf.seen.split(whereSeparator: { !$0.isLetter }).count >= 5 {
+            sample += leaf.seen + "\n"
+            if sample.utf16.count > 4000 { break }
+        }
+        // Too few words and the names in them decide it ("Caio dos Ramos" reads as Portuguese).
+        let language = sample.split(whereSeparator: \.isWhitespace).count >= 12 ? NameEvidence.language(of: sample) : nil
         let done = DispatchGroup()
         done.enter()
         Work.queue.async {
             DispatchQueue.concurrentPerform(iterations: chunkCount) { chunk in
                 let detector = Detector(isCancelled: { cancelled.isSet }, addresses: addresses, learned: learned, names: names)
+                detector.language = language
                 let start = chunk * chunkSize
                 let end = min(count, start + chunkSize)
                 var local: [[Span]?] = [], doubts: [(Int, [Span])] = []

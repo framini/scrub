@@ -601,7 +601,7 @@ final class StandIns {
         let rest = numbers.filter { $0.0 != 4 }.map(\.1)
         let month = runs.lazy.compactMap { run -> Int? in
             let word = run.lowercased()
-            return monthNames.firstIndex { word == $0 || word.count >= 3 && $0.hasPrefix(word) }.map { $0 + 1 }
+            return monthNames.firstIndex { word == $0 || word.count >= 3 && $0.hasPrefix(word) }.map { $0 + 1 } ?? WrittenDates.months[word]
         }.first
         if let month { return rest.count == 1 ? (year, month, rest[0]) : (year, month, nil) }
         guard rest.count == 2 else { return (year, nil, nil) }
@@ -1940,10 +1940,12 @@ final class StandIns {
         let numbers = runs.indices.filter { runs[$0].first?.isNumber == true }
         let named = runs.indices.first { index in
             let word = runs[index].lowercased()
-            return full.contains(word) || short.contains(word) || word == "sept"
+            return full.contains(word) || short.contains(word) || word == "sept" || WrittenDates.months[word] != nil
         }
         func padded(_ value: Int, like run: String) -> String { run.count >= 2 ? String(format: "%0*d", run.count, value) : String(value) }
         func monthWord(like word: String) -> String {
+            // A month written in another language ("März", "marzo", "maja") is written in it again.
+            if !full.contains(word.lowercased()), !short.contains(word.lowercased()), word.lowercased() != "sept", let name = WrittenDates.name(month, like: word) { return name }
             let name = word.count > 3 && word.lowercased() != "sept" ? formatter.monthSymbols[month - 1] : formatter.shortMonthSymbols[month - 1]
             return word == word.uppercased() ? name.uppercased() : word == word.lowercased() ? name.lowercased() : name
         }
