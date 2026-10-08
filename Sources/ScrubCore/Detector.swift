@@ -283,7 +283,7 @@ public final class Detector {
             })
             // A given name and a surname with its particles that no reader found ("Caio dos Santos").
             // It only fills a gap: a person found over any of it is read as found.
-            let found = spans.filter { $0.entity == "PERSON" }.map(\.range)
+            let found = spans.filter { ["PERSON", "ADDRESS"].contains($0.entity) }.map(\.range)
             spans.append(contentsOf: JoinedNames.particled(in: text, places: spans.filter { $0.entity == "LOCATION" }.map(\.range), isCancelled: isCancelled).filter { span in
                 !unsaid.contains { $0.overlaps(span.range) } && !found.contains { $0.overlaps(span.range) }
             })

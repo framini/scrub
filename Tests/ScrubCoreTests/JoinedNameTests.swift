@@ -44,6 +44,23 @@ import Testing
         }
     }
 
+    /// A name read whole and in part is replaced whole.
+    @Test(arguments: Path.allCases)
+    func aNameReadWholeAndInPartIsReplacedWhole(_ path: Path) throws {
+        let note = "customer name Roberto Medrano Vantongeren"
+        let (result, output) = try ProseNameTests.scrub(note, path)
+        let words = PersonFields.lowerWords(output)
+        #expect(!words.contains("roberto") && !words.contains("medrano") && !words.contains("vantongeren") && words.contains("customer"), "[\(path)] \(output)")
+        #expect(result.findings.contains { $0.original == "Roberto Medrano Vantongeren" }, "[\(path)] \(result.findings.map(\.original))")
+    }
+
+    /// A street a reader found after a word read as a name stays the address's: the name never grows into it.
+    @Test(arguments: Path.allCases)
+    func aNameNeverGrowsIntoAStreet(_ path: Path) throws {
+        let (_, output) = try ProseNameTests.scrub("Im Kestrelfeld 12b, 50667 Nordhaven", path)
+        #expect(!output.contains("Kestrelfeld") && !output.contains("12b") && !output.contains("50667") && !output.contains("Nordhaven"), "[\(path)] \(output)")
+    }
+
     /// A suffix stays after the stand-in, its full stop with it.
     @Test func aSuffixStaysAsWritten() throws {
         let (_, output) = try ProseNameTests.scrub("Signed by Arthur Wendell King Jr. at the branch.", .text)

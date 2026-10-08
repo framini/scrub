@@ -28,6 +28,7 @@ enum JoinedNames {
     private static let surnameAfter = TextPattern(#"^ (?:(?:van|von|der|den|de|del|della|di|da|du|dos|das|la|le|ten|ter|bin|ibn|binti|al|el|abu|ben) ){0,3}(\p{Lu}\p{Ll}[\p{L}'’]*(?:[-‐]\p{Lu}\p{Ll}[\p{L}'’]*)?)(?![\p{L}\p{N}'’@_-])"#)
     /// A lowercase given name before a lowercase surname: "diego " before "maradona".
     private static let lowerBefore = TextPattern(#"(?<![\p{L}\p{N}'’.@/_-])(\p{Ll}+)[ \t]+$"#)
+    private static let greetings: Set<String> = ["hi", "hello", "hey", "dear", "thanks", "thank", "cheers", "regards", "morning", "evening", "afternoon", "greetings", "hiya", "yo"]
     static let particles: Set<String> = ["van", "von", "der", "den", "de", "del", "della", "di", "da", "du", "dos", "das", "la", "le", "ten", "ter", "bin", "ibn", "binti", "al", "el", "abu", "ben"]
 
     /// A given name, a surname's particles and the surname: "Caio dos Santos", "Joost van der Linde".
@@ -121,10 +122,19 @@ enum JoinedNames {
             }
             groups.append([piece])
         }
+        // Another kind of value a reader found (a street, an ID) is never grown into.
+        let found = others.filter { $0.entity != "LOCATION" }.map(\.range)
         var people: [Span] = [], doubted: [Span] = []
         var joinedPlaces: [Range<Int>] = []
         for (index, group) in groups.enumerated() {
             if tangled.contains(index) {
+                // One reading holding every other of the name is the name: "David M. Klein" over "Klein".
+                if let whole = group.first(where: { whole in whole.sure && !whole.place && group.allSatisfy { whole.range.lowerBound <= $0.range.lowerBound && $0.range.upperBound <= whole.range.upperBound } }),
+                   let opening = NameShape.words(whole.range, in: text).first, !greetings.contains(opening.bare), !NameShape.commands.contains(opening.bare) {
+                    people.append(Span(range: unsuffixed(whole.range, in: text), entity: whole.span.entity, score: max(whole.score, group.filter(\.sure).map(\.score).max() ?? 0)))
+                    joinedPlaces += group.filter(\.place).map(\.range)
+                    continue
+                }
                 for piece in group where !piece.place {
                     let span = Span(range: unsuffixed(piece.range, in: text), entity: piece.span.entity, score: piece.span.score)
                     if piece.sure { people.append(span) } else { doubted.append(span) }
@@ -135,7 +145,7 @@ enum JoinedNames {
             if group.allSatisfy(\.place) { continue }
             if group.count > 1 { joinedPlaces += group.filter(\.place).map(\.range) }
             let joined = group.map(\.range.lowerBound).min()!..<group.map(\.range.upperBound).max()!
-            let (range, nicknamed) = grown(joined, in: text)
+            let (range, nicknamed) = grown(joined, in: text, besides: found)
             // A nickname in quotes between a given name and a surname writes a person, whatever any model doubts.
             let sure = group.contains(where: \.sure) || nicknamed || TextRanges.matches(nicknameBetween, in: word(joined)).count > 0
             let score = group.filter { $0.sure == sure }.map(\.score).max() ?? 0
@@ -154,7 +164,7 @@ enum JoinedNames {
     /// particle, the surname before a suffix, the rest of a surname after
     /// the part found, and a lowercase given name before a lowercase surname.
     /// `nicknamed`: it took in a nickname in quotes.
-    static func grown(_ range: Range<Int>, in text: String) -> (range: Range<Int>, nicknamed: Bool) {
+    static func grown(_ range: Range<Int>, in text: String, besides found: [Range<Int>] = []) -> (range: Range<Int>, nicknamed: Bool) {
         let ns = text as NSString
         var lower = range.lowerBound, upper = range.upperBound, nicknamed = false
         let value = ns.substring(with: NSRange(location: lower, length: upper - lower))
@@ -201,6 +211,8 @@ enum JoinedNames {
                   case let word = (before as NSString).substring(with: match.range(at: 1)), given(word), NameLists.isFirst(word), !NameLists.isWordlike(word), !NameLists.isOrdinary(word) {
             lower = head + match.range.location
         }
+        if lower < range.lowerBound, found.contains(where: { $0.overlaps(lower..<range.lowerBound) }) { lower = range.lowerBound }
+        if upper > range.upperBound, found.contains(where: { $0.overlaps(range.upperBound..<upper) }) { upper = range.upperBound }
         return (unsuffixed(lower..<upper, in: text), nicknamed)
     }
     /// A suffix says which of a family it is, not who: it stays as written after the stand-in ("… Jr.").
