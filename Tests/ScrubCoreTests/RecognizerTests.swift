@@ -33,6 +33,7 @@ let recognizerSamples: [String: String] = [
     "RRN": "900101-1234567",
     "SOUTH_AFRICAN_ID": "8001015009087",
     "TCKN": "10000000146",
+    "EMIRATES_ID": "784-1985-3021746-6",
     "NRIC": "S1234567D",
     "HKID": "A123456(3)",
     "TAIWAN_ID": "A123456789",

@@ -242,6 +242,11 @@ public final class Detector {
             let start = NSRange(found, in: text).location
             return [Span(range: start..<(start + (trimmed as NSString).length), entity: "RECORD_ID", score: 1)]
         }
+        // An account's number written as an IBAN ("AccountNumber": "LU28 0019 …") is one: its stand-in keeps its country and its check.
+        if entity == "ID_NUMBER", trimmed.prefix(2).allSatisfy(\.isLetter), Patterns.iban(trimmed), let found = text.range(of: trimmed) {
+            let start = NSRange(found, in: text).location
+            return [Span(range: start..<(start + (trimmed as NSString).length), entity: "IBAN_CODE", score: 1)]
+        }
         if trimmed.utf16.count <= 96, trimmed.contains(where: \.isNumber), let named = Recognizers.named(trimmed, by: Set(KeyHints.words(key))), named != entity,
            let found = text.range(of: trimmed) {
             let start = NSRange(found, in: text).location

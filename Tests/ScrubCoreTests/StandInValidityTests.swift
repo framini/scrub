@@ -87,4 +87,32 @@ struct StandInValidityTests {
             #expect(out["created_at"] as? String == "2026-10-02T09:14:00Z")
         }
     }
+
+    /// An identifier read under its own key, or named before it in its own script, takes a stand-in of its
+    /// kind that passes its check: an Emirates ID (784, a year, a Luhn digit), a Swedish personnummer
+    /// in a vendor's nested response, an IBAN under an account number's key, and an Aadhaar named in Hindi.
+    @Test func anIdentifierTakesAStandInOfItsOwnKind() throws {
+        let aadhaar = try #require(Recognizers.all.first { $0.name == "AADHAAR" })
+        let personnummer = try #require(Recognizers.all.first { $0.name == "PERSONNUMMER" })
+        func digits(_ value: String) -> [Int] { value.compactMap(\.wholeNumberValue) }
+        for seed in UInt64(0)..<8 {
+            let onboarding = try Self.json(#"{"applicant": {"fullName": "Rashid Al Noori", "emiratesId": "784-1985-3021746-6", "nationality": "AE"}}"#, seed: seed)
+            let emirates = try #require((onboarding["applicant"] as? [String: Any])?["emiratesId"] as? String)
+            #expect(emirates != "784-1985-3021746-6" && emirates.range(of: #"^784-(19|20)\d{2}-\d{7}-\d$"#, options: .regularExpression) != nil && Patterns.luhn(digits(emirates)), "seed \(seed): \(emirates)")
+
+            let response = try Self.json(#"{"Response": {"Person": {"GivenName": "ASTRID", "Surname": "LINDQVIST", "Pnr": "790314-6020"}, "Status": "MATCH"}}"#, seed: seed)
+            let pnr = try #require(((response["Response"] as? [String: Any])?["Person"] as? [String: Any])?["Pnr"] as? String)
+            #expect(pnr != "790314-6020" && personnummer.passes(pnr) && pnr.range(of: #"^\d{6}-\d{4}$"#, options: .regularExpression) != nil, "seed \(seed): \(pnr)")
+
+            let report = "<AccountReport><AccountNumber>LU430010283746501920</AccountNumber><Name>Odalys Fenwright</Name></AccountReport>"
+            let xml = String(decoding: try Scrubber.scrub(Data(report.utf8), name: "report.xml", forceFullDetection: false, seed: seed).output, as: UTF8.self)
+            let iban = try #require(xml.range(of: #"(?<=<AccountNumber>)[^<]+"#, options: .regularExpression).map { String(xml[$0]) })
+            #expect(iban != "LU430010283746501920" && iban.hasPrefix("LU") && iban.count == 20 && Patterns.iban(iban), "seed \(seed): \(iban)")
+
+            let message = "नमस्ते, मेरा आधार नंबर 6830 1925 7407 है।\n"
+            let text = String(decoding: try Scrubber.scrub(Data(message.utf8), name: "Pasted text", forceFullDetection: false, seed: seed).output, as: UTF8.self)
+            let number = try #require(text.range(of: #"\d{4} \d{4} \d{4}"#, options: .regularExpression).map { String(text[$0]) }, "seed \(seed): \(text)")
+            #expect(number != "6830 1925 7407" && aadhaar.passes(number), "seed \(seed): \(number)")
+        }
+    }
 }

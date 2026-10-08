@@ -272,10 +272,10 @@ enum Recognizers {
             let d = twoDigits(date.year % 100) + twoDigits(date.month) + twoDigits(date.day) + randomDigits(4, &rng)
             return characters(d + [(10 - zip(d, [1, 3, 7, 9, 1, 3, 7, 9, 1, 3]).reduce(0) { $0 + $1.0 * $1.1 } % 10) % 10])
         }),
-        Recognizer("PERSONNUMMER", keys: ["personnummer", "samordningsnummer"], forms: [
+        Recognizer("PERSONNUMMER", keys: ["personnummer", "samordningsnummer", "pnr"], forms: [
             .init(#"\b(?:19|20)?\d{2}(?:0[1-9]|1[0-2])(?:[0-2]\d|3[01]|[6-8]\d|9[01])[-+]\d{4}\b"#, 0.3),
             .init(#"\b(?:19|20)?\d{2}(?:0[1-9]|1[0-2])(?:[0-2]\d|3[01]|[6-8]\d|9[01])\d{4}\b"#, 0.05),
-        ], context: ["personnummer", "samordningsnummer"], separators: " -+", check: { characters in
+        ], context: ["personnummer", "samordningsnummer", "pnr"], separators: " -+", check: { characters in
             guard let all = numbers(characters), all.count == 10 || all.count == 12 else { return false }
             let d = Array(all.suffix(10))
             // A coordination number's day has 60 added; the century is the long spelling's, else either.
@@ -375,7 +375,7 @@ enum Recognizers {
         }),
         Recognizer("AADHAAR", keys: ["aadhaar", "aadhar", "aadhaarnumber", "aadharnumber"], forms: [
             .init(#"\b[2-9]\d{3}([-: ]?)\d{4}\1\d{4}\b"#, 0.05),
-        ], context: ["aadhaar", "aadhar", "uidai"], separators: " -:", check: { characters in
+        ], context: ["aadhaar", "aadhar", "uidai", "आधार"], separators: " -:", check: { characters in
             guard let d = numbers(characters), d.count == 12, d[0] >= 2, d != Array(d.reversed()) else { return false }
             return verhoeff(d) == 0
         }, draw: { _, rng in
@@ -437,6 +437,18 @@ enum Recognizers {
             var d = [Int.random(in: 1...9, using: &rng)] + randomDigits(8, &rng)
             d.append(tcknTenth(d))
             return characters(d + [d.reduce(0, +) % 10])
+        }),
+        // The Emirates' identity number: 784, the holder's year of birth, seven digits and a Luhn digit ("784-1987-6543210-1").
+        Recognizer("EMIRATES_ID", keys: ["emiratesid", "emiratesidnumber", "emiratesidno", "uaeid", "uaeidnumber", "eidnumber"], forms: [
+            .init(#"\b784-(?:19|20)\d{2}-\d{7}-\d\b"#, 0.5, alone: true),
+            .init(#"\b784(?:19|20)\d{2}\d{8}\b"#, 0.05),
+        ], context: ["emirates id", "emirates identity", "uae id", "eid", "الهوية"], check: { characters in
+            guard let d = numbers(characters), d.count == 15, d[0...2] == [7, 8, 4] else { return false }
+            return (1900...2099).contains(number(Array(d[3...6]))) && Patterns.luhn(d)
+        }, draw: { _, rng in
+            let year = Int.random(in: 1955...2006, using: &rng)
+            let d = [7, 8, 4, year / 1000, year / 100 % 10] + twoDigits(year % 100) + randomDigits(7, &rng)
+            return characters(d + [luhnDigit(d)])
         }),
         Recognizer("NRIC", keys: ["nric", "nricno", "nricnumber", "nricfin", "finnumber"], forms: [
             .init(#"\b[STFGM]\d{7}[A-Z]\b"#, 0.3),
