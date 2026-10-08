@@ -11,6 +11,19 @@ struct NonPersonalKeptTests {
     }
     static func count(_ part: String, in text: String) -> Int { text.components(separatedBy: part).count - 1 }
 
+    /// A document check's code for the kind of document it read, dotted and naming a driver's licence by its
+    /// initials ("DOC.2.1.USA.TX.DL.041503"), is the document type's, not the licence's number.
+    @Test func aDocumentTypesDottedCodeStays() throws {
+        let response = #"{"images": [{"classification": {"docsid": "DOC.2.1.USA.TX.DL.041503", "imageType": "DriversLicenseFront"}}], "extracted": {"fullName": "Rosalind Okonkwo-Barre", "documentNumber": "47120936", "dateOfBirth": "1984-11-02"}}"#
+        for seed: UInt64 in 1...3 {
+            for name in ["check.json", "Pasted text"] {
+                let output = try Self.scrub(response, name: name, seed: seed)
+                #expect(output.contains(#""docsid": "DOC.2.1.USA.TX.DL.041503""#), "[\(name) seed \(seed)] \(output)")
+                #expect(!output.contains("47120936") && !output.contains("Okonkwo"), "[\(name) seed \(seed)] \(output)")
+            }
+        }
+    }
+
     @Test func aTimeZonesIdentifierIsNeverEdited() throws {
         // "London" was replaced inside "Europe/London" as the city it is in the address, leaving "Europe/Birmingham".
         let profile = #"""
