@@ -117,4 +117,56 @@ struct BareNameTests {
         #expect(String(decoding: nested.output, as: UTF8.self) == #"{"merchant": {"id": "m_77", "name": "Okonkwo Ventures"}}"#)
         #expect(nested.findings.isEmpty)
     }
+
+    /// A list of people under a key that says nothing of them ("household_members",
+    /// "co_applicants"), one of them sharing a surname with the record's person: every
+    /// name in it goes whole, or is put to review, in a file and pasted; none is kept unseen.
+    @Test func aListOfNamesUnderAnyKeyIsNeverKeptUnseen() throws {
+        let documents: [(String, [String])] = [
+            (#"{"name": "Ruairi Mac Giolla", "household_members": ["Siobhan Ferriter", "Cillian Mac Giolla"]}"#, ["Siobhan", "Ferriter", "Cillian", "Giolla"]),
+            (#"{"application_id": "app_3391", "co_applicants": ["Wiktoria Zielińska", "Bartosz Zieliński"], "status": "pending"}"#, ["Wiktoria", "Zielińska", "Bartosz", "Zieliński"]),
+        ]
+        for (document, originals) in documents {
+            for file in ["application.json", "Pasted text"] {
+                let result = try Scrubber.scrub(Data(document.utf8), name: file, forceFullDetection: false, seed: 3)
+                let output = String(decoding: result.output, as: UTF8.self)
+                #expect((try? JSONSerialization.jsonObject(with: result.output)) != nil, "\(output)")
+                for original in originals where output.contains(original) {
+                    #expect(result.findings.contains { $0.needsReview && $0.original.contains(original) }, "[\(file)] \(original) kept unseen: \(output)")
+                }
+                // A name that goes takes its first name with it.
+                for pair in [("Cillian", "Giolla"), ("Bartosz", "Zieliński")] where document.contains(pair.0) {
+                    #expect(output.contains(pair.0) == output.contains(pair.1), "[\(file)] half a name kept: \(output)")
+                }
+            }
+        }
+        // A list of what a record is tagged with stays, and is not asked about.
+        let tags = #"{"case": "C-71", "tags": ["High Risk", "Manual Review"], "queues": ["Fraud Ops"]}"#
+        let result = try Scrubber.scrub(Data(tags.utf8), name: "case.json", forceFullDetection: false, seed: 3)
+        #expect(String(decoding: result.output, as: UTF8.self) == tags)
+        #expect(result.findings.isEmpty, "\(result.findings.map(\.original))")
+    }
+
+    /// A name a reader found only half of is replaced whole: its other half never stays,
+    /// under an account's "name" or as another name of a person the record already holds.
+    /// Where nothing is sure enough to replace it, the whole name is put to review.
+    @Test func halfANameFoundIsReplacedWhole() throws {
+        let account = #"{"session_id": "sess_2f4e6a8c0b1d", "account": {"user_id": "usr_558120", "name": "%@"}}"#
+        let cases: [(String, String, [String])] = [
+            (account.replacingOccurrences(of: "%@", with: "Anjali Subramaniam"), "session.json", ["Anjali", "Subramaniam"]),
+            (account.replacingOccurrences(of: "%@", with: "Anjali Subramaniam"), "Pasted text", ["Anjali", "Subramaniam"]),
+            (account.replacingOccurrences(of: "%@", with: "Ishaan Venkataraghavan"), "session.json", ["Ishaan", "Venkataraghavan"]),
+            (#"<match><subject firstName="Obinna" lastName="Nwachukwu"/><alias>Obinna Nwachukwuh</alias></match>"#, "match.xml", ["Obinna", "Nwachukwu"]),
+            (#"{"subject": {"firstName": "Obinna", "lastName": "Nwachukwu"}, "aliases_seen": ["Obinna Nwachukwuh"]}"#, "match.json", ["Obinna", "Nwachukwu"]),
+        ]
+        for (document, file, parts) in cases {
+            let result = try Scrubber.scrub(Data(document.utf8), name: file, forceFullDetection: false, seed: 4)
+            let output = String(decoding: result.output, as: UTF8.self)
+            let kept = parts.filter(output.contains)
+            #expect(kept.isEmpty || kept.count == parts.count, "[\(file)] half a name kept: \(output)")
+            if !kept.isEmpty {
+                #expect(result.findings.contains { $0.needsReview && parts.allSatisfy($0.original.contains) }, "[\(file)] \(kept) kept unseen: \(output)")
+            }
+        }
+    }
 }

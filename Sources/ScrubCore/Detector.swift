@@ -90,23 +90,31 @@ public final class Detector {
     /// A value written whole as a name is one name when a reader took its
     /// every word for part of a person, or, with a surname's particle in it,
     /// any of them: "Odalys van der Berg" read in pieces is replaced as one,
-    /// so no word of it stays and its stand-in is a name.
-    private static func wholeName(_ spans: [Span], in text: String) -> [Span] {
+    /// so no word of it stays and its stand-in is a name. So is one a reader took
+    /// in part, where its other words are names or no word at all ("Priya" beside a
+    /// surname found): half a name replaced must not leave the other half.
+    static func wholeName(_ spans: [Span], in text: String) -> [Span] {
         guard !spans.isEmpty, spans.allSatisfy({ ["PERSON", "FIRST_NAME", "LAST_NAME"].contains($0.entity) && $0.url == nil }),
               let name = writtenName(text), spans.allSatisfy({ name.lowerBound <= $0.range.lowerBound && $0.range.upperBound <= name.upperBound }),
               spans.count > 1 || spans[0].range != name else { return spans }
         var covered = IndexSet()
         for span in spans where !span.range.isEmpty { covered.insert(integersIn: span.range) }
         let ns = text as NSString
-        var start = name.lowerBound, particled = false, whole = true
+        var start = name.lowerBound, particled = false, whole = true, named = true
         for end in name.lowerBound...name.upperBound where end == name.upperBound || ns.character(at: end) == 0x20 {
             if end > start, let first = Unicode.Scalar(ns.character(at: start)) {
-                if CharacterSet.uppercaseLetters.contains(first) { whole = whole && covered.contains(integersIn: start..<end) }
+                if CharacterSet.uppercaseLetters.contains(first) {
+                    if !covered.contains(integersIn: start..<end) {
+                        whole = false
+                        let word = ns.substring(with: NSRange(location: start, length: end - start)).trimmingCharacters(in: CharacterSet(charactersIn: ",."))
+                        named = named && word.count >= 2 && word.allSatisfy { $0.isLetter || "'’-".contains($0) } && !People.isTitle(word) && (NameLists.isName(word) || !NameLists.isWord(word))
+                    }
+                }
                 else { particled = true }
             }
             start = end + 1
         }
-        guard whole || particled else { return spans }
+        guard whole || particled || named else { return spans }
         return [Span(range: name, entity: "PERSON", score: spans.map(\.score).max() ?? 1)]
     }
     private static let crashHeader = TextPattern(#"(?m)^(?:Process|Code Type|Exception Type|Crashed Thread|Report Version|Incident Identifier|Hardware Model|Parent Process|Responsible):[ \t]"#)
@@ -544,7 +552,8 @@ public final class Detector {
                 if matcher.lastFirst[match.index] && Self.withinList(match.range, ns) { continue }
                 spans.append(Span(range: match.range, entity: matcher.entities[match.index], score: GazetteerMatcher.score))
             }
-            return Self.resolve(Links.outside(spans, in: text))
+            // A name found elsewhere may be half of this one ("Karol" before a surname already known).
+            return Self.wholeName(Self.resolve(Links.outside(spans, in: text)), in: text)
         }
     }
     private static let placeTail = TextPattern(#"^,[ \t]*([A-Z]{2}\b|[A-Z][a-z]+(?: [A-Z][a-z]+){0,3})(?:[ \t,]+(\d{5}(?:-\d{4})?|[A-Za-z]\d[A-Za-z] ?\d[A-Za-z]\d)\b)?"#)

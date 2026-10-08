@@ -86,6 +86,7 @@ final class JSONDocument {
         private var bareNumbers: [BareNumber] = []
         /// Values under a bare "name", by path, written as a person's though nothing says they are (see `KeyHints.writtenAsName`).
         private var unsureNames: Set<String> = []
+        private var doubtedNames: Set<String> = []
         /// Every value each field writes, strings and numbers alike, and the strings' leaves.
         private var population: [String: [String]] = [:]
         private var fieldStrings: [String: [Int]] = [:]
@@ -189,6 +190,7 @@ final class JSONDocument {
                    !KeyHints.bareNameIsPerson(name, siblings: pairs.map(\.0), parent: key, values: named.map(\.1)) {
                     inherited = nil
                     if KeyHints.writtenAsName(name, parent: key) { unsureNames.insert(childPath) }
+                    else if KeyHints.writtenAsName(name, parent: nil), KeyHints.onlyNames(name) { doubtedNames.insert(childPath) }
                 }
                 // The kind a record says reaches its own values, and through a slot ("number": {"value": …}, "number": […]) the values it wraps.
                 let reaches: Bool
@@ -208,6 +210,12 @@ final class JSONDocument {
         @inline(never)
         private func collectArray(_ document: JSONDocument, _ values: [JSONValue], key: String?, path: String, records: [Int], keys: [String], depth: Int, typed: Set<String>, given: Bool = false) {
             let pair = JSONFile.coordinateKeys(key, values)
+            // A list of names under a key that says nothing of them ("household_members": ["Halina Lis", …]):
+            // each is a person's, as a bare "name" written as one is (see `KeyHints.writtenAsName`).
+            if KeyHints.hint(key) == nil, !KeyHints.isStructural(key), !values.isEmpty,
+               values.allSatisfy({ if case .string(let text) = $0 { KeyHints.writtenAsName(text, parent: key) } else { false } }) {
+                for index in values.indices { unsureNames.insert(path + "/" + String(index)) }
+            }
             for (index, child) in values.enumerated() {
                 // Several names or emails in one list may be several people's; one is the record's own.
                 let several = values.count > 1 && KeyHints.hint(key).map({ ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "USERNAME"].contains($0) }) == true
@@ -233,6 +241,7 @@ final class JSONDocument {
             leaf.namingWords = Self.naming(keys, typed)
             leaf.field = keys.joined(separator: ".")
             leaf.unsureName = unsureNames.contains(path)
+            leaf.doubtedName = doubtedNames.contains(path)
             population[leaf.field ?? "", default: []].append(leaf.seen)
             fieldStrings[leaf.field ?? "", default: []].append(items.count)
             items.append(leaf)

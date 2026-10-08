@@ -50,6 +50,9 @@ struct DocumentLeaf: Sendable {
     /// A bare "name" written as a person's though nothing says it is one (see
     /// `KeyHints.writtenAsName`): unless detection finds the person, it is doubted.
     var unsureName = false
+    /// One written only of names under a business's or an account's key ("account": {"name": …}):
+    /// never replaced on the name model's word, but never kept unseen either.
+    var doubtedName = false
     private static let nonPersonalWords: Set<String> = ["status", "state", "type", "kind", "result", "outcome", "decision", "amount", "currency", "total", "balance", "fee",
                                                         "price", "count", "quantity", "at", "time", "timestamp", "date", "created", "updated", "version", "method", "code", "level", "score", "reason", "category", "channel", "mode"]
 
@@ -791,7 +794,7 @@ enum DocumentPipeline {
                         let read = key.flatMap { reads[$0] } ?? detector.read(leaf.seen, key: leaf.key, contextWords: leaf.contextWords, naming: leaf.namingWords, context: context[index])
                         if let key, reads[key] == nil { reads[key] = read }
                         var doubted = read.doubts
-                        if leaf.unsureName, let name = unsureName(leaf.seen, besides: read.spans + doubted, model: names ? NameModel.shared : nil, isCancelled: { cancelled.isSet }) {
+                        if leaf.unsureName || leaf.doubtedName, let name = unsureName(leaf.seen, besides: read.spans + doubted, model: names && !leaf.doubtedName ? NameModel.shared : nil, isCancelled: { cancelled.isSet }) {
                             if name.sure { local.append(read.spans + [name.span]) } else { local.append(read.spans); doubted.append(name.span) }
                         } else {
                             local.append(read.spans)
