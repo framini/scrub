@@ -433,3 +433,24 @@ func ssnSpellingsShareOneStandIn(_ name: String) throws {
         #expect(try value(output, "Subject", "SsnLast4") == String(tin.suffix(4)))
     }
 }
+
+/// A German ID card's number with X's among its letters ("X6HXVN7MN1") is
+/// the card's, not a mask: its stand-in passes the card's check digit.
+@Test(arguments: renderings)
+func germanCardNumberWithXsKeepsItsCheck(_ name: String) throws {
+    func icao(_ s: Substring) -> Int {
+        s.enumerated().reduce(0) { sum, item in
+            let c = item.element
+            let v = c.isNumber ? c.wholeNumberValue! : Int(c.asciiValue!) - 55
+            return sum + v * [7, 3, 1][item.offset % 3]
+        } % 10
+    }
+    let response = #"{"verification_id":"dv_8KfP2mQx","documents":{"national_ids":[{"country":"DE","type":"ID_CARD","value":"X6HXVN7MN1"},{"country":"DE","type":"ID_CARD","number":"FXTH5X8JY7"},{"country":"DE","type":"ID_CARD","number":"PVX218X8F6"}]},"checks":{"mrz_checksum_valid":true}}"#
+    for seed in UInt64(1)...6 {
+        let output = try scrub(response, as: name, seed: seed).replacingOccurrences(of: #"'\''"#, with: "'")
+        for (index, (key, original)) in [("value", "X6HXVN7MN1"), ("number", "FXTH5X8JY7"), ("number", "PVX218X8F6")].enumerated() {
+            let made = try value(output, "documents", "national_ids", String(index), key)
+            #expect(made != original && made.count == 10 && made.allSatisfy({ "CFGHJKLMNPRTVWXYZ0123456789".contains($0) }) && icao(made.prefix(9)) == made.last?.wholeNumberValue, "seed \(seed): \(original) → \(made)")
+        }
+    }
+}

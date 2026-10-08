@@ -467,14 +467,20 @@ final class StandIns {
     }
     private static let maskCharacters: Set<Character> = ["*", "•", "●", "X", "x", "#"]
     static func isMasked(_ value: String) -> Bool {
-        guard value.filter({ maskCharacters.contains($0) }).count >= 2, value.contains(where: \.isNumber) else { return false }
+        guard value.filter({ maskCharacters.contains($0) }).count >= 2, value.contains(where: \.isNumber), masksInOneRun(value) else { return false }
         // Its X's may be letters of an identifier that passes a check of its own ("549300M3SJFSFVXG6X69", an LEI): no mask.
         return !Recognizers.candidates(value.trimmingCharacters(in: .whitespaces)).contains(where: \.verifies)
+    }
+    /// A mask hides one stretch, its characters at most a separator apart ("XXX-XX-7784", "**** **** 4242"):
+    /// X's with other letters or digits between them ("X6HXVN7MN1") are an identifier's own.
+    private static func masksInOneRun(_ value: String) -> Bool {
+        guard let first = value.firstIndex(where: maskCharacters.contains), let last = value.lastIndex(where: maskCharacters.contains) else { return false }
+        return value[first...last].allSatisfy { maskCharacters.contains($0) || !$0.isLetter && !$0.isNumber }
     }
     /// "***-**-7784" stays masked; only the digits it shows change, to those
     /// of the number nearest it that ends so.
     private func masked(_ original: String) -> String? {
-        guard original.filter({ Self.maskCharacters.contains($0) }).count >= 2, original.contains(where: \.isNumber) else { return nil }
+        guard original.filter({ Self.maskCharacters.contains($0) }).count >= 2, original.contains(where: \.isNumber), Self.masksInOneRun(original) else { return nil }
         let shown = String(original.reversed().prefix { !Self.maskCharacters.contains($0) }.reversed())
         let visible = shown.filter(\.isNumber)
         guard !visible.isEmpty else { return nil }
