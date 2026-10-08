@@ -317,7 +317,7 @@ enum Patterns {
     /// The keys and words of a network's machines ("nodes", "dns", "subnet", "gateway"): an address under them is a machine's, no one's.
     static let infrastructureWords: Set<String> = ["node", "nodes", "dns", "nameserver", "nameservers", "resolver", "resolvers", "subnet", "subnets", "gateway", "gateways",
                                                    "cidr", "vpc", "cluster", "clusters", "router", "routers", "upstream", "upstreams", "loopback", "listen", "bind",
-                                                   "pod", "pods", "kubelet", "netmask", "broadcast", "nat", "ingress", "egress", "vip", "vips", "lb", "loadbalancer", "peers", "replicas", "replica"]
+                                                   "pod", "pods", "kubelet", "netmask", "broadcast", "nat", "ingress", "egress", "vip", "vips", "lb", "loadbalancer", "peers", "replicas", "replica", "edge", "edges"]
     /// Only a Visa card is 13 digits, and it opens with a 4; 13 digits opening
     /// with a 1 is a time in milliseconds ("sent_at": 1668455936404).
     static func epochMilliseconds(_ digits: [Int]) -> Bool { digits.count == 13 && digits.first != 4 }

@@ -395,6 +395,8 @@ enum DocumentPipeline {
             job.enter(value: index, records: leaf.enclosing, part: leaf.datePart, object: leaf.objectPath, naming: leaf.naming, kind: leaf.decided)
             var found = founds[index]
             if leaf.machineAddress { found.removeAll { $0.entity == "IP_ADDRESS" } }
+            // So is one after a machine's key in a log's pairs ("node=10.0.4.17", "gateway: 192.168.1.1").
+            else if leaf.key == nil { found.removeAll { $0.entity == "IP_ADDRESS" && Self.machineAddress($0.range, in: leaf.seen) } }
             job.recordOriginals([(leaf.seen, found)])
             // Read in the text as seen, replaced in the text as written.
             if let view = leaf.view { found = found.map(view.raw) }
@@ -425,6 +427,12 @@ enum DocumentPipeline {
         return (gazetteer, values.map { $0! })
     }
 
+    /// Whether the address at `range` is a private network's after a machine's key ("node=", "edge_ip=").
+    static func machineAddress(_ range: Range<Int>, in text: String) -> Bool {
+        let ns = text as NSString
+        guard Patterns.privateAddress(TextRanges.substring(text, range)), let key = Patterns.keyBefore(ns, range.lowerBound) else { return false }
+        return !Set(KeyHints.words(key)).isDisjoint(with: Patterns.infrastructureWords)
+    }
     private static let placeKinds: Set<String> = ["LOCATION", "REGION"]
     /// Whether the document's places are all it holds of anyone's: no person, street, postcode
     /// or other personal value found or named by a key, nor a place of birth. A cloud's regions

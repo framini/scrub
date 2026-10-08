@@ -810,6 +810,8 @@ public final class Detector {
             case .address:
                 // A postcode and nothing but a "state" written like a word ("77120 Hi"): a greeting, not Hawaii.
                 let parts = match.addressComponents ?? [:]
+                // One piece with no space is a reference's code ("SA-00012": a state's code and a number), never an address.
+                guard TextRanges.substring(text, match.range.location..<NSMaxRange(match.range)).contains(where: { $0.isWhitespace || $0 == "," }) else { return nil }
                 if parts[.street] == nil, parts[.city] == nil, let state = parts[.state], state.count == 2, state != state.uppercased() { return nil }
                 guard let range = Self.addressRange(match.range.location..<NSMaxRange(match.range), in: text as NSString, street: parts[.street] != nil) else { return nil }
                 return Span(range: range, entity: "ADDRESS", score: 0.6)

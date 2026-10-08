@@ -36,6 +36,8 @@ enum Correction {
             try Scrubber.checkCancellation()
             let found = visibleLeftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer, gate: gate, base: pass == 0 ? base : nil)
             let spans = Job.outsideTimeZones(KeyedValues.outsideKeys(Detector.resolve(found.spans), in: output), in: output).filter { !sparing.contains($0.entity) }
+                // A private network's address after a machine's key ("node=10.0.4.17") is a machine's, here as when first read.
+                .filter { !($0.entity == "IP_ADDRESS" && DocumentPipeline.machineAddress($0.range, in: output)) }
             if spans.isEmpty { return (output, marks, unresolved(found.suspects, in: output)) }
             var fakes = Array(repeating: "", count: spans.count)
             var sources = [String?](repeating: nil, count: spans.count)

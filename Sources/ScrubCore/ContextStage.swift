@@ -124,6 +124,7 @@ enum ContextStage {
     /// A finding as Scrub names it, or nil for one the stage leaves to others:
     /// a person in Latin script counts only where something else agrees (`person`),
     /// and a handle needs a digit, dot or underscore to be told from a word.
+    private static let qualifiedName = TextPattern(#"^(?:[a-z][a-z0-9_]*\.){2,}[A-Z][A-Za-z0-9_$]*$"#)
     static func span(_ found: ContextModel.Found, in text: String, links: [Range<Int>] = []) -> Span? {
         let ns = text as NSString
         guard let range = cleaned(found.range, in: text, links: links) else { return nil }
@@ -152,6 +153,9 @@ enum ContextStage {
                   inner.contains(where: { $0.isLowercase || $0.isNumber }),
                   // A file name is no handle: "AHMED.mpg".
                   !fileExtensions.contains(inner.split(separator: ".").last.map { $0.lowercased() } ?? "") || !inner.contains(".") else { return nil }
+            // Nor is a logger's or a class's qualified name ("c.e.infra.Health", "com.example.kyc.Retry").
+            if !TextRanges.matches(qualifiedName, in: inner).isEmpty, let last = inner.split(separator: ".").last.map({ $0.lowercased() }),
+               !NameLists.isFirst(last), !NameLists.isSurname(last) { return nil }
             entity = "USERNAME"
         case "LOCATION":
             // A country, a continent or a nationality ("a Danish citizen", "the

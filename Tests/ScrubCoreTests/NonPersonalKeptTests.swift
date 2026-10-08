@@ -498,4 +498,39 @@ struct NonPersonalKeptTests {
             }
         }
     }
+
+    @Test func aReferenceWithAStatesLettersIsNoAddress() throws {
+        // "SA-00012" was read as a street address ("603 COASTAL STREET"): a state's code before a number.
+        let batch = """
+        {"ref": "WA-00417", "nm": "Odalys Fennimore", "dob": "1988-11-11"}
+        {"ref": "PA-20931", "nm": "Ruairi Castellane", "dob": "1991-05-04"}
+        """
+        let note = "Batch item WA-00417 failed again for Odalys Fennimore, see PA-20931.\n"
+        for seed: UInt64 in 1...3 {
+            for (document, name) in [(batch, "batch.jsonl"), (batch, "Pasted text"), (note, "note.txt")] {
+                let output = try Self.scrub(document, name: name, seed: seed)
+                for kept in ["WA-00417", "PA-20931"] { #expect(output.contains(kept), "[\(name) seed \(seed)] \(kept): \(output)") }
+                for gone in ["Odalys", "Fennimore"] { #expect(!output.contains(gone), "[\(name) seed \(seed)] \(gone): \(output)") }
+            }
+        }
+    }
+
+    @Test func aLogsLoggerNamesAndMachinesAddressesStay() throws {
+        // A logger's qualified name became a username ("jaxon566"), and a private address after
+        // "node=" a public one, though under a machine's key in JSON it stays.
+        let log = """
+        2026-10-07T12:00:01.120Z INFO  [exec-4] c.e.kyc.VerifyController - POST /v1/verify requestId=req_51f0 ip=203.0.113.88 user=imre.vashti@example.org
+        2026-10-07T12:00:06.000Z INFO  [main] c.e.infra.Health - db=db-01.prod.example.com:5432 ok pool=20/50 node=10.0.4.17
+        2026-10-07T12:00:07.250Z WARN  [main] com.example.edge.ProxyMonitor - upstream slow edge_ip=172.16.40.9 gateway=192.168.10.1 latency=812ms
+        """
+        for seed: UInt64 in 1...3 {
+            for name in ["server.log", "Pasted text"] {
+                let output = try Self.scrub(log, name: name, seed: seed)
+                for kept in ["c.e.kyc.VerifyController", "c.e.infra.Health", "com.example.edge.ProxyMonitor", "node=10.0.4.17", "edge_ip=172.16.40.9", "gateway=192.168.10.1"] {
+                    #expect(output.contains(kept), "[\(name) seed \(seed)] \(kept): \(output)")
+                }
+                for gone in ["203.0.113.88", "imre", "vashti"] { #expect(!output.contains(gone), "[\(name) seed \(seed)] \(gone): \(output)") }
+            }
+        }
+    }
 }
