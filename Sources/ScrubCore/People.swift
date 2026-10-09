@@ -625,6 +625,10 @@ final class People {
             if given { return (register(tokens[0], nil, emailSafe: emailSafe, gender: gender), 1) }
             return (register(nil, tokens[0], emailSafe: emailSafe, gender: gender), -1)
         }
+        // "Park Ji-woo" and "Kim Ji-woo" are two families' and one given name's, as "MORITA Kenji" is Kenji of the Morita family.
+        if let order = FamilyFirstNames.order(tokens) {
+            return (register(order.given, order.family, emailSafe: emailSafe, middle: order.middle, gender: gender ?? order.gender), 2)
+        }
         if !titled, let found = surname(tokens) { return (found, -1) }
         if tokens.count >= 2 {
             let person = register(tokens.first, tokens.last, emailSafe: emailSafe, middle: tokens.count > 2 ? tokens.dropFirst().dropLast().joined(separator: " ") : nil, gender: gender)
@@ -717,6 +721,9 @@ final class People {
             let initials = named.dropLast().map { word in String(word.map { $0.isLetter ? letters.next() ?? $0 : $0 }) }
             let last = named.last.map { $0 == $0.uppercased() && $0.count > 1 } == true ? person.last.uppercased() : person.last
             return title + (initials + [last]).joined(separator: " ")
+        }
+        if parts == 2, let order = FamilyFirstNames.order(Array(named)) {
+            return title + FamilyFirstNames.written(order, first: person.first, last: person.last)
         }
         // "Rogério Tavares Lins Filho" beside his father: the son keeps the word that tells them apart, and the family's stand-in.
         return title + (parts == 1 ? person.first : parts == -1 ? person.last : person.full + Self.familySuffix(of: value))

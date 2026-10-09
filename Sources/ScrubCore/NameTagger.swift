@@ -133,7 +133,7 @@ enum NameTagger {
             let upper = input.utf16.distance(from: input.utf16.startIndex, to: range.upperBound.samePosition(in: input.utf16) ?? input.utf16.endIndex)
             var mapped = lower..<upper
             if partOfOrganisation(mapped, in: original) { return true }
-            if tag == .personalName { mapped = trimmedToWrittenCapitals(mapped, in: original) }
+            if tag == .personalName { mapped = syllableJoined(trimmedToWrittenCapitals(mapped, in: original), in: original) }
             // A name is a word of its own. The tagger splits "Qz7m9rx5l1ba2ms6" at
             // its digits and can call "Qz" a name; that is the head of a token.
             if glued(mapped, in: original) { return true }
@@ -177,6 +177,17 @@ enum NameTagger {
             return true
         }
         return result
+    }
+    /// A name read up to a hyphen between the syllables of a given name ("Kim Ji" of "Kim Ji-woo") reaches the end of it.
+    static func syllableJoined(_ range: Range<Int>, in text: String) -> Range<Int> {
+        let ns = text as NSString
+        func letter(_ index: Int) -> Bool { index < ns.length && Unicode.Scalar(ns.character(at: index)).map(CharacterSet.letters.contains) == true }
+        var start = range.upperBound
+        while start > range.lowerBound, letter(start - 1) { start -= 1 }
+        guard (1...4).contains(range.upperBound - start), range.upperBound < ns.length, ns.character(at: range.upperBound) == 0x2D else { return range }
+        var end = range.upperBound + 1
+        while letter(end) { end += 1 }
+        return (2...5).contains(end - range.upperBound - 1) && ns.character(at: end - 1) != 0x2D && !(end < ns.length && ns.character(at: end) == 0x2D) ? range.lowerBound..<end : range
     }
     /// Whether `range` opens its line or a sentence: only space, quotes or a
     /// list's marks since the last full stop, question or exclamation mark.

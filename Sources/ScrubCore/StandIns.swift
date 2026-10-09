@@ -1594,12 +1594,9 @@ final class StandIns {
                 owner = persona
                 // "García Lindqvist, María José" keeps its order.
                 if People.naturalOrder(original) != nil || People.surnameFirst(original) != nil { return persona.last + ", " + persona.first }
-                // So does "MORITA Kenji", a family name in capitals before the given name, as a romanised name is written.
-                let words = original.split(separator: " ")
-                if words.count == 2, words[0].count >= 2, words[0] == words[0].uppercased(), words[0] != words[0].lowercased(),
-                   words[1].first?.isUppercase == true, words[1].dropFirst().contains(where: \.isLowercase) {
-                    return persona.last.uppercased() + " " + persona.first
-                }
+                // So does "MORITA Kenji" or "Park Ji-woo", a family name before the given name.
+                let words = original.split(separator: " ").map(String.init)
+                if let order = FamilyFirstNames.order(words) { return FamilyFirstNames.written(order, first: persona.first, last: persona.last) }
                 return persona.full + People.familySuffix(of: original)
             }
             let name = people.name(for: original)
