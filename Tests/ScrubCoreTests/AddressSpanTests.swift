@@ -191,6 +191,23 @@ struct ContactBesideAddressTests {
         #expect(range == whole.location..<NSMaxRange(whole))
     }
 
+    /// An address a contact's reading holds whole, as an email read on to the sentence's end, is left as it was, and the text is scrubbed.
+    @Test func anAddressInsideAContactsReadingIsLeftAsItWas() throws {
+        let text = "Inviare il modulo all'indirizzo email: pratiche@example.it oppure per posta all'indirizzo: Studio Esempio, Via Garibaldi 12, 20121 Milano."
+        let ns = text as NSString
+        func range(_ part: String) -> Range<Int> { let r = ns.range(of: part); return r.location..<NSMaxRange(r) }
+        let email = range("pratiche@example.it"), address = range("Via Garibaldi 12, 20121 Milano")
+        let spans = [Span(range: email, entity: "EMAIL_ADDRESS", score: 1),
+                     Span(range: email.lowerBound..<ns.length, entity: "EMAIL_ADDRESS", score: 0.6),
+                     Span(range: address, entity: "ADDRESS", score: 0.9)]
+        let cut: [Span] = Detector.contactsOutOfAddresses(spans, in: text)
+        #expect(cut.first { $0.entity == "ADDRESS" }?.range == address)
+        let letter = "Gentile Cliente,\n\nPer il rimborso:\n\n1. Chiamare il numero verde 800.555.019.\n2. " + text + "\n\nCordiali saluti"
+        let output = String(decoding: try Scrubber.scrub(Data(letter.utf8), name: "Pasted text", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+        #expect(!output.contains("pratiche@example.it"))
+        #expect(!output.contains("Via Garibaldi 12"))
+    }
+
     /// An address ends at its postcode's city, before the full stop and the sentence after it, in any language.
     @Test(arguments: [UInt64(2), 9])
     func anAddressEndsAtItsCityBeforeTheNextSentence(_ seed: UInt64) throws {

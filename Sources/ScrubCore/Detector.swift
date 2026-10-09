@@ -374,6 +374,8 @@ public final class Detector {
             guard span.entity == "ADDRESS" else { return span }
             var lower = span.range.lowerBound, upper = span.range.upperBound
             for contact in contacts where contact.range.lowerBound <= lower && lower < contact.range.upperBound { lower = contact.range.upperBound }
+            // One a contact's reading holds whole is left as it was, for the overlap to settle.
+            guard lower < upper else { return span }
             let inside = contacts.filter { lower < $0.range.lowerBound && $0.range.lowerBound < upper }.sorted { $0.range.lowerBound < $1.range.lowerBound }
             for (index, contact) in inside.enumerated() {
                 let label = labelled(contact.range.lowerBound, from: lower)
