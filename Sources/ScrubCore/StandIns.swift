@@ -1546,6 +1546,10 @@ final class StandIns {
     private func make(_ entity: String, _ original: String, _ persona: Persona?, _ place: Place? = nil) -> String {
         // An identifier the registry knows takes a fresh one passing the same check, as a form validating it would ask.
         if Recognizers.drawn.contains(entity), let made = identifierStandIn(original) { return made }
+        // Digits read as a phone that end in one check digit set apart ("1234567-2", a cédula's) and pass a kind's check: no
+        // phone writes its last group as one digit, so its stand-in is one of that kind, passing the same check.
+        if entity == "PHONE_NUMBER", original.range(of: #"^\d[\d.]*\d[-/]\d$"#, options: .regularExpression) != nil,
+           Recognizers.candidates(original).contains(where: { $0.verifies && Recognizers.drawn.contains($0.entity) }), let made = identifierStandIn(original) { return made }
         // An address typed all in lowercase is read and rewritten as if cased, and lowercased again.
         if entity == "ADDRESS", let cased = AddressBlock.cased(original) { return make(entity, cased, persona, place).lowercased() }
         // A middle initial ("A", "q.") takes another letter, written as it was.

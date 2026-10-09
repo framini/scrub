@@ -826,8 +826,12 @@ enum Recognizers {
         }, draw: { like, rng in
             let year = like.count == 9 ? Int.random(in: 1920...1953, using: &rng) : Int.random(in: 1955...1999, using: &rng)
             let date = randomDate(&rng)
-            let month = date.month + (Bool.random(using: &rng) ? 50 : 0)
-            let body = twoDigits(year % 100) + twoDigits(month) + twoDigits(date.day) + randomDigits(3, &rng)
+            // A woman's number stays a woman's, a man's a man's: 50 on the month where the original has it.
+            let month = date.month + (like.count > 2 && (like[2].wholeNumberValue ?? 0) >= 5 ? 50 : 0)
+            let head = twoDigits(year % 100) + twoDigits(month) + twoDigits(date.day)
+            // A ten-digit one a multiple of 11 whole: the remainder 10 written 0 is an old number's exception, which a newer check refuses.
+            var body = head + randomDigits(3, &rng)
+            while like.count == 10, number(body) % 11 == 10 { body = head + randomDigits(3, &rng) }
             return characters(like.count == 9 ? body : body + [number(body) % 11 % 10])
         }),
         Recognizer("ISIKUKOOD", keys: ["isikukood", "asmenskodas", "asmens", "ik"], forms: [

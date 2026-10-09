@@ -115,4 +115,30 @@ struct StandInValidityTests {
             #expect(number != "6830 1925 7407" && aadhaar.passes(number), "seed \(seed): \(number)")
         }
     }
+
+    /// A cédula and a birth number, wherever they are read from, take stand-ins passing their checks
+    /// over many seeds: a cédula's digit read as a phone's ("1234567-2") too, and a woman's birth number stays one.
+    @Test func checkedIdentifiersDrawnOverManySeedsPassTheirChecks() throws {
+        let cedula = try #require(Recognizers.all.first { $0.name == "UY_CI" })
+        let birth = try #require(Recognizers.all.first { $0.name == "RODNE_CISLO" })
+        let inputs: [(text: String, name: String, original: String, kind: Recognizer)] = [
+            (#"{"giro": {"monto": "1250.00", "moneda": "UYU"}, "beneficiario": {"nombre_completo": "Odalys Fenwright", "doc_benef": "1.234.567-2"}}"#, "giro.json", "1.234.567-2", cedula),
+            (#"{"giro": {"monto": "1250.00", "moneda": "UYU"}, "beneficiario": {"nombre_completo": "Odalys Fenwright", "doc_benef": "1234567-2"}}"#, "giro.json", "1234567-2", cedula),
+            ("Beneficiaria Odalys Fenwright, cédula 1.234.567-2, Montevideo.\n", "Pasted text", "1.234.567-2", cedula),
+            (#"gw DEBUG req=7f1c body={"customer": {"name": "Ivana Kollárová", "ids": [{"type": "RC", "value": "905714/3183"}]}}"# + "\n", "gateway.log", "905714/3183", birth),
+            (#"{"customer": {"name": "Ivana Kollárová", "rodne_cislo": "905714/3183", "status": "ACTIVE"}}"#, "customer.json", "905714/3183", birth),
+        ]
+        for input in inputs {
+            for seed in UInt64(0)..<40 {
+                let result = try Scrubber.scrub(Data(input.text.utf8), name: input.name, forceFullDetection: false, seed: seed)
+                let made = try #require(result.findings.first { $0.original == input.original }?.standIn, "\(input.name) seed \(seed): \(input.original) not found")
+                #expect(made != input.original && input.kind.passes(made) && input.kind.writes(made), "\(input.name) seed \(seed): \(input.original) → \(made)")
+                #expect(made.count == input.original.count && zip(made, input.original).allSatisfy { $0.isNumber == $1.isNumber }, "\(input.original) → \(made)")
+                if input.kind.name == "RODNE_CISLO" {
+                    let digits = made.compactMap(\.wholeNumberValue)
+                    #expect(digits.count == 10 && (digits.reduce(0) { $0 * 10 + $1 }) % 11 == 0 && digits[2] >= 5, "\(input.name) seed \(seed): a woman's birth number: \(made)")
+                }
+            }
+        }
+    }
 }
