@@ -265,22 +265,37 @@ enum WrittenDates {
         }
         return found
     }()
-    /// The locale whose month names write `word`, and whether in full.
-    static func locale(of word: String) -> (identifier: String, full: Bool)? {
-        let word = word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        for identifier in locales {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: identifier)
-            if (formatter.monthSymbols + formatter.standaloneMonthSymbols).contains(where: { $0.lowercased() == word }) { return (identifier, true) }
-            if (formatter.shortMonthSymbols + formatter.shortStandaloneMonthSymbols).contains(where: { $0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")) == word }) { return (identifier, false) }
-        }
-        return nil
-    }
-    /// Month `month`'s name in the language and form `word` is written in, in its case.
-    static func name(_ month: Int, like word: String) -> String? {
-        guard let (identifier, full) = locale(of: word) else { return nil }
+    private static let formatters: [String: DateFormatter] = Dictionary(uniqueKeysWithValues: locales.map { identifier in
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: identifier)
+        return (identifier, formatter)
+    })
+    /// The locales whose month names write `word`, and whether in full, in the order Scrub reads them.
+    static func locales(of word: String) -> [(identifier: String, full: Bool)] {
+        let word = word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        return locales.compactMap { identifier in
+            let formatter = formatters[identifier]!
+            if (formatter.monthSymbols + formatter.standaloneMonthSymbols).contains(where: { $0.lowercased() == word }) { return (identifier, true) }
+            if (formatter.shortMonthSymbols + formatter.shortStandaloneMonthSymbols).contains(where: { $0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")) == word }) { return (identifier, false) }
+            return nil
+        }
+    }
+    /// How many of the languages that write `word` write month `month` as its stand-in name does.
+    static func readers(_ month: Int, like word: String) -> Int {
+        let found = locales(of: word)
+        let names = found.compactMap { name(month, like: word, in: $0)?.lowercased() }
+        return names.map { name in names.filter { $0 == name }.count }.max() ?? 0
+    }
+    /// Month `month`'s name in the language and form `word` is written in, in its case. A word several
+    /// languages write ("juli" is Dutch, German and Swedish) takes the name most of them write.
+    static func name(_ month: Int, like word: String) -> String? {
+        let found = locales(of: word)
+        let names = found.compactMap { name(month, like: word, in: $0) }
+        return names.max { a, b in names.filter { $0.lowercased() == a.lowercased() }.count < names.filter { $0.lowercased() == b.lowercased() }.count }
+    }
+    private static func name(_ month: Int, like word: String, in found: (identifier: String, full: Bool)) -> String? {
+        let (identifier, full) = found
+        guard let formatter = formatters[identifier] else { return nil }
         let lower = word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
         // A month written as a date writes it ("maja") or as it stands alone ("maj"): the stand-in follows.
         let standalone = !(full ? formatter.monthSymbols : formatter.shortMonthSymbols).contains { $0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")) == lower }

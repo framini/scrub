@@ -1898,6 +1898,13 @@ final class StandIns {
             } else {
                 // Nor its real month or day: a "birth_month" or "birth_day" read off it would write that back.
                 for _ in 0..<8 where month == realMonth { month = Int.random(in: 1...12, using: &rng) }
+                // A month name several languages write ("juli", "maj") takes a month that reads in as many of them as any does.
+                if let word = original.split(whereSeparator: { !$0.isLetter }).map(String.init).first(where: { WrittenDates.months[$0.lowercased()] != nil }),
+                   WrittenDates.locales(of: word).count > 1 {
+                    let readers = Dictionary(uniqueKeysWithValues: (1...12).filter { $0 != realMonth }.map { ($0, WrittenDates.readers($0, like: word)) })
+                    let best = readers.filter { $0.value == readers.values.max() }.keys.sorted()
+                    if !best.contains(month) { month = best[Int.random(in: 0..<best.count, using: &rng)] }
+                }
                 for _ in 0..<8 where day == realDay { day = Int.random(in: 1...28, using: &rng) }
             }
         }
@@ -1946,6 +1953,11 @@ final class StandIns {
         func monthWord(like word: String) -> String {
             // A month written in another language ("März", "marzo", "maja") is written in it again.
             if !full.contains(word.lowercased()), !short.contains(word.lowercased()), word.lowercased() != "sept", let name = WrittenDates.name(month, like: word) { return name }
+            // One English shares with other languages ("august", "nov") takes the name they share, when English writes it too.
+            if word.lowercased() != "sept", let name = WrittenDates.name(month, like: word), (full + short).contains(name.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) {
+                let made = word.hasSuffix(".") ? name : name.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                return word == word.uppercased() ? made.uppercased() : word == word.lowercased() ? made.lowercased() : made
+            }
             let name = word.count > 3 && word.lowercased() != "sept" ? formatter.monthSymbols[month - 1] : formatter.shortMonthSymbols[month - 1]
             return word == word.uppercased() ? name.uppercased() : word == word.lowercased() ? name.lowercased() : name
         }
@@ -1977,6 +1989,8 @@ final class StandIns {
                 let ending = (11...13).contains(day % 100) ? "th" : [1: "st", 2: "nd", 3: "rd"][day % 10] ?? "th"
                 output[rest[0] + 1] = runs[rest[0] + 1] == runs[rest[0] + 1].uppercased() ? ending.uppercased() : ending
             }
+            // "1er mars": only the first of a month is written with that ending.
+            if rest[0] + 1 < runs.count, runs[rest[0] + 1].lowercased() == "er", day != 1 { output[rest[0] + 1] = "" }
         } else if yearIndex < rest[0] {
             output[rest[0]] = padded(month, like: runs[rest[0]])
             output[rest[1]] = padded(day, like: runs[rest[1]])

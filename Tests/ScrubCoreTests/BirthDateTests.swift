@@ -162,3 +162,60 @@ func birthDatesUnderOtherLanguagesKeysAreReplaced(_ format: String) throws {
         #expect(try JSONSerialization.jsonObject(with: result.output) is [String: Any])
     }
 }
+
+private let languages = ["en_US_POSIX", "de", "nl", "sv", "da", "nb", "fr", "es", "it", "pt", "pl", "cs", "fi", "tr", "ro", "hu"]
+
+/// A birth date written with its month's name, in any of a dozen languages and in each month, takes a
+/// stand-in whose month is a real month in that language and form ("4 juli 1975" is Dutch, German and
+/// Swedish at once, so its stand-in reads in all of them), and never its own month.
+@Test(arguments: languages)
+func aWrittenMonthsStandInIsAMonthInItsLanguage(_ identifier: String) {
+    /// Every month name `identifier` writes, in full and short, in a date and standing alone.
+    func all(_ identifier: String) -> Set<String> {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: identifier)
+        return Set((formatter.monthSymbols + formatter.standaloneMonthSymbols + formatter.shortMonthSymbols + formatter.shortStandaloneMonthSymbols)
+            .map { $0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")) })
+    }
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: identifier)
+    let trim = CharacterSet(charactersIn: ".")
+    func names(_ symbols: [String]) -> [String] { symbols.map { $0.lowercased().trimmingCharacters(in: trim) } }
+    let full = names(formatter.monthSymbols), short = names(formatter.shortMonthSymbols)
+    for word in Set(full + short) where word.count >= 3 && word.allSatisfy(\.isLetter) {
+        // A word that is a month here and in other languages too ("maj", "nov") may be any of them: its
+        // stand-in must be a month in one of them. One only this language writes must be a month in it.
+        let writers = languages.filter { all($0).contains(word) }
+        var accepted = Set<String>()
+        if writers.count > 1 { for other in writers { accepted.formUnion(all(other)) } }
+        if full.contains(word) { accepted.formUnion(full) }
+        if short.contains(word) { accepted.formUnion(short) }
+        let own = Set([full.firstIndex(of: word), short.firstIndex(of: word)].compactMap { $0 })
+        for seed in UInt64(1)...6 {
+            let original = "4 \(word) 1975"
+            let made = Job(seed: seed).replacement(for: "DATE_OF_BIRTH", original: original)
+            let parts = made.split(separator: " ")
+            #expect(parts.count == 3, "\(identifier) \(original) -> \(made)")
+            guard parts.count == 3 else { continue }
+            let month = parts[1].lowercased().trimmingCharacters(in: trim)
+            #expect(accepted.contains(month), "\(identifier) \(original) -> \(made)")
+            #expect(own.allSatisfy { full[$0] != month && short[$0] != month }, "\(identifier) \(original) -> \(made)")
+        }
+    }
+}
+
+/// "4 juli 1975" reads as Dutch, German and Swedish at once: its stand-in's month reads in all three.
+@Test func aMonthSeveralLanguagesWriteTakesOneTheyAllRead() {
+    let readers = ["nl", "de", "sv"].map { identifier in
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: identifier)
+        return Set(formatter.monthSymbols.map { $0.lowercased() })
+    }
+    for seed in UInt64(1)...12 {
+        for original in ["4 juli 1975", "Geboortedatum: 4 juli 1975", "21 juni 1988"] {
+            let made = Job(seed: seed).replacement(for: "DATE_OF_BIRTH", original: original)
+            let month = made.split(separator: " ").dropLast().last.map { $0.lowercased() } ?? ""
+            #expect(readers.allSatisfy { $0.contains(month) }, "\(original) -> \(made)")
+        }
+    }
+}
