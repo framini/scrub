@@ -59,6 +59,9 @@ public enum Doubt: String, Sendable {
     /// Not sure enough to replace, too likely to ignore: left as written
     /// until a person chooses.
     case unconfirmed
+    /// A word spelled as part of a name Scrub replaced elsewhere, written where
+    /// it may be an ordinary word: left as written until a person chooses.
+    case nameResidue
 
     /// The confidence a place with this doubt carries, below `Finding.reviewBelow`.
     var confidence: Double { 0.5 }

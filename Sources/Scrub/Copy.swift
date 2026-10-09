@@ -67,6 +67,7 @@ enum Copy {
         case .unconfirmed: finding.entity == "ADDRESS" ? "Looks like a street or a house, but nothing beside it says it is an address"
             : "Looks like a name, but nothing else in the text agrees"
         case .unclearOwner: "More than one person nearby could own this; it follows the first"
+        case .nameResidue: "Part of a name Scrub replaced elsewhere"
         case nil: finding.suspected ? "Written like a value Scrub replaced, but not surely it" : nil
         }
     }

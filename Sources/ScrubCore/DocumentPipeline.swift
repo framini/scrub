@@ -276,6 +276,8 @@ enum DocumentPipeline {
                 values[index] = DocumentValue(text: value.text, marks: value.marks, unresolved: value.unresolved + suspects, proposals: value.proposals, held: value.held)
             }
         }
+        // No part of a name found stays anywhere unseen: replaced where a name is, asked about where it may be a word.
+        try ResidueGate.run(&values, leaves: leaves, job: job)
         // What is left as written gets the stand-in it would take, drawn in
         // document order once the rounds are done, so review can offer it.
         for index in values.indices where !values[index].unresolved.isEmpty || !values[index].held.isEmpty {
