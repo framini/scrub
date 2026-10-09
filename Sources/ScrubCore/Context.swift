@@ -525,15 +525,20 @@ public enum KeyHints {
         "PASSPORT": "passport_number", "PAS": "passport_number", "PP": "passport_number", "PASAPORTE": "passport_number", "PASSAPORTE": "passport_number",
         "PASSEPORT": "passport_number", "PASSAPORTO": "passport_number", "PASSPORTNUMBER": "passport_number",
         "NIN": "nin", "BVN": "bvn", "SSN": "ssn", "SIN": "sin", "JMBG": "jmbg", "OIB": "oib", "EMSO": "jmbg", "PESEL": "pesel", "IQAMA": "iqama", "CNIC": "cnic",
-        "AADHAAR": "aadhaar", "PAN": "pannumber", "DL": "driver_license_number", "LICENSE": "driver_license_number", "DRIVERLICENSE": "driver_license_number"]
+        "AADHAAR": "aadhaar", "PAN": "pannumber", "DL": "driver_license_number", "LICENSE": "driver_license_number", "DRIVERLICENSE": "driver_license_number",
+        // German records' own words: an ID card, a passport, a driving licence ("Führerschein" with its umlaut dropped or spelled out).
+        "PERSONALAUSWEIS": "personalausweisnummer", "AUSWEIS": "ausweisnummer", "REISEPASS": "reisepassnummer",
+        "FHRERSCHEIN": "fuehrerscheinnummer", "FUHRERSCHEIN": "fuehrerscheinnummer", "FUEHRERSCHEIN": "fuehrerscheinnummer"]
     /// Keys whose value is a record's type, and keys whose value is the number of that type, when side by side.
     private static let pairTypeKeys: Set<String> = ["type", "kind", "tipo", "tip", "typ", "tipe", "vrsta", "idtype", "idkind", "typeid", "documenttype", "doctype", "documentkind",
                                                     "tipodocumento", "tipodoc", "tipodedocumento", "tipoidentificacion", "tipodeidentificacion", "tipoid", "identtype", "identificationtype",
-                                                    "identifiertype", "identitytype", "typedocument", "typedepiece", "vrstadokumenta", "typdokumentu", "dokumenttyp"]
+                                                    "identifiertype", "identitytype", "typedocument", "typedepiece", "vrstadokumenta", "typdokumentu", "dokumenttyp",
+                                                    "art", "dokumententyp", "ausweistyp", "ausweisart", "dokumentart"]
     private static let pairValueKeys: Set<String> = ["value", "val", "valor", "key", "chave", "clave", "number", "numero", "num", "no", "nr", "nro", "broj", "numer", "nummer", "idvalue", "idnumber", "idno",
                                                      "documentnumber", "docnumber", "documentno", "docno", "numerodocumento", "numerodoc", "nrodocumento", "nrodoc",
                                                      "numerodedocumento", "numeroidentificacion", "numerodeidentificacion", "identvalue", "identnumber", "identificationnumber",
-                                                     "identifiervalue", "identifiernumber", "documentvalue", "brojdokumenta", "numeroid", "dokumentnummer"]
+                                                     "identifiervalue", "identifiernumber", "documentvalue", "brojdokumenta", "numeroid", "dokumentnummer",
+                                                     "wert", "numéro", "ausweisnummer", "dokumentennummer"]
     /// The key a type field's code stands for: "DNI", "C.C.", "Passport". Nil for a code no table knows.
     static func identifierCode(_ code: String) -> String? {
         guard code.utf16.count <= 32 else { return nil }

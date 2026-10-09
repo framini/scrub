@@ -544,6 +544,32 @@ struct TypedIdentifierTests {
         #expect(table.output.hasPrefix("first_name,last_name,ident_type,ident_value,estado\n") && table.output.contains(",CC,") && table.output.contains(",ACTIVO\n"), "\(table.output)")
     }
 
+    @Test func aGermanOrFrenchTypeAndNumberPairReadsTheNumberAsItsKind() throws {
+        let json = #"""
+        {"vorgang": "KYC-2026-0193", "status": "GEPRUEFT",
+         "person": {"vorname": "Liesel", "nachname": "Brandvold", "geburtsdatum": "1987-06-21",
+          "ausweis": {"typ": "Personalausweis", "nummer": "T7K2M9R41", "ablauf": "2031-03-14"},
+          "dokumente": [{"art": "REISEPASS", "wert": "C01X00T47", "ausstellungsland": "D"}, {"dokumententyp": "AUSWEIS", "nummer": "L01X00T47"},
+                        {"Typ": "Führerschein", "Nummer": "B072RRE2I55"}, {"type": "ID_CARD", "nummer": "M8RTV4PL1"}],
+          "pièces": [{"type": "PASSEPORT", "numéro": "18AB52731"}, {"tipo": "PASSAPORTO", "numero": "YA4827361"}]}}
+        """#
+        let out = try Self.scrub(json, name: "pruefung.json")
+        for value in ["T7K2M9R41", "C01X00T47", "L01X00T47", "B072RRE2I55", "M8RTV4PL1", "18AB52731", "YA4827361"] {
+            #expect(!out.output.contains(value), "\(value) kept: \(out.output)")
+        }
+        for kept in [#""vorgang": "KYC-2026-0193""#, #""status": "GEPRUEFT""#, #""typ": "Personalausweis""#, #""ablauf": "2031-03-14""#, #""art": "REISEPASS""#, #""ausstellungsland": "D""#] {
+            #expect(out.output.contains(kept), "\(kept): \(out.output)")
+        }
+        let before = try Self.strings(json), after = try Self.strings(out.output)
+        #expect(before.count == after.count)
+        for (original, made) in zip(before, after) where original != made && original.contains(where: \.isNumber) && !original.contains(" ") && !original.contains("-") {
+            #expect(Self.shape(original) == Self.shape(made), "\(original) → \(made)")
+        }
+        // A kind no table knows still has its number asked about.
+        let unknown = try Self.scrub(#"{"person": {"vorname": "Liesel", "nachname": "Brandvold", "dokument": {"art": "ZQXV", "wert": "T7K2M9R41"}}}"#, name: "pruefung.json")
+        #expect(PersonRecordIdentifierTests.seen("T7K2M9R41", unknown), "\(unknown.output)")
+    }
+
     @Test func aTypeNoTableKnowsStillHasItsValueAskedAbout() throws {
         let json = #"{"cliente": {"nombre": "Rosa Mendieta", "correo": "rosa.m@example.com", "identificacion": [{"tipo": "ZQX", "numero": "81726354", "vigente": true}]}}"#
         let out = try Self.scrub(json, name: "cliente.json")
