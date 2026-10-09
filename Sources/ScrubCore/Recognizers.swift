@@ -1494,6 +1494,25 @@ enum Recognizers {
             let head = like.count == 12 ? numbers(Array(like.prefix(4))) ?? randomDigits(4, &rng) : randomDigits(4, &rng)
             return characters(head + randomDigits(8, &rng))
         }),
+        // The Philippines' PhilSys number: sixteen digits, written in fours, with no check of its own.
+        Recognizer("PH_PSN", keys: ["philsys", "philsysno", "philsysnumber", "psn", "psnno", "philsyscardnumber", "pcn", "nationalidph"], forms: [
+            .init(#"\b\d{4}-\d{4}-\d{4}-\d{4}\b"#, 0.3),
+            .init(#"\b\d{16}\b"#, 0.05),
+        ], context: ["philsys", "psn", "pcn", "philsys number", "philippine identification", "philid", "national id"], verifies: false, separators: " -", check: { characters in
+            numbers(characters).map { $0.count == 16 && $0 != Array(repeating: $0[0], count: 16) } ?? false
+        }, draw: { _, rng in
+            characters([Int.random(in: 1...9, using: &rng)] + randomDigits(15, &rng))
+        }),
+        // Morocco's national identity card: a region's one or two letters and up to six digits ("BE123456"), with no check of its own.
+        Recognizer("MA_CIN", keys: ["cin", "cinnumber", "cinno", "numerocin", "cnie", "cnienumber", "numerocnie"], forms: [
+            .init(#"\b[A-Z]{1,2}\d{5,6}\b"#, 0.05),
+        ], context: ["cin", "cnie", "carte nationale", "carte d'identité nationale", "البطاقة الوطنية"], verifies: false, separators: " ", check: { characters in
+            let letters = characters.prefix { $0.isLetter }, digits = characters.dropFirst(letters.count)
+            return (1...2).contains(letters.count) && (5...6).contains(digits.count) && digits.allSatisfy(\.isNumber) && digits.contains { $0 != "0" }
+        }, draw: { like, rng in
+            let head = like.prefix { $0.isLetter }, count = min(6, max(5, like.count - head.count))
+            return ((1...2).contains(head.count) ? Array(head) : [pick(letters, &rng)]) + characters([Int.random(in: 1...9, using: &rng)] + randomDigits(count - 1, &rng))
+        }),
         Recognizer("SG_UEN", keys: ["uen", "uennumber", "uenno"], forms: [
             .init(#"\b\d{8}[A-Z]\b"#, 0.1),
             .init(#"\b(?:18|19|20)\d{7}[A-Z]\b"#, 0.1),

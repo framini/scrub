@@ -420,3 +420,73 @@ struct UnlabelledIdentifierTests {
         #expect(result.findings.isEmpty, "[\(path)] \(result.findings.map(\.original))")
     }
 }
+
+/// An identifier beside a person found, under a key no rule knows, is never kept
+/// unseen: it is replaced, or asked about as an identifier in that person's record.
+struct PersonRecordIdentifierTests {
+    struct Out {
+        let output: String
+        let result: ScrubResult
+        var findings: [(original: String, suspected: Bool, doubt: Doubt?)] { (result.review?.findings ?? []).map { ($0.original, $0.suspected, $0.doubt) } }
+    }
+    static func scrub(_ text: String, name: String, seed: UInt64 = 5) throws -> Out {
+        let result = try Scrubber.scrub(Data(text.utf8), name: name, forceFullDetection: false, seed: seed)
+        return Out(output: String(decoding: result.output, as: UTF8.self), result: result)
+    }
+    static func seen(_ value: String, _ out: Out) -> Bool {
+        !out.output.contains(value) || out.findings.contains { $0.original == value && $0.suspected && $0.doubt == .personIdentifier }
+    }
+
+    @Test func anIdentifierUnderAnUnknownKeyBesideAPersonIsAskedAbout() throws {
+        let json = #"{"request_id": "8812734455", "case_id": "77120034", "created_at": "2026-03-01T10:00:00Z", "amount": "1250.00", "version": "2.4.1", "subject": {"firstName": "Liesel", "lastName": "Okafor", "birthDate": "1987-06-21", "natRegNo": "4382-1957-6034-2018", "status": "VERIFIED", "score": "98"}}"#
+        let out = try Self.scrub(json, name: "response.json")
+        #expect(Self.seen("4382-1957-6034-2018", out), "\(out.output)")
+        for kept in [#""request_id": "8812734455""#, #""case_id": "77120034""#, #""amount": "1250.00""#, #""version": "2.4.1""#, #""status": "VERIFIED""#, #""score": "98""#] {
+            #expect(out.output.contains(kept), "\(kept): \(out.output)")
+        }
+        #expect(!out.findings.contains { $0.doubt == .personIdentifier && $0.original != "4382-1957-6034-2018" }, "\(out.findings.map(\.original))")
+        // With no person in its record, it is no one's to ask about.
+        let alone = try Self.scrub(#"{"batch": {"label": "nightly", "natRegNo": "4382-1957-6034-2018"}}"#, name: "response.json")
+        #expect(!alone.findings.contains { $0.doubt == .personIdentifier }, "\(alone.output)")
+    }
+
+    @Test func aCSVColumnOfIdentifiersInPeoplesRowsIsAskedAbout() throws {
+        let csv = "row,surname,given,birth,carte_ref,branch\n1,Benmoussa,Youssef,1990-05-12,BE123456,Centre\n2,Alaoui,Samira,1985-11-02,J987654,Agdal\n3,Tazi,Karim,1979-01-30,AB34567,Medina\n"
+        let out = try Self.scrub(csv, name: "people.csv")
+        for value in ["BE123456", "J987654", "AB34567"] { #expect(Self.seen(value, out), "\(value): \(out.output)") }
+        #expect(out.output.hasPrefix("row,surname,given,birth,carte_ref,branch\n1,") && out.output.contains(",Centre\n2,"), "\(out.output)")
+    }
+
+    /// For generated records under keys no rule knows, every identifier beside a
+    /// person is replaced or asked about, and every non-personal value stays unasked.
+    @Test func generatedRecordsLeaveNoIdentifierUnseen() throws {
+        let run = PropertyRun("personRecordIDs")
+        defer { run.finish() }
+        let keys = ["xrefNo", "regNumber", "holder_ident", "bureauKey", "cardRef", "fileNo", "docNum", "member_tag", "kennung", "numeroRegistro"]
+        let given = ["Liesel", "Tomasz", "Ines", "Kwame", "Mirela", "Haruto", "Oona", "Dario"], family = ["Okafor", "Brandvold", "Szekely", "Achterberg", "Marangoni", "Quispe"]
+        for index in 0..<run.count {
+            var gen = Gen(seed: run.seed(index))
+            let key = gen.choose(keys)
+            let value: String = {
+                switch gen.int(0...3) {
+                case 0: return gen.string("0123456789", count: 4) + "-" + gen.string("0123456789", count: 4) + "-" + gen.string("0123456789", count: 4)
+                case 1: return gen.string("ABCDEFGHJKLMNPRSTUVWXYZ", count: gen.int(1...2)) + String(gen.int(1...9)) + gen.string("0123456789", count: 5)
+                case 2: return String(gen.int(1...9)) + gen.string("0123456789", count: gen.int(7...11))
+                default: return gen.string("0123456789", count: 3) + " " + gen.string("0123456789", count: 3) + " " + gen.string("0123456789", count: 3)
+                }
+            }()
+            let first = gen.choose(given), last = gen.choose(family)
+            let format = ["json", "csv", "xml"][index % 3]
+            let text: String
+            switch format {
+            case "json": text = #"{"request_id": "req_\#(gen.int(1000...9999))", "status": "complete", "subject": {"first_name": "\#(first)", "last_name": "\#(last)", "\#(key)": "\#(value)", "updated_at": "2026-04-0\#(gen.int(1...9))"}}"#
+            case "csv": text = "first_name,last_name,\(key),status\n\(first),\(last),\(value),complete\n"
+            default: text = "<records><subject><firstName>\(first)</firstName><lastName>\(last)</lastName><\(key)>\(value)</\(key)><status>complete</status></subject></records>"
+            }
+            let out = try Self.scrub(text, name: "record." + format, seed: run.seed(index))
+            #expect(Self.seen(value, out), "\(key)=\(value) left unseen in \(format): \(out.output)\nseed \(run.seed(index))")
+            #expect(out.output.contains("complete"), "\(out.output)")
+            #expect(!out.findings.contains { finding in finding.doubt == .personIdentifier && ["complete", "2026", "req_"].contains { finding.original.hasPrefix($0) } }, "\(out.findings.map(\.original))")
+        }
+    }
+}

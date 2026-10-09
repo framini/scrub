@@ -62,6 +62,9 @@ public enum Doubt: String, Sendable {
     /// A word spelled as part of a name Scrub replaced elsewhere, written where
     /// it may be an ordinary word: left as written until a person chooses.
     case nameResidue
+    /// A value written like an identifier beside a person Scrub found, that
+    /// no rule read: left as written until a person chooses.
+    case personIdentifier
 
     /// The confidence a place with this doubt carries, below `Finding.reviewBelow`.
     var confidence: Double { 0.5 }

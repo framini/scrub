@@ -68,6 +68,7 @@ enum Copy {
             : "Looks like a name, but nothing else in the text agrees"
         case .unclearOwner: "More than one person nearby could own this; it follows the first"
         case .nameResidue: "Part of a name Scrub replaced elsewhere"
+        case .personIdentifier: "Looks like an identifier in this person's record"
         case nil: finding.suspected ? "Written like a value Scrub replaced, but not surely it" : nil
         }
     }

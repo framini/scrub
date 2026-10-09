@@ -278,6 +278,8 @@ enum DocumentPipeline {
         }
         // No part of a name found stays anywhere unseen: replaced where a name is, asked about where it may be a word.
         try ResidueGate.run(&values, leaves: leaves, job: job)
+        // Nor does an identifier beside a person found that no rule read.
+        PersonIdentifiers.run(&values, leaves: leaves)
         // What is left as written gets the stand-in it would take, drawn in
         // document order once the rounds are done, so review can offer it.
         for index in values.indices where !values[index].unresolved.isEmpty || !values[index].held.isEmpty {

@@ -89,6 +89,8 @@ let recognizerSamples: [String: String] = [
     "TR_LICENSE_PLATE": "34-AB-1234",
     "PH_TIN": "123-456-782",
     "PH_UMID": "1234-5678901-2",
+    "PH_PSN": "4821-0937-5562-1048",
+    "MA_CIN": "BK204718",
     "SG_UEN": "201912345R",
     "ABN": "18 123 456 789",
     "ACN": "123 456 780",
@@ -918,4 +920,17 @@ func aPersonsOwnNumberIsReplacedInItsKind(_ name: String, _ key: String, _ phras
         }
         #expect(output.contains(#"<Producto tipo="hipoteca">HIP-2207</Producto>"#) && output.contains(#"<Documento tipo="NIE">"#), "\(output)")
     }
+}
+
+@Test func moroccanAndPhilippineIdentifiersAreReplacedUnderTheirKeys() throws {
+    let csv = "id,nom,prenom,date_naissance,cin\n1,Benmoussa,Youssef,1990-05-12,BE123456\n2,Alaoui,Samira,1985-11-02,J987654\n"
+    let json = #"{"request_id": "c1d9a2f0", "subject": {"firstName": "Liesel", "lastName": "Okafor", "philsysNo": "4382-1957-6034-2018", "tinNo": "123-456-789-000"}}"#
+    for (text, name, gone) in [(csv, "people.csv", ["BE123456", "J987654"]), (json, "response.json", ["4382-1957-6034-2018", "123-456-789-000"])] {
+        let result = try Scrubber.scrub(Data(text.utf8), name: name, forceFullDetection: false, seed: 3)
+        let output = String(decoding: result.output, as: UTF8.self)
+        for value in gone { #expect(!output.contains(value), "\(value): \(output)") }
+    }
+    let psn = try #require(Recognizers.all.first { $0.name == "PH_PSN" }), cin = try #require(Recognizers.all.first { $0.name == "MA_CIN" })
+    #expect(psn.passes("4382-1957-6034-2018") && !psn.passes("4382-1957-6034") && !psn.passes("0000-0000-0000-0000"))
+    #expect(cin.passes("BE123456") && cin.passes("J98765") && !cin.passes("ABC12345") && !cin.passes("B000000"))
 }
