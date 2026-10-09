@@ -106,3 +106,67 @@ import Testing
         #expect(json.components(separatedBy: company).count == 3, "\(json)")
     }
 }
+
+/// A place a reader only guessed, in a language Scrub reads the words of, is replaced only as a place Scrub knows,
+/// beside a postcode or an address, or written as a town; one made of the language's own words stays and is asked about.
+@Suite struct ForeignPlaceTests {
+    static func gated(_ text: String, _ places: [String]) -> (kept: [String], doubted: [String]) {
+        let spans = places.map { place in
+            let range = (text as NSString).range(of: place)
+            return Span(range: range.location..<NSMaxRange(range), entity: "LOCATION", score: 0.6)
+        }
+        let address = (text as NSString).range(of: "Lindenstraße 14, 34117 Kassel")
+        let all = address.location == NSNotFound ? spans : spans + [Span(range: address.location..<NSMaxRange(address), entity: "ADDRESS", score: 0.9)]
+        let gated = NameEvidence.gate(all, doubts: [], evidenced: [], in: text, document: nil)
+        return (gated.spans.filter { $0.entity == "LOCATION" }.map { TextRanges.substring(text, $0.range) }, gated.doubts.map { TextRanges.substring(text, $0.range) })
+    }
+
+    @Test func aGermanLettersOwnWordsAreNoPlace() {
+        let letter = """
+        Sehr geehrte Frau Albrecht,
+        bitte senden Sie uns eine Kopie Ihres Personalausweises sowie einen aktuellen Nachweis Ihrer Anschrift. Den Abschlag für Strom und Wasser haben wir erhalten.
+        Sie sind geboren in Kassel und wohnen in der Lindenstraße 14, 34117 Kassel. Ihre Tochter studiert in Essen, Ihr Sohn arbeitet in Leipzig.
+        """
+        let (kept, doubted) = Self.gated(letter, ["Kopie Ihres", "Strom", "Kassel", "Essen", "Leipzig"])
+        #expect(doubted.contains("Kopie Ihres") && doubted.contains("Strom"), "\(doubted)")
+        #expect(!kept.contains("Kopie Ihres") && !kept.contains("Strom"), "\(kept)")
+        for town in ["Kassel", "Essen", "Leipzig"] { #expect(kept.contains(town), "\(town): \(kept)") }
+    }
+
+    @Test func aDutchAndASpanishWordAreNoPlaceButAPostcodesTownIs() {
+        let dutch = "Wij hebben uw kopie van het paspoort ontvangen, maar de achterkant ontbreekt nog. Stuur deze alstublieft opnieuw naar 3511 Brakeldorp."
+        let (kept, doubted) = Self.gated(dutch, ["achterkant", "Brakeldorp"])
+        #expect(doubted == ["achterkant"] && kept == ["Brakeldorp"], "\(kept) \(doubted)")
+        let spanish = "Hemos recibido la copia de su documento de identidad, pero falta el reverso. Por favor envíelo de nuevo a la oficina de Valdemoro Alto."
+        let (keptSpanish, doubtedSpanish) = Self.gated(spanish, ["Por favor", "Valdemoro Alto"])
+        #expect(doubtedSpanish == ["Por favor"] && keptSpanish == ["Valdemoro Alto"], "\(keptSpanish) \(doubtedSpanish)")
+    }
+}
+
+/// Short words of the text's own language a reader ran into a name ("Ik ben", "dla", "geboren") are no part of it.
+@Suite struct ForeignSmallWordTests {
+    @Test func aFormsSmallWordsBeforeANameStay() throws {
+        let form = """
+        Aanvraagformulier rekening, ontvangen op het kantoor in de stad.
+        Naam: Ik ben Lotte Brakenhoff
+        Opmerking: de klant belt morgen terug over de verlenging van het contract.
+        """
+        let (result, output) = try ForeignWordTests.scrub(form)
+        #expect(output.contains("Naam: Ik ben "), "\(output)")
+        for name in ["Lotte", "Brakenhoff"] { #expect(!output.contains(name), "\(name) → \(output)") }
+        #expect(!result.findings.contains { $0.original.hasPrefix("Ik") }, "\(result.findings.map(\.original))")
+    }
+
+    @Test func aDutchLettersOwnWordsAreNoOneToAskAbout() throws {
+        let letter = """
+        Goedemiddag,
+        Ik ben de nieuwe contactpersoon voor uw dossier. Ik ben bereikbaar op werkdagen tussen negen en vijf.
+        Met vriendelijke groet,
+        Femke Brakenhoff
+        """
+        let (result, output) = try ForeignWordTests.scrub(letter)
+        #expect(output.contains("Ik ben de nieuwe") && output.contains("Ik ben bereikbaar"), "\(output)")
+        #expect(!output.contains("Brakenhoff"), "\(output)")
+        #expect(!result.findings.contains { $0.original == "Ik ben" }, "\(result.findings.map(\.original))")
+    }
+}

@@ -119,9 +119,9 @@ public final class Detector {
             }
             // A person only guessed is replaced only with evidence where the text's language says what its words are.
             // A value under a key that names a person is evidence enough ("cliente": "Lucía").
-            let whole = Self.wholeName(kept, in: text)
+            let whole = NameEvidence.withoutLeadingWords(Self.wholeName(kept, in: text), in: text, document: language)
             if NameEvidence.namesPerson(key) { return whole }
-            let gated = NameEvidence.gate(whole, doubts: doubts, evidenced: evidenced, in: text, document: language)
+            let gated = NameEvidence.gate(whole, doubts: doubts, evidenced: evidenced, in: text, document: language, key: key)
             let given = Self.givenNamesAlone(gated.spans, doubts: gated.doubts, in: text, document: language)
             doubts = given.doubts
             return given.spans

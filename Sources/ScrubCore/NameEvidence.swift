@@ -207,6 +207,70 @@ enum NameEvidence {
         }
     }
 
+    /// "Ik ben Lotte", "dla Jana Nowaka", "geboren Schulz": a word of the text's language written in small letters,
+    /// with only a name's capitalised words after it, is no part of the name, nor is any word before it. A surname's
+    /// particles ("van", "de") are, and a name written all in small letters is left as it was found. Only where the
+    /// language is one Scrub has the words of: in English a first name is written in small letters too often ("rose Martinez").
+    static func withoutLeadingWords(_ spans: [Span], in text: String, document: NLLanguage?) -> [Span] {
+        spans.map { span in
+            guard ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(span.entity), span.url == nil else { return span }
+            let words = NameShape.words(span.range, in: text)
+            guard words.count >= 2, let cut = words.indices.dropLast().last(where: { index in
+                let word = words[index].text
+                return word == word.lowercased() && word.allSatisfy(\.isLetter) && !particles.contains(word)
+            }), words[(cut + 1)...].allSatisfy({ $0.text.first?.isUppercase == true }) else { return span }
+            guard let language = language(around: span.range, in: text, document: document), language != .english, readable(language),
+                  isLowercaseWord(words[cut].text, in: language) else { return span }
+            return Span(range: words[cut + 1].range.lowerBound..<span.range.upperBound, entity: span.entity, score: span.score)
+        }
+    }
+
+    /// "Ik ben", "dla": short words of the text's language, two or more or one in small letters, are no one to ask about.
+    /// One alone with its capital ("Ben") may still be someone.
+    static func smallWords(_ span: Span, in text: String, document: NLLanguage?) -> Bool {
+        guard ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(span.entity) else { return false }
+        let words = NameShape.words(span.range, in: text)
+        guard !words.isEmpty, words.count >= 2 || words[0].text == words[0].text.lowercased(),
+              let language = language(around: span.range, in: text, document: document), language != .english, readable(language) else { return false }
+        return words.allSatisfy { $0.text.count <= 3 && isLowercaseWord($0.text, in: language) }
+    }
+
+    // MARK: Places
+
+    private static let postcodeBefore = TextPattern(#"(?<![\p{L}\p{N}])(?:[A-Z]{1,2}-)?\d{4,5}(?:[ \t]?[A-Z]{2})?[ \t]+$"#)
+    private static let postcodeAfter = TextPattern(#"^,?[ \t]+(?:[A-Z]{1,2}-)?\d{4,5}(?![\p{L}\p{N}])"#)
+    /// Whether a place has more to it than a reader's guess: a place Scrub knows ("Leipzig"), a postcode beside it
+    /// ("34117 Kassel"), an address it touches or that names it, or a key that names a place.
+    static func placed(_ span: Span, among spans: [Span], key: String?, in text: String) -> Bool {
+        if let hint = KeyHints.hint(key), hint == "LOCATION" || hint == "ADDRESS" { return true }
+        let ns = text as NSString
+        if AddressBlock.knownPlace(ns.substring(with: NSRange(location: span.range.lowerBound, length: span.range.count))) { return true }
+        let start = max(0, span.range.lowerBound - 16), end = min(ns.length, span.range.upperBound + 16)
+        if !TextRanges.matches(postcodeBefore, in: ns.substring(with: NSRange(location: start, length: span.range.lowerBound - start))).isEmpty
+            || !TextRanges.matches(postcodeAfter, in: ns.substring(with: NSRange(location: span.range.upperBound, length: end - span.range.upperBound))).isEmpty { return true }
+        // An address it touches, or one elsewhere in the text that ends in it ("geboren in Kassel" beside "Lindenstraße 14, 34117 Kassel").
+        let place = ns.substring(with: NSRange(location: span.range.lowerBound, length: span.range.count))
+        return spans.contains { other in
+            other.entity == "ADDRESS" && (other.range.lowerBound <= span.range.upperBound + 3 && span.range.lowerBound <= other.range.upperBound + 3
+                || TextRanges.substring(text, other.range).split(whereSeparator: { !$0.isLetter }).suffix(3).joined(separator: " ").hasSuffix(place.split(whereSeparator: { !$0.isLetter }).joined(separator: " ")))
+        }
+    }
+    /// German's prepositions of place, which take a town's name with no article ("in Kassel", "nach Kassel") and a noun with one ("in der Stadt").
+    private static let placePrepositions: Set<String> = ["in", "nach", "aus", "bei", "von", "ab", "über", "nahe"]
+    /// Whether every word of the span is one of the language's own: in small letters, or, in German, which writes
+    /// its nouns with a capital, as written ("Strom"). In German a preposition of place right before it makes it a town ("in Essen").
+    /// A place's own name the dictionary holds only with its capital is no plain word.
+    static func plainWords(_ range: Range<Int>, in text: String, language: NLLanguage) -> Bool {
+        let words = TextRanges.substring(text, range).split(whereSeparator: { !$0.isLetter }).map(String.init)
+        guard !words.isEmpty else { return false }
+        if language == .german, Context.words(before: range.lowerBound, in: text, limit: 1).first.map({ placePrepositions.contains($0.lowercased()) }) == true { return false }
+        return words.allSatisfy { word in
+            let lower = word.lowercased()
+            if language == .english || !readable(language) { return NameLists.isOrdinary(lower) }
+            return inDictionary(lower, language) || language == .german && inDictionary(lower.prefix(1).uppercased() + lower.dropFirst(), language)
+        }
+    }
+
     // MARK: The gate
 
     private static let names: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME"]
@@ -231,7 +295,9 @@ enum NameEvidence {
         }) else { return span }
         return Span(range: words[index + 1].range.lowerBound..<span.range.upperBound, entity: span.entity, score: span.score, url: span.url)
     }
-    static func gate(_ spans: [Span], doubts: [Span], evidenced: [Range<Int>], in text: String, document: NLLanguage?) -> (spans: [Span], doubts: [Span]) {
+    /// Places only guessed, in the same text, kept only as a place Scrub knows, beside a postcode or an address, or under a place's key
+    /// ("Wohnort"); one made of the language's own words ("Kopie Ihres", "Strom") is asked about and left as written.
+    static func gate(_ spans: [Span], doubts: [Span], evidenced: [Range<Int>], in text: String, document: NLLanguage?, key: String? = nil) -> (spans: [Span], doubts: [Span]) {
         var kept: [Span] = [], doubted = doubts
         var taken = IndexSet()
         for doubt in doubts where !doubt.range.isEmpty { taken.insert(integersIn: doubt.range) }
@@ -248,12 +314,17 @@ enum NameEvidence {
             if person || span.entity == "LOCATION", company(span, in: text) { continue }
             if evidenced.contains(where: { $0.overlaps(span.range) }) { kept.append(span); continue }
             let technical = technicalLine(span.range, in: text)
-            if span.entity == "LOCATION" {
-                if technical && span.score < 0.9 { doubt(span) } else { kept.append(span) }
-                continue
-            }
             let language = language(around: span.range, in: text, document: document)
             let foreign = language.map { $0 != .english && readable($0) } ?? false
+            if span.entity == "LOCATION" {
+                if technical && span.score < 0.9 || (foreign || technical) && !placed(span, among: spans, key: key, in: text)
+                    && plainWords(span.range, in: text, language: foreign ? language ?? .english : .english) {
+                    doubt(span)
+                } else {
+                    kept.append(span)
+                }
+                continue
+            }
             guard foreign || technical else { kept.append(span); continue }
             if cued(span.range, in: text) || handled(span.range, in: text) || paired(span.range, in: text, language: foreign ? language ?? .english : .english) {
                 kept.append(span)
@@ -266,6 +337,7 @@ enum NameEvidence {
                 doubt(span)
             }
         }
+        doubted.removeAll { smallWords($0, in: text, document: document) }
         doubted.sort { $0.range.lowerBound < $1.range.lowerBound }
         return (kept, doubted)
     }
