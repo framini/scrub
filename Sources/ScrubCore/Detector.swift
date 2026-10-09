@@ -201,6 +201,8 @@ public final class Detector {
                 if let before, before.first?.isUppercase == true, !People.isTitle(before), !NameEvidence.titles.contains(before.lowercased()), range.lowerBound >= before.utf16.count + 1,
                    ns.substring(with: NSRange(location: range.lowerBound - before.utf16.count - 1, length: before.utf16.count + 1)) == before + " " { continue }
                 if let after, after.first?.isUppercase == true, range.upperBound < ns.length, ns.character(at: range.upperBound) == 32 { continue }
+                // "Aroha nui," signing off beside "Aroha Ngata": a greeting's word.
+                if NameEvidence.greetingAhead(Span(range: range, entity: "PERSON", score: 0), in: text) { continue }
                 let language = NameEvidence.language(around: range, in: text, document: document) ?? .english
                 if families.count > 1 || NameEvidence.isLowercaseWord(first, in: language) {
                     doubted.append(Span(range: range, entity: "PERSON", score: Doubt.unconfirmed.confidence))
@@ -323,7 +325,8 @@ public final class Detector {
     /// What `base` finds, and the people it doubts.
     func read(_ text: String, key: String? = nil, contextWords: Set<String> = [], naming: Set<String>? = nil, context: ContextStage.Reading? = nil) -> (spans: [Span], doubts: [Span]) {
         let spans = Self.lineageKept(Self.labelsOutOfAddresses(Self.contactsOutOfAddresses(base(text, key: key, contextWords: contextWords, naming: naming, context: context), in: text), in: text), in: text).filter { !Self.served($0, in: text) }
-        return (spans.compactMap { Self.companyNamed($0, in: text) }, doubts)
+        // A company's name, or its seat, is no one to ask about either.
+        return (spans.compactMap { Self.companyNamed($0, in: text) }, doubts.filter { Self.companyNamed($0, in: text) != nil })
     }
     /// A name a reader found that ends in a company's form, or that one follows ("Example Distribuidora S.A."),
     /// is a company's: kept as written, or a company's stand-in where its owner's given name is in it. The place
@@ -547,11 +550,11 @@ public final class Detector {
             // A country left unreplaced after a word of place is still a place: no model guess makes it
             // someone ("Shipping to Jordan"), though "Jordan is waiting" may be.
             let nations = spans.filter { span in
-                span.entity == "LOCATION" && ContextStage.nations.contains(ContextStage.normalPlace(TextRanges.substring(text, span.range)))
+                span.entity == "LOCATION" && ContextStage.isNation(TextRanges.substring(text, span.range))
                     && Context.words(before: span.range.lowerBound, in: text, limit: 1).first.map { Self.placeWords.contains($0.lowercased()) } == true
             }.map(\.range)
             // A postcode after a country kept as written is still someone's ("Switzerland 82590", "Netherlands 1012 AB").
-            for span in spans where span.entity == "LOCATION" && ContextStage.nations.contains(ContextStage.normalPlace(TextRanges.substring(text, span.range))) {
+            for span in spans where span.entity == "LOCATION" && ContextStage.isNation(TextRanges.substring(text, span.range)) {
                 let ns = text as NSString, rest = ns.substring(with: NSRange(location: span.range.upperBound, length: min(16, ns.length - span.range.upperBound)))
                 // Only as an address writes it: the country opening its line or after a comma, not "sold in Norway 2024".
                 let lead = ns.substring(to: span.range.lowerBound).reversed().first { $0 != " " && $0 != "\t" }
@@ -841,7 +844,7 @@ public final class Detector {
         let words = TextRanges.substring(text, span.range).split(separator: " ")
         if span.entity == "LOCATION" {
             // A country, a continent or a nationality ("of Norway", "Danish", "Finnish Export Controls") is shared by millions: no one's place.
-            if ContextStage.nations.contains(ContextStage.normalPlace(TextRanges.substring(text, span.range))) { return true }
+            if ContextStage.isNation(TextRanges.substring(text, span.range)) { return true }
             return words.allSatisfy { NameShape.isRole(String($0)) && (WrittenNames.ranks.contains($0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ". "))) || WrittenNames.wordRanks.contains($0.lowercased())) }
         }
         // An identifier's scheme named as its label ("Her Aadhaar is 2345…") is no one, though no list knows the word.
@@ -894,6 +897,8 @@ public final class Detector {
                 // "Okafor, Ama" is one person unless it is two names' ends in a list: "Ama Okafor, Ama Lind".
                 if matcher.lastFirst[match.index] && Self.withinList(match.range, ns) { continue }
                 if matcher.capitalised[match.index] && Self.lowercaseWordOfAnotherLanguage(match.range, in: text, document: language) { continue }
+                // "Aroha nui", "Ngā mihi": a name found elsewhere that opens a greeting here is the greeting's word.
+                if NameEvidence.greetingAhead(Span(range: match.range, entity: "PERSON", score: 0), in: text) { continue }
                 spans.append(Span(range: match.range, entity: matcher.entities[match.index], score: GazetteerMatcher.score))
             }
             // A name found elsewhere may be half of this one ("Karol" before a surname already known).

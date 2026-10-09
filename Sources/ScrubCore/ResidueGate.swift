@@ -441,8 +441,9 @@ enum ResidueGate {
                 if language == nil { language = NLLanguageBox(NameEvidence.language(of: text) ?? .english) }
                 return NameEvidence.isLowercaseWord(written, in: language!.value)
             }()
-            // The word itself, written as words are: "an", "will", "rose".
+            // The word itself, written as words are: "an", "will", "rose"; or a greeting's ("Aroha nui").
             if ordinary, written.first?.isUppercase != true { return nil }
+            if NameEvidence.greetingAhead(Span(range: hit.range, entity: "PERSON", score: 0), in: text) { return nil }
             if !ordinary || beside(hit.range) || afterTitle(hit.range) || underName && whole.count == written.count { return hit }
             hit.replace = false
             return hit

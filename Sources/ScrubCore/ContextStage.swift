@@ -160,7 +160,7 @@ enum ContextStage {
         case "LOCATION":
             // A country, a continent or a nationality ("a Danish citizen", "the
             // United Kingdom") is shared by millions: no one's place.
-            guard named(value), !nations.contains(normalPlace(value)), !holidays.contains(normalPlace(value)) else { return nil }
+            guard named(value), !isNation(value), !holidays.contains(normalPlace(value)) else { return nil }
             entity = "LOCATION"
         case "ORG":
             guard named(value), employment(around: range, in: text) else { return nil }
@@ -344,10 +344,13 @@ enum ContextStage {
 
     /// A place or company is named: some word in it is capitalised (or in
     /// another script) and not one of the commonest words ("the", "aviation", "twerk").
-    /// A place as `nations` lists it: lowercase, without "the" or a possessive.
+    /// A place as `nations` lists it: lowercase, without "the", an article elided before it ("l'Algérie", "dell'Italia") or a possessive.
     static func normalPlace(_ value: String) -> String {
         var words = value.lowercased().replacingOccurrences(of: "’", with: "'").split(whereSeparator: { $0.isWhitespace }).map(String.init)
         if words.first == "the" { words.removeFirst() }
+        if let first = words.first, let elided = first.range(of: #"^(?:l|d|dell|nell|all|dall|sull)'(?=\p{L})"#, options: .regularExpression) {
+            words[0] = String(first[elided.upperBound...])
+        }
         if let last = words.last, last.hasSuffix("'s") { words[words.count - 1] = String(last.dropLast(2)) }
         return words.joined(separator: " ")
     }
@@ -378,6 +381,26 @@ enum ContextStage {
         "middle east", "south african", "new zealander", "sri lankan", "saudi", "british isles", "soviet union", "ussr", "eu", "european union",
         "republic of turkey", "russian federation", "people's republic of china", "republic of ireland", "republic of poland",
     ])
+
+    /// Whether a place is a country, a continent or the word for a people: in English, or a country in a language Scrub reads ("Algérie", "Alemania", "Litauen").
+    static func isNation(_ value: String) -> Bool {
+        let place = normalPlace(value)
+        return nations.contains(place) || countriesAbroad.contains(place.folding(options: .diacriticInsensitive, locale: nil))
+    }
+    /// Every country's name in the languages Scrub reads, lowercase and without accents.
+    private static let countriesAbroad: Set<String> = {
+        let languages = ["fr", "es", "pt", "it", "de", "nl", "pl", "sv", "da", "nb", "fi", "cs", "sk", "ro", "hu", "tr", "id", "vi", "lt", "lv", "et", "hr", "sl", "sr-Latn", "sq", "ca", "el", "ru", "uk", "bg"]
+        let codes = Locale.Region.isoRegions.map(\.identifier).filter { $0.count == 2 && $0.allSatisfy(\.isLetter) }
+        var names: Set<String> = []
+        for language in languages {
+            let locale = Locale(identifier: language)
+            for code in codes {
+                guard let name = locale.localizedString(forRegionCode: code) else { continue }
+                names.insert(name.lowercased().folding(options: .diacriticInsensitive, locale: nil))
+            }
+        }
+        return names
+    }()
 
     private static func named(_ value: String) -> Bool {
         let common = ContextModel.shared?.common ?? []

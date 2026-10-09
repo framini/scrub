@@ -46,6 +46,12 @@ enum NameEvidence {
         guard english + other >= 2 else { return nil }
         return english >= 2 * other
     }
+    /// Whether a word of three letters or more that no list holds as a name is written with a letter English has none of.
+    private static func accented(_ text: String) -> Bool {
+        text.split(whereSeparator: { !$0.isLetter }).contains { word in
+            word.count >= 3 && word.contains(where: { !$0.isASCII }) && !NameLists.isFirst(String(word)) && !NameLists.isSurname(String(word))
+        }
+    }
     /// Text no recogniser can place, around a guessed name: English where its line's words are, or else the whole
     /// text's, or else the document's language. Text with too few words to say anything, in a document of no other
     /// language, holds no phrase of one to take for a name ("Ottoline Wexcombe, DOB: …").
@@ -57,10 +63,12 @@ enum NameEvidence {
         // English where its words are, or where the recogniser's best guess is, however unsure; another language where that guess is.
         func english(_ text: String) -> Bool? {
             // Its words alone say English, never another language: a trade's own words ("biometric") are in no list.
-            if englishWords(text) == true { return true }
+            let worded = englishWords(text)
+            if worded == true { return true }
             // Without capitals and capitalised words no dictionary holds: abbreviations and names say nothing of the language.
             let plain = text.split(whereSeparator: { !$0.isLetter }).filter { $0.count >= 2 && $0 != $0.uppercased() && ($0.first?.isLowercase == true || NameLists.isOrdinary(String($0))) }
-            guard plain.count >= 3 else { return nil }
+            // Too few for the recogniser, but words no English list holds, one of them written with letters English has none of ("Mokėjimai"): no English.
+            guard plain.count >= 3 else { return worded == false && accented(text) ? false : nil }
             let recognizer = NLLanguageRecognizer()
             recognizer.processString(plain.prefix(300).joined(separator: " "))
             guard let best = recognizer.dominantLanguage else { return nil }
@@ -270,8 +278,9 @@ enum NameEvidence {
         let line = ns.substring(with: ns.lineRange(for: NSRange(location: range.lowerBound, length: 0)))
         return !TextRanges.matches(technical, in: line).isEmpty
     }
-    /// The forms a company's name ends with: "Lda.", "Cía. Ltda.", "y Cía.", "e Hijos", "& Co.", "S.A.C.", "S. de R.L.", "EIRL", "S.A.", "GmbH", "B.V.", "S.r.l.", "Ltd", "Co., Ltd.", "Sdn Bhd", "K.K.", "A.Ş.", "d.o.o.", "Sp. z o.o.", "ООО".
-    static let companyForm = #"(?:C[íi]a\.?\s?Ltda|y\s?C[íi]a|C[íi]a|e\s?Hijos|&\s?Co|S\.?\s?de\s?R\.?\s?L|S\.?A\.?C|S\.?R\.?L|EIRL|S\.?A\.?\s?de\s?C\.?V|GmbH\s?&\s?Co\.?\s?KG|\(Pty\)\s?Ltd|Co\.?,?\s?Ltd|Pte\.?\s?Ltd|Pvt\.?\s?Ltd|Sdn\.?\s?Bhd|Bhd|Berhad|K\.K|G\.?K|Lda|Ltda|S\.?A\.?S?|S\.?L\.?U?|S\.?r\.?l|S\.?p\.?A|S\.?A\.?R\.?L|SARL|GmbH|AG|KG|OHG|e\.?V|B\.?V|N\.?V|V\.?O\.?F|Ltd|Limited|LLC|LLP|L\.?P|Inc|Corp|Co|PLC|AB|ASA|AS|A/S|ApS|Oy|Oyj|A\.?Ş|Ltd\.?\s?Şti|[sS]p\.?\s?z\s?o\.?\s?o|[dD]\.?\s?o\.?\s?o|[sS]\.?\s?r\.?\s?o|S\.?C|SpA|Srl|SAS|SE|S\.?C\.?A|Unipessoal|EIRELI|ME|EPP|Pty|BVBA|SRL|OÜ|SIA|UAB|Kft|Zrt|Nyrt|Bt|Α\.?Ε|Ε\.?Π\.?Ε|ΙΚΕ|ЕООД|ООД|ЕАД|ООО|ОАО|ЗАО|ТОВ|ПАО)\.?"#
+    /// The forms a company's name ends with: "Lda.", "Cía. Ltda.", "y Cía.", "e Hijos", "& Co.", "S.A.C.", "S. de R.L.", "EIRL", "S.A.", "GmbH", "B.V.", "S.r.l.", "Ltd", "Co., Ltd.", "Sdn Bhd", "K.K.", "A.Ş.", "d.o.o.", "Sp. z o.o.", "ООО",
+    /// with or without its dots ("m.b.H.", "Ges.m.b.H.", "L.L.C.").
+    static let companyForm = #"(?:C[íi]a\.?\s?Ltda|y\s?C[íi]a|C[íi]a|e\s?Hijos|&\s?Co|S\.?\s?de\s?R\.?\s?L|S\.?A\.?C|S\.?R\.?L|EIRL|S\.?A\.?\s?de\s?C\.?V|GmbH\s?&\s?Co\.?\s?KG|(?:Ges\.?\s?)?m\.?\s?b\.?\s?H|L\.\s?L\.\s?[CP]|P\.\s?L\.\s?C|\(Pty\)\s?Ltd|Co\.?,?\s?Ltd|Pte\.?\s?Ltd|Pvt\.?\s?Ltd|Sdn\.?\s?Bhd|Bhd|Berhad|K\.K|G\.?K|Lda|Ltda|S\.?A\.?S?|S\.?L\.?U?|S\.?r\.?l|S\.?p\.?A|S\.?A\.?R\.?L|SARL|GmbH|AG|KG|OHG|e\.?V|B\.?V|N\.?V|V\.?O\.?F|Ltd|Limited|LLC|LLP|L\.?P|Inc|Corp|Co|PLC|AB|ASA|AS|A/S|ApS|Oy|Oyj|A\.?Ş|Ltd\.?\s?Şti|[sS]p\.?\s?z\s?o\.?\s?o|[dD]\.?\s?o\.?\s?o|[sS]\.?\s?r\.?\s?o|S\.?C|SpA|Srl|SAS|SE|S\.?C\.?A|Unipessoal|EIRELI|ME|EPP|Pty|BVBA|SRL|OÜ|SIA|UAB|Kft|Zrt|Nyrt|Bt|Α\.?Ε|Ε\.?Π\.?Ε|ΙΚΕ|ЕООД|ООД|ЕАД|ООО|ОАО|ЗАО|ТОВ|ПАО)\.?"#
     private static let formAround = TextPattern(#"(?:^|[ \t,])"# + companyForm + #"(?![\p{L}\p{N}])"#)
     private static let formOnly = TextPattern(#"^"# + companyForm + #"$"#)
     private static let formAfter = TextPattern(#"^,?[ \t]+"# + companyForm + #"(?![\p{L}\p{N}])"#)
@@ -285,8 +294,26 @@ enum NameEvidence {
         let ns = text as NSString, start = max(0, span.range.lowerBound - 32)
         return !TextRanges.matches(formBefore, in: ns.substring(with: NSRange(location: start, length: span.range.lowerBound - start))).isEmpty
     }
-    /// Whether a whole value is a company's name: words, then the form it ends with ("Example Distribuidora S.A.").
-    static func companyName(_ value: String) -> Bool { companyNameForm(value) != nil }
+    /// Whether a whole value is a company's name: words, then the form it ends with ("Example Distribuidora S.A."),
+    /// or words one of which names a trade or a body ("Example Banco", "Example Exchange").
+    static func companyName(_ value: String) -> Bool { companyNameForm(value) != nil || organisation(value) }
+    /// Words that name a trade or a body, not a person, in the languages Scrub reads; folded to small letters without accents.
+    static let organisationWords: Set<String> = [
+        "bank", "banco", "banque", "banca", "bancorp", "exchange", "seguros", "versicherung", "versicherungen", "assurance", "assurances",
+        "insurance", "assicurazioni", "group", "groupe", "gruppe", "gruppo", "grupo", "holding", "holdings", "capital", "finance", "financiera",
+        "financial", "finanz", "logistics", "logistica", "logistik", "logistique", "transportes", "transport", "consulting", "consultoria",
+        "services", "servicios", "servicos", "servizi", "trading", "industries", "industrias", "industrie", "solutions", "soluciones",
+        "systems", "sistemas", "technologies", "tecnologias", "partners", "associates", "foundation", "fundacion", "fundacao", "fondazione",
+        "fondation", "stiftung", "verein", "gesellschaft", "societe", "sociedad", "sociedade", "societa", "cooperativa", "cooperative",
+        "genossenschaft", "corporation", "corporacion", "company", "compania", "companhia", "compagnie", "investments", "inversiones",
+        "association", "asociacion", "associacao", "associazione", "verband", "enterprises", "empresa", "empresas", "credit", "credito",
+    ]
+    /// Whether a word of `value` names a trade or a body ("Banco", "Logística", "Société").
+    static func organisation(_ value: String) -> Bool {
+        value.split(whereSeparator: { !$0.isLetter }).contains { word in
+            word.count >= 4 && organisationWords.contains(String(word).lowercased().folding(options: .diacriticInsensitive, locale: nil))
+        }
+    }
     /// The form a company's whole name ends with ("Unipessoal Lda." of "… Unipessoal Lda." reads "Lda."), nil for no company's name.
     static func companyNameForm(_ value: String) -> String? {
         TextRanges.matches(formEnding, in: value).first.map { (value as NSString).substring(with: $0.range(at: 1)) }
@@ -297,14 +324,32 @@ enum NameEvidence {
     static func company(_ span: Span, in text: String) -> Bool {
         let ns = text as NSString
         let value = ns.substring(with: NSRange(location: span.range.lowerBound, length: span.range.count))
-        if !TextRanges.matches(formOnly, in: value).isEmpty { return true }
+        if !TextRanges.matches(formOnly, in: value).isEmpty || organisation(value) { return true }
         let after = ns.substring(with: NSRange(location: span.range.upperBound, length: min(48, ns.length - span.range.upperBound)))
         // "Haugen" of "Haugen Eiendom AS": the start of a company's name, its form a few words on.
         if !TextRanges.matches(formAfter, in: after).isEmpty || !TextRanges.matches(formAhead, in: after).isEmpty { return true }
+        // "Coralta" of "Coralta Banco", "Lumen" of "Grupo Lumen": a trade's word beside it, in one run of capitalised words.
+        if organisation(neighbours(span, in: text)) { return true }
+        // "Hijos" of "Ramírez e Hijos", "Ltda" of "Cía. Ltda.": a reader began the name inside its form.
+        let before = ns.substring(with: NSRange(location: max(0, span.range.lowerBound - 6), length: min(6, span.range.lowerBound)))
+        let lead = (before as NSString).length
+        if TextRanges.matches(formAround, in: before + value + after).contains(where: { $0.range.location < lead && NSMaxRange($0.range) > lead }) { return true }
         let joined = (value + after) as NSString, end = (value as NSString).length
         return TextRanges.matches(formAround, in: joined as String).contains { match in
             match.range.location <= end && NSMaxRange(match.range) >= end && match.range.location > 0 || match.range.location == 0 && NSMaxRange(match.range) >= end
         }
+    }
+
+    private static let capitalisedBefore = TextPattern(#"(?:\p{Lu}[\p{L}\p{M}'’-]*[ \t]+){1,3}$"#)
+    private static let capitalisedAfter = TextPattern(#"^(?:[ \t]+\p{Lu}[\p{L}\p{M}'’-]*){1,3}"#)
+    /// The capitalised words written right before and after a span, with only spaces between, on its line.
+    private static func neighbours(_ span: Span, in text: String) -> String {
+        let ns = text as NSString
+        let start = max(0, span.range.lowerBound - 48), end = min(ns.length, span.range.upperBound + 48)
+        let before = ns.substring(with: NSRange(location: start, length: span.range.lowerBound - start))
+        let after = ns.substring(with: NSRange(location: span.range.upperBound, length: end - span.range.upperBound))
+        return (TextRanges.matches(capitalisedBefore, in: before).first.map { (before as NSString).substring(with: $0.range) } ?? "")
+            + " " + (TextRanges.matches(capitalisedAfter, in: after).first.map { (after as NSString).substring(with: $0.range) } ?? "")
     }
 
     /// "Ik ben Lotte", "dla Jana Nowaka", "geboren Schulz": a word of the text's language written in small letters,
@@ -415,17 +460,29 @@ enum NameEvidence {
     // MARK: The gate
 
     /// Greetings and words of thanks a message opens with, in languages Scrub has no dictionary of: "Dumela", "Sawubona",
-    /// "Habari", "Jambo", "Asante", "Salamat", "Sige", "Po", "Terima kasih", "Selamat pagi".
+    /// "Habari", "Jambo", "Asante", "Salamat", "Sige", "Po", "Terima kasih", "Selamat pagi", "Kia ora", "Ngā mihi".
     private static let greetings: [[String]] = [
         ["dumela"], ["dumelang"], ["sawubona"], ["sanibonani"], ["habari"], ["jambo"], ["asante", "sana"], ["asante"], ["karibu"], ["salamat", "po"], ["salamat"],
         ["sige", "po"], ["sige"], ["po"], ["opo"], ["mabuhay"], ["kumusta"], ["terima", "kasih"], ["selamat", "pagi"], ["selamat", "siang"], ["selamat", "sore"],
         ["selamat", "malam"], ["selamat", "datang"], ["selamat"], ["siyabonga"], ["ngiyabonga"], ["ke", "a", "leboga"], ["re", "a", "leboga"],
+        ["kia", "ora"], ["tēnā", "koe"], ["tena", "koe"], ["tēnā", "kōrua"], ["tena", "korua"], ["tēnā", "koutou"], ["tena", "koutou"], ["koutou", "katoa"],
+        ["koutou"], ["mōrena"], ["morena"], ["sveiki"], ["laba", "diena"], ["labas"], ["ačiū"], ["labdien"], ["paldies"], ["ngā", "mihi"], ["nga", "mihi"], ["aroha", "nui"], ["nāku", "noa"], ["naku", "noa"], ["ka", "kite", "anō"], ["ka", "kite"],
     ]
     /// How many of `words`, from the first, a greeting is: 0 where none opens them.
     static func greetingLength(_ words: [String]) -> Int {
         var at = 0
         while let phrase = greetings.first(where: { phrase in at + phrase.count <= words.count && Array(words[at..<(at + phrase.count)]) == phrase }) { at += phrase.count }
         return at
+    }
+    /// "Ngā" of "Ngā mihi", "Aroha" of "aroha nui": a span whose words open a greeting that goes on past it.
+    static func greetingAhead(_ span: Span, in text: String) -> Bool {
+        let words = NameShape.words(span.range, in: text).map(\.bare)
+        guard !words.isEmpty else { return false }
+        let ns = text as NSString
+        let line = ns.lineRange(for: NSRange(location: span.range.upperBound, length: 0))
+        let rest = ns.substring(with: NSRange(location: span.range.upperBound, length: max(0, NSMaxRange(line) - span.range.upperBound)))
+        let after = rest.split(whereSeparator: { !$0.isLetter }).prefix(3).map { $0.lowercased() }
+        return greetingLength(words + after) >= words.count
     }
     /// A name only guessed where the text's language is not English and is none Scrub has the words of, or is too
     /// short to tell: a capitalised word opening a sentence with a comma after it ("Sige, …"), a name written all
@@ -547,6 +604,7 @@ enum NameEvidence {
                 if words[greeted...].contains(where: { NameLists.isFirst($0.text) || NameLists.isSurname($0.text) }) { kept.append(rest) } else { doubt(rest) }
                 continue
             }
+            if person, span.url == nil, span.score < 1, greetingAhead(span, in: text) { continue }
             guard (person || span.entity == "LOCATION") && span.url == nil && span.score < 1 && !span.range.isEmpty else { kept.append(span); continue }
             if person || span.entity == "LOCATION", company(span, in: text) { continue }
             if evidenced.contains(where: { $0.overlaps(span.range) }) { kept.append(span); continue }
@@ -590,7 +648,7 @@ enum NameEvidence {
             }
         }
         // A company's name, its form and all ("Penang Rimba Sdn Bhd"), is no one to ask about either.
-        doubted.removeAll { smallWords($0, in: text, document: document) || company($0, in: text) }
+        doubted.removeAll { smallWords($0, in: text, document: document) || company($0, in: text) || names.contains($0.entity) && greetingAhead($0, in: text) }
         doubted.sort { $0.range.lowerBound < $1.range.lowerBound }
         return (kept, doubted)
     }

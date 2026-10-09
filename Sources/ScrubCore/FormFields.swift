@@ -156,7 +156,8 @@ enum FormFields {
         // "Latitude/Longitude", "Local Latitude-Longitude": the point, in that order.
         var entity = !words.isDisjoint(with: latitudeWords) && !words.isDisjoint(with: longitudeWords) ? "COORDINATES" : KeyHints.hint(key)
         // A kind of the registry's ("numberplate" is a British plate's key) is read as a number, and named by its check if it passes one.
-        if let kind = entity, Recognizers.entities.contains(kind), !readKinds.contains(kind) { entity = "ID_NUMBER" }
+        // A phone is read by what it is, so its country's code stays its own ("Telefonas: +370 …").
+        if let kind = entity, Recognizers.drawn.contains(kind), !readKinds.contains(kind) { entity = "ID_NUMBER" }
         let text = ns.substring(with: NSRange(location: range.lowerBound, length: range.count))
         guard let entity else {
             // A person's ID only fills a gap: where a label's own reading names the number ("employee ID: EMP-894875"), that stands.

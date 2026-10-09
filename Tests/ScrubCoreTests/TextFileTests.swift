@@ -348,3 +348,42 @@ func noPartOfAPersonStaysInsideALogPairsReplacedName(_ seed: Int) throws {
     for original in ["Ana", "Paula", "Lopes"] { #expect(!output.contains(original), "\(original) in \(output)") }
     #expect(output.contains(" ao ") && output.contains(#"" amount=4.20 status=OK"#) && output.contains(#"note="settled""#), "\(output)")
 }
+
+/// A phone after its label in Lithuanian, after an address that ends with a full stop, keeps its country's code:
+/// it is read as a phone, never as an identifier whose digits all change, and it ends before the next field on its line.
+@Test(arguments: 1...3)
+func aPhoneAfterItsLabelKeepsItsCountrysCode(_ seed: Int) throws {
+    let text = """
+    Kliento duomenys
+    Adresas: Gedimino pr. 9-12, LT-01103 Vilnius. Telefonas: +370 612 34567
+    Mobilusis: +370 698 76543, el. paštas: jonas.petraitis@example.com
+    Tālrunis: +371 2955 0123
+
+    """
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    for kept in ["Telefonas: +370 ", "Mobilusis: +370 ", "Tālrunis: +371 "] { #expect(output.contains(kept), "\(kept) in \(output)") }
+    for gone in ["612 34567", "698 76543", "2955 0123", "Gedimino", "jonas.petraitis"] { #expect(!output.contains(gone), "\(gone) in \(output)") }
+    for number in ["+370 612 34567", "+370 698 76543", "+371 2955 0123"] {
+        let finding = try #require(result.findings.first { $0.original == number }, "\(result.findings.map { "\($0.entity) \($0.original)" })")
+        #expect(finding.entity == "PHONE_NUMBER", "\(number) read as \(finding.entity)")
+    }
+}
+
+/// A country named in another language, with an article elided before it ("vers l'Algérie", "d'Espagne",
+/// "dall'Italia"), is kept as every country is: never replaced as a city.
+@Test(arguments: 1...3)
+func aCountryInAnotherLanguageStays(_ seed: Int) throws {
+    let text = """
+    Bonjour, je m'appelle Claire Dubois. Je pars vers l'Algérie le 12 mars, puis d'Espagne vers l'Allemagne.
+    Hola, soy Tomás Villalba y me mudo de Alemania a Lituania en abril.
+    Ich heiße Wiebke Strothmann und ziehe im Mai nach Litauen.
+    Mi chiamo Giulia Ferraro e torno dall'Italia a giugno.
+
+    """
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    for kept in ["vers l'Algérie", "d'Espagne vers l'Allemagne", "de Alemania a Lituania", "nach Litauen", "dall'Italia"] { #expect(output.contains(kept), "\(kept) in \(output)") }
+    #expect(!result.findings.contains { $0.entity == "LOCATION" && ["Algérie", "Espagne", "Allemagne", "Alemania", "Lituania", "Litauen", "Italia"].contains(where: $0.original.contains) },
+            "\(result.findings.map { "\($0.entity) \($0.original)" })")
+}

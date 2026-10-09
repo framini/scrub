@@ -152,4 +152,36 @@ import Testing
             #expect(Review.names.contains(finding.entity) && !finding.suspected, "\(label) → \(finding.entity)")
         }
     }
+
+    /// "Kia ora", "Ngā mihi", "aroha nui", "Tēnā koutou": a Māori greeting or sign-off stays as written, a name after one
+    /// is replaced or asked about, and a found person's given name that opens a greeting ("aroha nui" beside "Aroha Ngata")
+    /// is the greeting's word, never written over with their stand-in.
+    @Test(arguments: Path.allCases)
+    func aMaoriGreetingStays(_ path: Path) throws {
+        let note = """
+        Kia ora koutou, aroha nui to everyone at the hui. Aroha Ngata will bring the kai.
+        Tēnā koe Wiremu, thanks for the update on the account.
+
+        Ngā mihi,
+        Aroha nui,
+        Hemi Tawhiri
+        """
+        let (result, output) = try Self.scrub(note, path)
+        let label = "[\(path)]"
+        for kept in ["Kia ora koutou", "aroha nui to everyone", "Ngā mihi", "Aroha nui", "Tēnā koe"] { #expect(output.contains(kept), "\(label) \(kept) → \(output)") }
+        for gone in ["Ngata", "Hemi", "Tawhiri"] { #expect(!output.contains(gone), "\(label) \(gone) → \(output)") }
+        let written = Self.applied(result).map(\.original)
+        #expect(!written.contains { ["Kia", "Ngā", "aroha", "Aroha nui", "koutou"].contains($0) || $0.hasPrefix("Kia ora") }, "\(label) \(written)")
+    }
+
+    /// A ledger's line in a language Scrub has no dictionary of ("Elektra 45,20 EUR": electricity) holds a word
+    /// a name list holds too: asked about, never replaced, while the client named under a label is.
+    @Test(arguments: Path.allCases)
+    func aLedgersWordThatIsAlsoANameIsAskedAbout(_ path: Path) throws {
+        let note = "Mokėjimai:\nElektra 45,20 EUR\nVanduo 12,00 EUR\nKlientas: Rūta Kazlauskienė"
+        let (result, output) = try Self.scrub(note, path)
+        #expect(output.contains("Elektra 45,20 EUR"), "[\(path)] \(output)")
+        #expect(!output.contains("Kazlauskienė"), "[\(path)] \(output)")
+        #expect(!Self.applied(result).contains { $0.original == "Elektra" }, "[\(path)] \(Self.applied(result))")
+    }
 }

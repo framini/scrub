@@ -294,6 +294,11 @@ struct LeakGate {
             }
             if lengths.contains(key.count) {
                 if let part = parts[key] {
+                    // "Aroha nui," signing off: a greeting's word, no one's name.
+                    if plain, segments.count == 1, NameEvidence.greetingAhead(Span(range: segment.range, entity: "PERSON", score: 0), in: ns as String) {
+                        index += 1
+                        continue
+                    }
                     if plain, segments.count == 1, sharedParts.contains(key), otherName(segment.range, units, ns) == nil {
                         found.suspects.append(Span(range: segment.range, entity: "PERSON", score: Self.suspectConfidence))
                         index += 1

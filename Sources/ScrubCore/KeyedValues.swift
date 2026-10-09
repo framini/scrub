@@ -385,6 +385,11 @@ enum KeyedValues {
             if unquoted, decoded == nil, KeyHints.hint(key) == "DATE_OF_BIRTH", let length = birthDateLength(string(content)) {
                 content = content.lowerBound..<(content.lowerBound + length)
             }
+            // A phone written inline ends where the line goes on to another field ("Phone: +370 698 76543, email: …").
+            if unquoted, decoded == nil, KeyHints.hint(key) == "PHONE_NUMBER", let rest = string(content).range(of: #"[,;][ \t]+\p{L}"#, options: .regularExpression) {
+                let length = (String(string(content)[..<rest.lowerBound]) as NSString).length
+                if length > 0 { content = content.lowerBound..<(content.lowerBound + length) }
+            }
             let taken = decoded ?? string(content)
             if var entity = KeyHints.hint(key), KeyHints.fits(key, taken) {
                 // A bare number keeps a bare number's stand-in, or the code around it breaks.
