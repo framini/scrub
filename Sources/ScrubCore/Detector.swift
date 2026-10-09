@@ -102,6 +102,11 @@ public final class Detector {
                     return end > span.range.lowerBound ? Span(range: span.range.lowerBound..<end, entity: span.entity, score: span.score) : nil
                 }
                 kept.removeAll { span in maiden.names.contains { $0.range.overlaps(span.range) } && span.entity != "PERSON" && span.entity != "LAST_NAME" }
+                // A cued word read alone as a person ("Mme veuve Dupont") is the surname the cue says it is.
+                kept = kept.map { span in
+                    guard span.entity == "PERSON", let name = maiden.names.first(where: { $0.range.lowerBound == span.range.lowerBound && $0.range.upperBound <= span.range.upperBound }) else { return span }
+                    return Span(range: name.range, entity: "LAST_NAME", score: span.score)
+                }
                 let names = maiden.names.filter { name in !kept.contains { $0.range.overlaps(name.range) } }
                 kept += names
                 evidenced += maiden.names.map(\.range)
@@ -128,14 +133,15 @@ public final class Detector {
         }
     }
     /// "z domu Zając", "geb. Hofbauer", "née Martel": the capitalised word after a cue for a surname at birth, in the
-    /// languages Scrub reads, is that surname; with the cues' own ranges.
+    /// languages Scrub reads, is that surname, as is the one after a cue for a married name ("épouse Lefort", "veuve Dupont");
+    /// with the cues' own ranges.
     static func maidenNames(in text: String) -> (names: [Span], cues: [Range<Int>])? {
         let matches = TextRanges.matches(maidenCue, in: text)
         guard !matches.isEmpty else { return nil }
         let names = matches.map { Span(range: $0.range(at: 2).location..<NSMaxRange($0.range(at: 2)), entity: "LAST_NAME", score: ListedNames.cuedScore) }
         return (names, matches.map { $0.range(at: 1).location..<NSMaxRange($0.range(at: 1)) })
     }
-    private static let maidenCue = TextPattern(#"(?<![\p{L}\p{N}])((?i:née|nee|geb\.|geborene|z domu|nacida|nata|født|fødd|född|roz\.|rozená|rodená|dite|detta|apelido de solteira|de soltera|nom de jeune fille|meisjesnaam))[ \t]+(\p{Lu}[\p{Ll}'’]+(?:[-‐‑]\p{Lu}[\p{Ll}'’]+)?)(?![\p{L}\p{N}])"#)
+    private static let maidenCue = TextPattern(#"(?<![\p{L}\p{N}])((?i:née|nee|geb\.|geborene|z domu|nacida|nata|født|fødd|född|roz\.|rozená|rodená|dite|detta|apelido de solteira|de soltera|nom de jeune fille|meisjesnaam|veuve|vve|épouse|epouse|ép\.|ep\.))[ \t]+(\p{Lu}[\p{Ll}'’]+(?:[-‐‑]\p{Lu}[\p{Ll}'’]+)?)(?![\p{L}\p{N}])"#)
     /// "Dhr. Pieter Hoogeveen", "Sig. Gianluca Brambati": capitalised words after a form of address, in any language,
     /// that are no word of the text's language there, are a person; the name ends at the first word that is one.
     static func titledNames(in text: String, document: NLLanguage?) -> [Span] {

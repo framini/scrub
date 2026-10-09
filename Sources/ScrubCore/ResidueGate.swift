@@ -33,11 +33,25 @@ enum ResidueGate {
     static func run(_ values: inout [DocumentValue], leaves: [DocumentLeaf], job: Job) throws {
         var people: [Person] = []
         var known: Set<String> = []
-        for value in values {
+        // A record's given names and surnames written in fields of their own, in order: one person between them.
+        var fields: [String: (given: [(String, String)], family: [(String, String)], people: [Int])] = [:]
+        var order: [String] = []
+        for (value, leaf) in zip(values, leaves) {
             for mark in value.marks where names.contains(mark.entity) {
                 guard let original = mark.original, !original.isEmpty else { continue }
                 let fake = TextRanges.substring(value.text, mark.range)
-                guard known.insert(original + "\u{0}" + fake).inserted else { continue }
+                if !leaf.isKey, mark.entity != "PERSON", mark.range == 0..<(value.text as NSString).length, let record = leaf.lastRecord {
+                    let key = "\(record)\u{0}\(leaf.objectPath)"
+                    if fields[key] == nil { order.append(key) }
+                    if mark.entity == "FIRST_NAME" { fields[key, default: ([], [], [])].given.append((original, fake)) } else { fields[key, default: ([], [], [])].family.append((original, fake)) }
+                }
+                guard known.insert(original + "\u{0}" + fake).inserted else {
+                    if let at = people.firstIndex(where: { $0.original == original && $0.fake == fake }), let record = leaf.lastRecord, !leaf.isKey {
+                        fields["\(record)\u{0}\(leaf.objectPath)"]?.people.append(at)
+                    }
+                    continue
+                }
+                if let record = leaf.lastRecord, !leaf.isKey { fields["\(record)\u{0}\(leaf.objectPath)"]?.people.append(people.count) }
                 people.append(Person(original: original, fake: fake, doubt: nil))
             }
             for mark in value.unresolved + value.held where mark.entity == "PERSON" {
@@ -46,16 +60,26 @@ enum ResidueGate {
             }
         }
         guard !people.isEmpty else { return }
+        // Each person filed under the one their record's name fields make, so their parts are one person's.
+        var root = Array(people.indices)
+        for key in order {
+            guard let record = fields[key], !record.given.isEmpty, !record.family.isEmpty else { continue }
+            let named = record.given + record.family
+            let whole = Person(original: named.map(\.0).joined(separator: " "), fake: named.map(\.1).joined(separator: " "), doubt: nil)
+            root.append(people.count)
+            for member in Set(record.people) where root[member] == member { root[member] = people.count }
+            people.append(whole)
+        }
         var parts: [String: [Part]] = [:]
         for (index, person) in people.enumerated() {
-            for (key, fake) in Self.parts(of: person.original, fake: person.fake) where !(parts[key]?.contains { $0.person == index } ?? false) {
-                parts[key, default: []].append(Part(person: index, fake: fake))
+            for (key, fake) in Self.parts(of: person.original, fake: person.fake) where !(parts[key]?.contains { $0.person == root[index] } ?? false) {
+                parts[key, default: []].append(Part(person: root[index], fake: fake))
             }
         }
         guard !parts.isEmpty else { return }
         // Three words' initials open a handle made of them ("fxcv" of Francisco Xavier Cordero): asked about.
         var initials: [String: Int] = [:]
-        for (index, person) in people.enumerated() {
+        for (index, person) in people.enumerated() where root[index] == index {
             let named = words(person.original).filter { !JoinedNames.particles.contains(fold($0)) }.compactMap { fold($0).first }
             if named.count >= 3, initials[String(named.prefix(3))] == nil { initials[String(named.prefix(3))] = index }
         }
@@ -63,11 +87,21 @@ enum ResidueGate {
         // Filed by their first four letters, so a long document's many people cost one lookup a letter.
         var long: [String: [[Character]]] = [:]
         for key in parts.keys.filter({ $0.count >= 4 }).sorted(by: { $0.count != $1.count ? $0.count > $1.count : $0 < $1 }) { long[String(key.prefix(4)), default: []].append(Array(key)) }
+        // Each person's parts, and who a part's first four letters may begin, for handles cut short ("valen" of Valentina).
+        var pieces: [Int: [(String, String?)]] = [:], heads: [String: Set<Int>] = [:]
+        for (key, found) in parts.sorted(by: { $0.key < $1.key }) where key.allSatisfy(\.isLetter) {
+            for part in found {
+                pieces[part.person, default: []].append((key, part.fake))
+                if key.count >= 4 { heads[String(key.prefix(4)), default: []].insert(part.person) }
+            }
+        }
+        let lookup = Lookup(parts: parts, long: long, initials: initials, pieces: pieces, heads: heads)
         for index in values.indices {
             if index.isMultiple(of: 256) { try Scrubber.checkCancellation() }
             let value = values[index], leaf = leaves[index]
-            guard !leaf.isKey, !value.fullyMarked, !value.text.isEmpty else { continue }
-            let hits = Self.hits(in: value, leaf: leaf, parts: parts, long: long, initials: initials)
+            // A code is no one's words: "TIDAK_ADA_KECOCOKAN" keeps its "ADA".
+            guard !leaf.isKey, !leaf.isCode, !value.fullyMarked, !value.text.isEmpty else { continue }
+            let hits = Self.hits(in: value, leaf: leaf, lookup)
             guard !hits.isEmpty else { continue }
             job.enter(value: index, records: leaf.enclosing, part: leaf.datePart, object: leaf.objectPath, naming: leaf.naming, kind: leaf.decided)
             let surfaceOnly = leaf.isCode || leaf.nonPersonal
@@ -215,7 +249,17 @@ enum ResidueGate {
         return result
     }
 
-    private static func hits(in value: DocumentValue, leaf: DocumentLeaf, parts: [String: [Part]], long: [String: [[Character]]], initials: [String: Int]) -> [Hit] {
+    /// What a document's people are looked for by.
+    private struct Lookup {
+        let parts: [String: [Part]]
+        let long: [String: [[Character]]]
+        let initials: [String: Int]
+        let pieces: [Int: [(String, String?)]]
+        let heads: [String: Set<Int>]
+    }
+
+    private static func hits(in value: DocumentValue, leaf: DocumentLeaf, _ lookup: Lookup) -> [Hit] {
+        let parts = lookup.parts, long = lookup.long, initials = lookup.initials
         let text = value.text, ns = text as NSString
         let runs = Self.runs(ns)
         guard !runs.isEmpty else { return [] }
@@ -241,6 +285,15 @@ enum ResidueGate {
             return around.contains("@") || around.contains("_") || around.contains("/") || around.contains(where: \.isNumber)
                 || around.contains(".") && around.trimmingCharacters(in: CharacterSet(charactersIn: ".!?:")).contains(".")
         }
+        /// Whether a place is inside a code in capitals joined by underscores ("TIDAK_ADA_KECOCOKAN"): no one's words.
+        func inCode(_ range: Range<Int>) -> Bool {
+            func codeUnit(_ u: unichar) -> Bool { (65...90).contains(u) || (48...57).contains(u) || u == 95 || (97...122).contains(u) }
+            var low = range.lowerBound, high = range.upperBound
+            while let u = unit(low - 1), codeUnit(u) { low -= 1 }
+            while let u = unit(high), codeUnit(u) { high += 1 }
+            guard high - low > range.count else { return false }
+            return !TextRanges.matches(code, in: ns.substring(with: NSRange(location: low, length: high - low))).isEmpty
+        }
         func host(_ range: Range<Int>) -> Bool {
             links.contains { $0.contains(range.lowerBound) } && !components.contains { $0.range.lowerBound <= range.lowerBound && range.upperBound <= $0.range.upperBound }
         }
@@ -254,7 +307,7 @@ enum ResidueGate {
         while index < runs.count {
             let run = runs[index]
             let range = run.range
-            if taken.intersects(integersIn: range) { index += 1; continue }
+            if taken.intersects(integersIn: range) || inCode(range) { index += 1; continue }
             let handle = isHandle(run)
             // Words joined by a hyphen or an apostrophe, longest first: "Min-jun", "O'Brien".
             var matched = false
@@ -276,6 +329,12 @@ enum ResidueGate {
                 index += 1
                 continue
             }
+            // A handle made whole of one person's parts, their first letters and their beginnings ("valen", "valensol", "tobiasl").
+            if handle, run.folded.count >= 4, let hit = Self.cut(run, lookup) {
+                hits.append(hit)
+                index += 1
+                continue
+            }
             // A name run into a handle or a slug ("seanobriain", "fxcordero"), or written as one word in lowercase.
             let lowercase = ns.substring(with: NSRange(location: range.lowerBound, length: range.count)) == ns.substring(with: NSRange(location: range.lowerBound, length: range.count)).lowercased()
             if run.folded.count >= 5, handle || lowercase && !NameLists.isWord(word) && !NameLists.isFirst(word) && !NameLists.isSurname(word) {
@@ -292,8 +351,8 @@ enum ResidueGate {
                     }
                     at += step
                 }
-                // In plain text, only a word the name's parts nearly fill: "bennettshaw", never "Shawnee".
-                if !found.isEmpty, handle && !NameLists.isWord(word) || run.folded.count - covered <= 3 { hits += found; index += 1; continue }
+                // In plain text, only a word the name's parts fill whole: "bennettshaw", never "Shawnee" or "nhanh" of "Hạnh".
+                if !found.isEmpty, handle && !NameLists.isWord(word) || !handle && found.count >= 2 && covered == run.folded.count { hits += found; index += 1; continue }
             }
             if handle, (3...8).contains(run.folded.count), let person = initials[String(run.folded.prefix(3))], !NameLists.isWord(word) {
                 hits.append(Hit(range: range, person: person, fake: nil, handle: true, replace: false))
@@ -347,6 +406,51 @@ enum ResidueGate {
             hit.replace = false
             return hit
         }
+    }
+    private static let code = TextPattern(#"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$"#)
+
+    /// A handle cut whole into one person's pieces: parts, beginnings of four letters or more of a longer part, and
+    /// first letters, with at least one part or beginning of four letters. Its stand-in is built of the stand-in's
+    /// pieces in the same places; one with no stand-in for a piece, or only a beginning that is a word, is asked about.
+    private static func cut(_ run: Run, _ lookup: Lookup) -> Hit? {
+        let word = run.folded, count = word.count
+        var candidates: [Int] = []
+        for at in 0...(count - 4) {
+            for person in lookup.heads[String(word[at..<(at + 4)])] ?? [] where !candidates.contains(person) { candidates.append(person) }
+        }
+        for person in candidates.sorted().prefix(8) {
+            let own = lookup.pieces[person] ?? []
+            // The fewest pieces reaching each place, with the stand-in built so far and whether a strong piece is among them.
+            var best: [(pieces: Int, fake: String?, strong: Bool, beginning: Bool)?] = Array(repeating: nil, count: count + 1)
+            best[0] = (0, "", false, false)
+            for at in 0..<count {
+                guard let here = best[at] else { continue }
+                func step(_ length: Int, _ fake: String?, strong: Bool, beginning: Bool) {
+                    let next = (pieces: here.pieces + 1, fake: here.fake.flatMap { built in fake.map { built + $0 } }, strong: here.strong || strong, beginning: here.beginning || beginning)
+                    // A strong piece first, then the fewest pieces.
+                    if let old = best[at + length], old.strong && !next.strong || old.strong == next.strong && old.pieces <= next.pieces { return }
+                    best[at + length] = next
+                }
+                for (key, fake) in own {
+                    let letters = Array(key), stand = fake.map { fold($0).filter(\.isLetter) }
+                    // The whole part.
+                    if at + letters.count <= count, word[at..<(at + letters.count)].elementsEqual(letters) { step(letters.count, stand, strong: letters.count >= 4, beginning: false) }
+                    // Its beginning, four letters or more.
+                    if letters.count > 4 {
+                        for length in stride(from: min(letters.count - 1, count - at), through: 4, by: -1) where word[at..<(at + length)].elementsEqual(letters[0..<length]) {
+                            step(length, stand, strong: true, beginning: true)
+                        }
+                    }
+                    // Its first letter.
+                    if word[at] == letters[0] { step(1, stand.map { String($0.prefix(1)) }, strong: false, beginning: false) }
+                }
+            }
+            guard let whole = best[count], whole.strong, whole.pieces <= 4 else { continue }
+            let written = String(word)
+            let replace = whole.fake != nil && !(whole.pieces == 1 && whole.beginning && NameLists.isWord(written))
+            return Hit(range: run.range, person: person, fake: whole.fake, handle: true, replace: replace)
+        }
+        return nil
     }
     private final class NLLanguageBox {
         let value: NLLanguage

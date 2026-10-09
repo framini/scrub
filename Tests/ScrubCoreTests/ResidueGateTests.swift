@@ -80,6 +80,71 @@ import Testing
         #expect(out.output.hasPrefix("id,full_name,notes\n1,") && out.output.contains("\"prefers chat; alt @"))
     }
 
+    @Test func aHandleCutFromAGivenNameIsReplaced() throws {
+        let json = #"{"applicant": {"first_name": "Evangelina", "last_name": "Vey", "dob": "1990-02-11"}, "socials": {"photos": "@evang.vey.uk", "clips": "@evangvey90", "status": "linked"}}"#
+        let out = try Self.scrub(json, name: "response.json")
+        #expect(try JSONSerialization.jsonObject(with: Data(out.output.utf8)) is [String: Any])
+        #expect(!out.output.lowercased().contains("evang") && !Self.hasWord("vey", in: out.output), "\(out.output)")
+        #expect(out.output.contains(#""photos": "@"#) && out.output.contains(#".uk", "clips": "@"#) && out.output.contains(#"90", "status": "linked"}"#), "\(out.output)")
+    }
+
+    @Test func aPersonWrittenInSeparateNameFieldsIsOnePerson() throws {
+        let json = #"{"person": {"given_names": "Rosalba Itzel", "surnames": "Quintanar Ochoa", "birth_date": "1986-09-14"}, "contact": {"posts": "@riquintanar", "page": "https://links.example.org/riqo"}}"#
+        let out = try Self.scrub(json, name: "response.json")
+        #expect(!out.output.lowercased().contains("quintanar"), "\(out.output)")
+        // Initials of the whole name, which no one field holds, are asked about.
+        #expect(!out.output.contains("riqo") || out.suspects.contains("riqo"), "\(out.output) \(out.suspects)")
+    }
+
+    @Test func profileLinksAndLoginsBuiltFromANameAreReplaced() throws {
+        let links = ["https://social.example.net/in/torvald-lindqvist-1984", "https://forum.example.org/u/torvaldlindqvist", "https://pics.example.com/profile/t.lindqvist", "https://chat.example.com/u/torvlind"]
+        let json = #"{"profile": {"first_name": "Torvald", "last_name": "Lindqvist", "login": "torvaldl84", "links": [\#(links.map { "\"\($0)\"" }.joined(separator: ", "))]}}"#
+        let xml = "<profile><firstName>Torvald</firstName><lastName>Lindqvist</lastName><login>torvaldl84</login>" + links.map { "<link>\($0)</link>" }.joined() + "</profile>"
+        for (text, name) in [(json, "profile.json"), (xml, "profile.xml")] {
+            let out = try Self.scrub(text, name: name)
+            let lower = out.output.lowercased()
+            #expect(!lower.contains("lindq") && !lower.contains("torv") && !lower.contains("lind"), "\(name): \(out.output)")
+            for host in ["https://social.example.net/in/", "https://forum.example.org/u/", "https://pics.example.com/profile/", "https://chat.example.com/u/"] { #expect(out.output.contains(host), "\(name): \(out.output)") }
+        }
+    }
+
+    @Test func aSurnameAfterAMaritalCueIsThePersonsSurname() throws {
+        let text = "Courrier reçu de Mme veuve Arnoux le 3 mars. Mme Clémence Vautrin épouse Lescure a signé le formulaire. M. Gaspard Fleuret ép. Roumagne était présent.\n"
+        let out = try Self.scrub(text, name: "Pasted text")
+        for part in ["Arnoux", "Clémence", "Vautrin", "Lescure", "Gaspard", "Fleuret", "Roumagne"] { #expect(!out.output.contains(part), "\(part): \(out.output)") }
+        for kept in ["Courrier reçu de Mme veuve ", " le 3 mars. Mme ", " épouse ", " a signé le formulaire. M. ", " ép. ", " était présent.\n"] { #expect(out.output.contains(kept), "\(kept): \(out.output)") }
+    }
+
+    @Test func aSurnameWithParticlesAloneInANoteIsReplaced() throws {
+        for (full, surname) in [("Marco Di Stefano", "Di Stefano"), ("Paloma De la Cruz", "De la Cruz"), ("Pieter Van der Berg", "Van der Berg"), ("Seán Ó Briain", "Ó Briain"), ("Elena Ruiz", "Ruiz")] {
+            let json = #"{"customer": {"full_name": "\#(full)", "status": "active"}, "notes": "Called back; \#(surname) confirmed the address on file."}"#
+            let out = try Self.scrub(json, name: "response.json")
+            let last = surname.split(separator: " ").last.map(String.init)!
+            #expect(!Self.hasWord(last, in: out.output) || out.suspects.contains { $0.contains(last) }, "\(surname): \(out.output)")
+            #expect(out.output.contains(#""notes": "Called back; "#) && out.output.contains(" confirmed the address on file."), "\(out.output)")
+        }
+    }
+
+    @Test func aCodeIsNeverSearchedForNameParts() throws {
+        let json = #"{"person": {"name": "Ada Wibowo"}, "check": {"detail": "Matcher returned TIDAK_ADA_KECOCOKAN for the applicant", "outcome_label": "TIDAK_ADA_KECOCOKAN", "rule": "NAME_MISMATCH_ADA"}}"#
+        let out = try Self.scrub(json, name: "response.json")
+        #expect(!out.output.contains("Wibowo"), "\(out.output)")
+        #expect(out.output.components(separatedBy: "TIDAK_ADA_KECOCOKAN").count == 3 && out.output.contains("NAME_MISMATCH_ADA"), "\(out.output)")
+        #expect(!out.suspects.contains { $0.uppercased() == "ADA" }, "\(out.suspects)")
+    }
+
+    @Test func aPartInsideAnOrdinaryWordOfProseStaysAsWritten() throws {
+        let cases = [
+            (#"{"customer": {"full_name": "Lương Thị Hạnh"}, "note": "Khách hàng đến chi nhánh Hà Nội lúc 9 giờ, nhân viên kiểm tra giấy tờ nhanh chóng."}"#, ["chi nhánh", "nhanh chóng"]),
+            (#"{"customer": {"full_name": "Nguyễn Thị Lan"}, "note": "Trời lạnh nên khách hàng gọi điện thay vì đến quầy."}"#, ["Trời lạnh nên"]),
+            (#"{"customer": {"full_name": "Şule Kaya"}, "note": "Müşteri şubeye geldi; kayak tatilinden döndüğünü söyledi."}"#, ["kayak tatilinden"]),
+        ]
+        for (json, kept) in cases {
+            let out = try Self.scrub(json, name: "response.json")
+            for words in kept { #expect(out.output.contains(words), "\(words): \(out.output)") }
+        }
+    }
+
     // MARK: The guarantee
 
     private static let shapes: [[String]] = [
