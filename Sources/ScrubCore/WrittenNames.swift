@@ -25,7 +25,8 @@ enum WrittenNames {
     /// capitals is one only after initials ("Ms E. STRADLING").
     /// An apostrophe joins a name only before a capital ("O’Brien"), never a possessive "’s".
     /// A given name of syllables after a family name keeps its small second one ("Mr. Kim Min-jun").
-    private static let titled = TextPattern(#"(?<![\p{L}\p{N}])(?:Mr|Mrs|Ms|Miss|Mx|Dr|Prof|Sir|Dame|Corporal|Sergeant|Lieutenant|Captain|Colonel|Constable|Detective|Inspector|Superintendent|Trooper|Sheriff|Sgt|Cpl|Lt|Capt|Col|Pte|Pvt|Insp|Supt)\.?[ \t]+(?:(?:\p{Lu}\.[ \t]?){1,3}[ \t]*(?:\p{Lu}\p{Ll}+|\p{Lu}{2,}(?:-\p{Lu}{2,})?)|\p{Lu}\p{Ll}+)(?:['’]\p{Lu}\p{Ll}+)?(?:-\p{Lu}\p{Ll}+)?(?:[ \t]+(?:\p{Lu}\.[ \t]?)*\p{Lu}\p{Ll}+(?:['’]\p{Lu}\p{Ll}+)?(?:-\p{Lu}\p{Ll}+|(?<=[ \t]\p{Lu}\p{Ll}{1,3})-\p{Ll}{2,4})?){0,3}(?![\p{L}\p{N}])"#)
+    /// Several titles may stand before one name ("Dr. Prof. Harrach"); none of them is the name.
+    private static let titled = TextPattern(#"(?<![\p{L}\p{N}])(?:(?:Mr|Mrs|Ms|Miss|Mx|Dr|Prof|Sir|Dame|Corporal|Sergeant|Lieutenant|Captain|Colonel|Constable|Detective|Inspector|Superintendent|Trooper|Sheriff|Sgt|Cpl|Lt|Capt|Col|Pte|Pvt|Insp|Supt)\.?[ \t]+)+(?:(?:\p{Lu}\.[ \t]?){1,3}[ \t]*(?:\p{Lu}\p{Ll}+|\p{Lu}{2,}(?:-\p{Lu}{2,})?)|\p{Lu}\p{Ll}+)(?:['’]\p{Lu}\p{Ll}+)?(?:-\p{Lu}\p{Ll}+)?(?:[ \t]+(?:\p{Lu}\.[ \t]?)*\p{Lu}\p{Ll}+(?:['’]\p{Lu}\p{Ll}+)?(?:-\p{Lu}\p{Ll}+|(?<=[ \t]\p{Lu}\p{Ll}{1,3})-\p{Ll}{2,4})?){0,3}(?![\p{L}\p{N}])"#)
     /// A name's own place or business ("Dr Lind’s Surgery") is named after someone, not someone.
     private static let possessiveName = TextPattern(#"^['’]s[ \t]+\p{Lu}"#)
     /// "Okafor, Ama", "Okafor, Ama N.", "Bowen Jr., Raymond", "Leite, Francisco Pinto".

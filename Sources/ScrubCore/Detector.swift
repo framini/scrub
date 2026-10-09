@@ -147,7 +147,8 @@ public final class Detector {
             let language = NameEvidence.language(around: start..<NSMaxRange(match.range(at: 2)), in: text, document: document) ?? .english
             var end = start
             for word in NameShape.words(start..<NSMaxRange(match.range(at: 2)), in: text) {
-                guard word.text.first?.isUppercase == true, !NameEvidence.isLowercaseWord(word.text, in: language), !People.isTitle(word.text),
+                // Vietnamese names are words of the language each ("Phạm Ngọc Diệp"), so there the capitals alone say it.
+                guard word.text.first?.isUppercase == true, language == .vietnamese || !NameEvidence.isLowercaseWord(word.text, in: language), !People.isTitle(word.text),
                       language != .english || !NameLists.isWord(word.text) || NameLists.isFirst(word.text.lowercased()) || NameLists.isSurname(word.text.lowercased()) && !NameLists.isOrdinary(word.text.lowercased()) else { break }
                 end = word.range.upperBound
             }

@@ -287,12 +287,26 @@ enum NameEvidence {
     /// which stays as written.
     private static let namePartTitles: Set<String> = ["anh", "bà", "ông", "chị", "don", "dona", "doña", "pan", "pani", "bay", "bayan", "me", "m", "sig", "ing",
                                                       "mag", "dra", "fru", "heer", "sr", "sra", "ir", "lic", "rag", "arch"]
-    static func afterTitle(_ span: Span, in text: String) -> Span {
+    /// A title opening the name in another language ("Sra. Maribel Ocampo", "Bà Lương Thị Hạnh") stays too, where two
+    /// names or more follow it; one written as a name is kept ("Mr", "Herr"), so a stand-in fits it.
+    static func afterTitle(_ span: Span, in text: String, document: NLLanguage? = nil) -> Span {
         let words = NameShape.words(span.range, in: text)
-        // A title that is also a name's part or a word ("Anh", "Don", "Pan", "Me") counts only with its full stop.
+        // One that is also a given name ("Don", "Doña", "Anh") opens a name as a title only in another language's text.
+        func titleOfLanguage(_ index: Int) -> Bool {
+            guard NameLists.isFirst(words[index].bare) else { return true }
+            return language(around: span.range, in: text, document: document).map { $0 != .english } ?? false
+        }
+        // A title that is also a name's part or a word ("Anh", "Don", "Pan", "Me") counts only with its full stop,
+        // or opening the name where it is no given name Scrub knows ("Doña", "Chị").
         guard words.count >= 3, let index = words.indices.dropLast().last(where: { index in
-            index > 0 && titles.contains(words[index].bare) && (words[index].text.hasSuffix(".") || !namePartTitles.contains(words[index].bare)
-                || People.leadingTitle(words[index...].map(\.text)))
+            guard titles.contains(words[index].bare) else { return false }
+            if index == 0 {
+                return !People.isTitle(words[0].text) && words[1...].allSatisfy { $0.text.first?.isUppercase == true }
+                    && (words[0].text.hasSuffix(".") || !namePartTitles.contains(words[0].bare) || titleOfLanguage(0))
+            }
+            return words[index].text.hasSuffix(".") || !namePartTitles.contains(words[index].bare)
+                || People.leadingTitle(words[index...].map(\.text))
+                || words.count - index >= 3 && words[(index + 1)...].allSatisfy { $0.text.first?.isUppercase == true } && titleOfLanguage(index)
         }) else { return span }
         return Span(range: words[index + 1].range.lowerBound..<span.range.upperBound, entity: span.entity, score: span.score, url: span.url)
     }
@@ -312,6 +326,19 @@ enum NameEvidence {
             return Span(range: next.range.lowerBound..<span.range.upperBound, entity: span.entity, score: span.score, url: span.url)
         }
     }
+    /// "Sig. Direttore Generale", "Sr. Director General": after a title, words the language's dictionary holds in small
+    /// letters, and no list holds as a name, name no one. Dictionaries hold towns and given names with their capital
+    /// ("Hoogeveen", "Pieter"), so those count.
+    static func ordinaryAfterTitle(_ range: Range<Int>, in text: String, language: NLLanguage) -> Bool {
+        guard language != .vietnamese else { return false }
+        var words = NameShape.words(range, in: text)
+        if let first = words.first, words.count >= 2, titles.contains(first.bare) { words.removeFirst() }
+        else if !titled(range, in: text) { return false }
+        // A name that is also a word ("Chiara Bassi") is a name still.
+        return !words.isEmpty && words.allSatisfy { word in
+            isLowercaseWord(word.text, in: language) && !NameLists.isFirst(word.bare) && !NameLists.isSurname(word.bare)
+        }
+    }
     /// Places only guessed, in the same text, kept only as a place Scrub knows, beside a postcode or an address, or under a place's key
     /// ("Wohnort"); one made of the language's own words ("Kopie Ihres", "Strom") is asked about and left as written.
     static func gate(_ spans: [Span], doubts: [Span], evidenced: [Range<Int>], in text: String, document: NLLanguage?, key: String? = nil) -> (spans: [Span], doubts: [Span]) {
@@ -324,7 +351,7 @@ enum NameEvidence {
             doubted.append(Span(range: span.range, entity: span.entity == "LOCATION" ? "LOCATION" : "PERSON", score: min(span.score, Doubt.unconfirmed.confidence)))
         }
         for found in spans {
-            let span = names.contains(found.entity) ? afterTitle(found, in: text) : found
+            let span = names.contains(found.entity) ? afterTitle(found, in: text, document: document) : found
             let person = names.contains(span.entity)
             if span.entity == "ADDRESS", WrittenDates.holds(TextRanges.substring(text, span.range)) || WrittenDates.yearAlone(TextRanges.substring(text, span.range)) { continue }
             guard (person || span.entity == "LOCATION") && span.url == nil && span.score < 1 && !span.range.isEmpty else { kept.append(span); continue }
@@ -343,6 +370,7 @@ enum NameEvidence {
                 continue
             }
             guard foreign || technical else { kept.append(span); continue }
+            if ordinaryAfterTitle(span.range, in: text, language: language ?? .english) { doubt(span); continue }
             if cued(span.range, in: text) || handled(span.range, in: text) || paired(span.range, in: text, language: foreign ? language ?? .english : .english) {
                 kept.append(span)
             } else if let rest = NameShape.words(span.range, in: text).dropFirst().first(where: { word in

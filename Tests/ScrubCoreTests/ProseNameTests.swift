@@ -212,6 +212,14 @@ extension ProseNameTests {
         ("Ing. Petra Novakova schreibt wegen der Rechnung.", "Ing.", "Petra Novakova"),
         ("Dear Dr. Margaret Hollowell, your results are ready.", "Dr.", "Margaret Hollowell"),
         ("Prof. Arthur Penwarden will chair the review.", "Prof.", "Arthur Penwarden"),
+        ("Hola, Doña Remedios Alcorta firmó el formulario ayer por la tarde.", "Doña", "Remedios Alcorta"),
+        ("Don Evaristo Quintanar llamó dos veces esta semana por su tarjeta.", "Don", "Evaristo Quintanar"),
+        ("Ticket 4472: Sra. Maribel Ocampo asked for a refund.", "Sra.", "Maribel Ocampo"),
+        ("M. Thibault Lavergne attended the meeting on Monday.", "M.", "Thibault Lavergne"),
+        ("Pani Jadwiga Kolodziejczyk opened the case on Monday.", "Pani", "Jadwiga Kolodziejczyk"),
+        ("Bayan Nermin Akyürek phoned twice about the transfer.", "Bayan", "Nermin Akyürek"),
+        ("Bà Lương Thị Hạnh visited the branch on Monday.", "Bà", "Lương Thị Hạnh"),
+        ("Dr. Prof. Wendelin Harrach reviewed the claim.", "Prof.", "Wendelin Harrach"),
     ]
     @Test(arguments: Path.allCases)
     func aTitleBeforeANameStays(_ path: Path) throws {
@@ -223,6 +231,16 @@ extension ProseNameTests {
             #expect(after.first?.isUppercase == true && !after.hasPrefix(entry.title), "\(path): \(output)")
         }
     }
+}
+
+/// After a title, words of the text's language name no one and stay ("Sig. Direttore Generale"); a Vietnamese
+/// name, each of its words one of the language's too, is still found after one.
+@Test func wordsAfterATitleInItsLanguage() throws {
+    let office = try Scrubber.scrub(Data("Il Sig. Direttore Generale ha firmato il contratto ieri mattina in ufficio.".utf8), name: "note.txt", forceFullDetection: false, seed: 3)
+    #expect(String(decoding: office.output, as: UTF8.self).contains("Sig. Direttore Generale"), "\(String(decoding: office.output, as: UTF8.self))")
+    let call = try Scrubber.scrub(Data("Hôm qua ông Trịnh Văn Khải đã gọi điện cho ngân hàng về khoản vay.".utf8), name: "note.txt", forceFullDetection: false, seed: 3)
+    let output = String(decoding: call.output, as: UTF8.self)
+    #expect(output.hasPrefix("Hôm qua ông ") && !output.contains("Trịnh") && !output.contains("Khải"), "\(output)")
 }
 
 /// A given name alone that two people found share is either of them, or someone else: it is asked about,
