@@ -306,3 +306,45 @@ func aLineageWordStaysBetweenTwoNames(_ seed: Int) throws {
     #expect(output.trimmingCharacters(in: .newlines).range(of: shape, options: .regularExpression) != nil, "\(output)")
     for original in ["Ahmed", "Rashid", "Siti", "Abdullah", "Ali ", "Hassan", "Kumar", "Rajan", "Nurul", "Aziz"] { #expect(!output.contains(original), "\(original) in \(output)") }
 }
+
+/// A log's pair under a person's key holds one whole name, a surname's particles too ("de", "van der", "da"):
+/// quoted or not, written "Surname, Given" or "Given Surname", no word of it stays beside a stand-in.
+@Test(arguments: 1...3)
+func aLogPairsNameIsReplacedWholeWithItsParticles(_ seed: Int) throws {
+    let log = """
+    2026-05-02T08:01:12.410Z INFO  [payout-2] c.e.payouts.Dispatcher - sent beneficiary="Hendrik de Boer" amount=10.00 currency=EUR status=OK
+    2026-05-02T08:01:13.022Z INFO  [payout-2] c.e.payouts.Dispatcher - sent payer=Joost van der Linde amount=12.00 holder="de Vries, Annelies" status=OK
+    2026-05-02T08:01:14.530Z WARN  [payout-2] c.e.payouts.Dispatcher - retry customer='Aurelio di Stefano' account_holder="Ferreira da Costa, Mariana" status=RETRY
+    2026-05-02T08:01:15.004Z INFO  [payout-2] c.e.payouts.Dispatcher - sent beneficiary=Liesbeth von Arnim amount=3.50 status=OK
+
+    """
+    let result = try Scrubber.scrub(Data(log.utf8), name: "payouts.log", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    for original in ["Hendrik", "Boer", "Joost", "Linde", "Vries", "Annelies", "Aurelio", "Stefano", "Ferreira", "Costa", "Mariana", "Liesbeth", "Arnim"] {
+        #expect(!output.contains(original), "\(original) in \(output)")
+    }
+    let lines = output.split(separator: "\n").map(String.init)
+    #expect(lines.count == 4, "\(output)")
+    for (line, tail) in zip(lines, [" amount=10.00 currency=EUR status=OK", " amount=12.00 holder=", " account_holder=", " amount=3.50 status=OK"]) {
+        #expect(line.contains(tail), "\(tail): \(output)")
+    }
+    // "Surname, Given" keeps its comma and order.
+    #expect(lines[1].range(of: #"holder="[^",]+, [^",]+" status=OK$"#, options: .regularExpression) != nil, "\(output)")
+    #expect(lines[2].range(of: #"account_holder="[^",]+, [^",]+" status=RETRY$"#, options: .regularExpression) != nil, "\(output)")
+}
+
+/// Where a log's pair under a person's key had a part of its name replaced, no word of it stays beside the stand-in,
+/// even one no reader took for a name ("Lopes" of holder="Ana Paula ao Lopes"); the pair's joining words stay.
+@Test(arguments: 1...3)
+func noPartOfAPersonStaysInsideALogPairsReplacedName(_ seed: Int) throws {
+    let log = """
+    2026-05-02T08:01:13.120Z INFO  [payout-2] c.e.payouts.Dispatcher - queued payer="Ana Paula" amount=4.20 status=PENDING
+    2026-05-02T08:01:14.530Z INFO  [payout-2] c.e.payouts.Dispatcher - sent holder="Ana Paula ao Lopes" amount=4.20 status=OK
+    2026-05-02T08:01:15.004Z INFO  [payout-2] c.e.payouts.Dispatcher - sent amount=4.20 status=OK note="settled"
+
+    """
+    let result = try Scrubber.scrub(Data(log.utf8), name: "payouts.log", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    for original in ["Ana", "Paula", "Lopes"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    #expect(output.contains(" ao ") && output.contains(#"" amount=4.20 status=OK"#) && output.contains(#"note="settled""#), "\(output)")
+}

@@ -243,6 +243,19 @@ enum Recognizers {
             let body = twoDigits(year % 100) + twoDigits(date.month + (added == 20 || added == 40 ? added : 0)) + twoDigits(date.day) + [0] + twoDigits(Int.random(in: 1...97, using: &rng))
             return characters(body + twoDigits(97 - (number(body) + (since2000 ? 2_000_000_000 : 0)) % 97))
         }),
+        Recognizer("LU_MATRICULE", keys: ["matricule", "matriculelu", "numeroidentification", "numerodidentification", "numeroidentificationnational", "cns", "idnrlu", "matriculenational"], forms: [
+            .init(#"\b(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:[0-2]\d|3[01])\d{5}\b"#, 0.05),
+            .init(#"\b(?:19|20)\d{2} (?:0[1-9]|1[0-2]) (?:[0-2]\d|3[01]) \d{3} \d{2}\b"#, 0.1),
+        ], context: ["matricule", "numéro d'identification", "numéro d’identification", "identifiant national", "cns", "sécurité sociale", "luxembourg", "idnr"], separators: " ", check: { characters in
+            // Luxembourg's national number: a birth date as YYYYMMDD, a serial of three, then the first eleven's Luhn and Verhoeff check digits.
+            guard let d = numbers(characters), d.count == 13, (1...12).contains(d[4] * 10 + d[5]), d[6] * 10 + d[7] <= 31 else { return false }
+            let body = Array(d[0..<11])
+            return luhnDigit(body) == d[11] && verhoeffDigit(body) == d[12]
+        }, draw: { _, rng in
+            let date = randomDate(&rng)
+            let body = [date.year / 1000, date.year / 100 % 10] + twoDigits(date.year % 100) + twoDigits(date.month) + twoDigits(date.day) + randomDigits(3, &rng)
+            return characters(body + [luhnDigit(body), verhoeffDigit(body)])
+        }),
         Recognizer("BSN", keys: ["bsn", "burgerservicenummer"], forms: [
             .init(#"\b\d{9}\b"#, 0.05),
             .init(#"\b\d{4}\.\d{2}\.\d{3}\b"#, 0.1),

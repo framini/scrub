@@ -19,6 +19,7 @@ let recognizerSamples: [String: String] = [
     "NIR": "1 85 05 78 006 084 91",
     "BELGIAN_NATIONAL_NUMBER": "85.07.30-033.28",
     "BSN": "111222333",
+    "LU_MATRICULE": "1985061412356",
     "STEUER_ID": "86095742719",
     "PESEL": "44051401359",
     "PERSONNUMMER": "811228-9874",

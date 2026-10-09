@@ -83,8 +83,10 @@ enum WrittenNames {
         if text.contains("=") {
             for match in TextRanges.matches(logPair, in: text, isCancelled: isCancelled) {
                 let value = [2, 3, 4].map { match.range(at: $0) }.first { $0.location != NSNotFound }!
-                guard personKey(ns.substring(with: match.range(at: 1))), isName(ns.substring(with: value)),
-                      case let words = ns.substring(with: value).split(whereSeparator: { !$0.isLetter && $0 != "'" && $0 != "’" && $0 != "-" }).map(String.init),
+                // A surname's particles ("de", "van der") are part of the whole name, read without them.
+                let written = ns.substring(with: value), bare = withoutParticles(written)
+                guard personKey(ns.substring(with: match.range(at: 1))), isName(bare),
+                      case let words = bare.split(whereSeparator: { !$0.isLetter && $0 != "'" && $0 != "’" && $0 != "-" }).map(String.init),
                       words.contains(where: { NameLists.isFirst($0) || NameLists.isSurname($0) || !NameLists.isWord($0) }),
                       !words.contains(where: { NameLists.isOrdinary($0) && !NameLists.isFirst($0) && !NameLists.isSurname($0) }) else { continue }
                 found.spans.append(Span(range: range(value), entity: "PERSON", score: 0.95))
@@ -170,7 +172,28 @@ enum WrittenNames {
     private static let kin = TextPattern(#"(?i:\b(?:mi|mis|su|sus|tu|my|his|her|our|their|ma|mon|sa|son|minha|meu|mia|mio|meine?|seine?|ihre?)[ \t]+(?:hija|hijo|hijas|hijos|esposa|esposo|madre|padre|hermana|hermano|nieta|nieto|daughter|son|wife|husband|mother|father|sister|brother|fille|fils|femme|mari|m[èe]re|p[èe]re|s[œo]eur|fr[èe]re|filha|filho|figlia|figlio|moglie|marito|tochter|sohn|frau|mann|schwester|bruder))[ \t]+(\p{Lu}\p{Ll}+)(?![\p{L}\p{N}])"#)
     /// A log's pair whose key names a person (subject="Oyelaran, Babatunde", "payer='Marta Kowalczyk'",
     /// "customer=Ingrid Halvorsen amount=…"): the value quoted, or capitalised words up to the next pair or the line's end.
-    private static let logPair = TextPattern(#"(?m)(?<![\p{L}\p{N}_.\-])(\p{L}[\p{L}\p{N}_.\-]{1,40})=(?:"([^"\r\n]{2,60})"|'([^'\r\n]{2,60})'|(\p{Lu}[\p{L}'’.\-]*(?:,?[ \t]+\p{Lu}[\p{L}'’.\-]*){1,3}|\p{Lu}[\p{L}'’\-]*,\p{Lu}[\p{L}'’\-]*)(?=[ \t]*(?:$|[\r\n,;|\]}]|\p{L}[\p{L}\p{N}_.\-]*=)))"#)
+    private static let logPair = TextPattern(#"(?m)(?<![\p{L}\p{N}_.\-])(\p{L}[\p{L}\p{N}_.\-]{1,40})=(?:"([^"\r\n]{2,60})"|'([^'\r\n]{2,60})'|(\p{Lu}[\p{L}'’.\-]*(?:,?[ \t]+(?:"# + logParticles + #"[ \t]+){0,2}\p{Lu}[\p{L}'’.\-]*){1,3}|\p{Lu}[\p{L}'’\-]*,\p{Lu}[\p{L}'’\-]*)(?=[ \t]*(?:$|[\r\n,;|\]}]|\p{L}[\p{L}\p{N}_.\-]*=)))"#)
+    private static let logParticles = #"(?:van|von|der|den|de|del|della|di|da|du|dos|das|la|le|ten|ter|bin|ibn|binti|al|el|y|e)"#
+    private static let particleWords = TextPattern(#"(?<![\p{L}\p{N}'’-])"# + logParticles + #"[ \t]+"#)
+    /// A name with its surname's particles in small letters dropped: "Hendrik de Boer" read as "Hendrik Boer".
+    private static func withoutParticles(_ value: String) -> String {
+        let ns = value as NSString
+        let cuts = TextRanges.matches(particleWords, in: value).map(\.range).reversed()
+        guard !cuts.isEmpty else { return value }
+        let kept = NSMutableString(string: ns)
+        for cut in cuts { kept.deleteCharacters(in: cut) }
+        return kept as String
+    }
+    /// Where a log's pair under a person's key holds its value (customer="…", payer=Marta Kowalczyk), whatever it is written as:
+    /// a part of a person found there is that person's, never a word of the log.
+    static func loggedPersonValues(in text: String) -> [Range<Int>] {
+        guard text.contains("=") else { return [] }
+        let ns = text as NSString
+        return TextRanges.matches(logPair, in: text).compactMap { match in
+            guard personKey(ns.substring(with: match.range(at: 1))), let value = [2, 3, 4].map({ match.range(at: $0) }).first(where: { $0.location != NSNotFound }) else { return nil }
+            return value.location..<NSMaxRange(value)
+        }
+    }
     /// The people a log's key names, whatever it calls their name ("cust_name", "account_holder", "Kontoinhaber").
     private static let loggedPeople: Set<String> = ["subject", "customer", "cust", "client", "holder", "accountholder", "cardholder", "payer", "payee", "beneficiary", "applicant",
                                                     "user", "member", "debtor", "creditor", "remitter", "insured", "policyholder", "patient", "owner", "sender", "recipient", "guarantor",

@@ -59,6 +59,7 @@ enum ResidueGate {
                 people.append(Person(original: original, fake: nil, doubt: mark.doubt))
             }
         }
+        Self.loggedNames(&values, leaves: leaves, job: job)
         guard !people.isEmpty else { return }
         // Each person filed under the one their record's name fields make, so their parts are one person's.
         var root = Array(people.indices)
@@ -124,6 +125,45 @@ enum ResidueGate {
             let marks = (TextRanges.shift(value.marks, by: edits) + zip(placed, made).map { $1.moved(to: $0) }).sorted { $0.range.lowerBound < $1.range.lowerBound }
             let unresolved = TextRanges.shift(value.unresolved + suspects, by: edits).sorted { $0.range.lowerBound < $1.range.lowerBound }
             values[index] = DocumentValue(text: text, marks: marks, unresolved: unresolved, proposals: value.proposals, held: TextRanges.shift(value.held, by: edits))
+        }
+    }
+
+    private static let nameWord = TextPattern(#"(?<![\p{L}\p{N}'’-])\p{Lu}\p{Ll}[\p{L}\p{M}'’-]*(?![\p{L}\p{N}])"#)
+    /// A log's pair under a person's key holds one whole name (beneficiary="Hendrik de Boer"): where a part of it was
+    /// found, each word in capitals left beside it is that person's too, replaced by a drawn name's part, so no word of
+    /// a found person stays inside a value that was replaced.
+    private static func loggedNames(_ values: inout [DocumentValue], leaves: [DocumentLeaf], job: Job) {
+        for index in values.indices {
+            let value = values[index], leaf = leaves[index]
+            guard !leaf.isKey, !leaf.isCode, value.text.contains("="), value.marks.contains(where: { names.contains($0.entity) }) else { continue }
+            let pairs = WrittenNames.loggedPersonValues(in: value.text)
+            guard !pairs.isEmpty else { continue }
+            var edits: [(range: Range<Int>, value: String)] = [], made: [Mark] = []
+            var unresolved = value.unresolved, held = value.held
+            for pair in pairs where value.marks.contains(where: { names.contains($0.entity) && $0.range.overlaps(pair) }) {
+                // A part only asked about ("Lopes" of holder="Ana Paula ao Lopes" once "Ana Paula" was replaced) is replaced with the rest.
+                let within = { (mark: Mark) in mark.entity == "PERSON" && mark.range.lowerBound >= pair.lowerBound && mark.range.upperBound <= pair.upperBound }
+                unresolved.removeAll(where: within)
+                held.removeAll(where: within)
+                let taken = value.marks + unresolved + held
+                let inside = TextRanges.substring(value.text, pair)
+                for match in TextRanges.matches(nameWord, in: inside) {
+                    let range = (pair.lowerBound + match.range.location)..<(pair.lowerBound + NSMaxRange(match.range))
+                    guard !taken.contains(where: { $0.range.overlaps(range) }) else { continue }
+                    let written = TextRanges.substring(value.text, range)
+                    guard !People.isTitle(written), !People.isSuffix(written), !JoinedNames.particles.contains(fold(written)) else { continue }
+                    job.enter(value: index, records: leaf.enclosing, part: leaf.datePart, object: leaf.objectPath, naming: leaf.naming, kind: leaf.decided)
+                    guard let drawn = job.replacement(for: "PERSON", original: written).split(separator: " ").last.map(String.init) else { continue }
+                    let fake = LeakGate.cased(drawn, like: written)
+                    guard fold(fake) != fold(written) else { continue }
+                    edits.append((range, fake))
+                    made.append(Mark(range: range, entity: "PERSON", original: written, confidence: 1))
+                }
+            }
+            guard !edits.isEmpty else { continue }
+            let (text, placed) = TextRanges.apply(edits, to: value.text)
+            let marks = (TextRanges.shift(value.marks, by: edits) + zip(placed, made).map { $1.moved(to: $0) }).sorted { $0.range.lowerBound < $1.range.lowerBound }
+            values[index] = DocumentValue(text: text, marks: marks, unresolved: TextRanges.shift(unresolved, by: edits), proposals: value.proposals, held: TextRanges.shift(held, by: edits))
         }
     }
 

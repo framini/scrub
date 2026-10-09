@@ -530,7 +530,7 @@ public enum KeyHints {
     private static let pairTypeKeys: Set<String> = ["type", "kind", "tipo", "tip", "typ", "tipe", "vrsta", "idtype", "idkind", "typeid", "documenttype", "doctype", "documentkind",
                                                     "tipodocumento", "tipodoc", "tipodedocumento", "tipoidentificacion", "tipodeidentificacion", "tipoid", "identtype", "identificationtype",
                                                     "identifiertype", "identitytype", "typedocument", "typedepiece", "vrstadokumenta", "typdokumentu", "dokumenttyp"]
-    private static let pairValueKeys: Set<String> = ["value", "val", "number", "numero", "num", "no", "nr", "nro", "broj", "numer", "nummer", "idvalue", "idnumber", "idno",
+    private static let pairValueKeys: Set<String> = ["value", "val", "valor", "key", "chave", "clave", "number", "numero", "num", "no", "nr", "nro", "broj", "numer", "nummer", "idvalue", "idnumber", "idno",
                                                      "documentnumber", "docnumber", "documentno", "docno", "numerodocumento", "numerodoc", "nrodocumento", "nrodoc",
                                                      "numerodedocumento", "numeroidentificacion", "numerodeidentificacion", "identvalue", "identnumber", "identificationnumber",
                                                      "identifiervalue", "identifiernumber", "documentvalue", "brojdokumenta", "numeroid", "dokumentnummer"]
@@ -540,6 +540,11 @@ public enum KeyHints {
         let compact = code.uppercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
         return identifierCodes[compact] ?? identifierTypeCodes[compact]
     }
+    /// The keys an instant payment's key types stand for, as its record writes them ({"tipo": "EMAIL", "chave": …}):
+    /// a tax number, a business's number, an email, a phone, or a random key, drawn as a key is so it keeps a UUID's shape.
+    private static let paymentKeyCodes: [String: String] = [
+        "CPF": "cpf", "CNPJ": "cnpj", "EMAIL": "email", "TELEFONE": "phone", "PHONE": "phone", "CELULAR": "phone",
+        "ALEATORIA": "access_key", "EVP": "access_key", "RANDOM": "access_key", "CHAVEALEATORIA": "access_key"]
     /// The values a record's type field says the kind of, by key, and the key that kind is
     /// written under ({"tipo": "DNI", "numero": …} → "numero": "national_id"); the empty key
     /// where the type is a code no table knows ({"type": "ZQX", "value": …}), so the value is asked about.
@@ -555,9 +560,10 @@ public enum KeyHints {
                 guard pairTypeKeys.contains(nameParts.joined()) || nameParts.count >= 2 && pairTypeKeys.contains(nameParts.last!) && Array(nameParts.dropLast()) == prefix,
                       case let code = text.trimmingCharacters(in: .whitespaces), (2...32).contains(code.utf16.count), !isToken(code) else { continue }
                 // One a field's name says ("Passport", "national-id") only where it names an identifier: a type of "mobile" is the phone's business.
-                if let field = identifierCode(code) ?? identifierField(code).flatMap({ ["ID_NUMBER", "US_SSN"].contains(hint($0) ?? "") ? $0 : nil }) { found[key] = field; break }
+                let compact = code.uppercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+                if let field = paymentKeyCodes[compact] ?? identifierCode(code) ?? identifierField(code).flatMap({ ["ID_NUMBER", "US_SSN"].contains(hint($0) ?? "") ? $0 : nil }) { found[key] = field; break }
                 // A code (capitals and digits, a word at most): a kind no table knows, never a word like "home" or "order".
-                if code.count <= 8, code.allSatisfy({ $0.isASCII && ($0.isUppercase || $0.isNumber || $0 == "_" || $0 == "-") }), code.contains(where: \.isLetter) { found[key] = "" }
+                if code.count <= 12, code.allSatisfy({ $0.isASCII && ($0.isUppercase || $0.isNumber || $0 == "_" || $0 == "-") }), code.contains(where: \.isLetter) { found[key] = "" }
             }
         }
         return found

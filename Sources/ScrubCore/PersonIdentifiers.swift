@@ -6,7 +6,8 @@ import Foundation
 /// kept unseen. It stays as written and is asked about, whatever its key
 /// calls it. A field is judged across the person records it writes: one whose
 /// values there are mostly identifiers is surfaced, one of words or of codes
-/// is not. Keys a rule reads as no one's (a status, an amount, a time, a
+/// is not; a long run of digits (nine or more) is
+/// surfaced whatever its field's other values are. Keys a rule reads as no one's (a status, an amount, a time, a
 /// request's or a case's reference) and values already decided are left alone.
 enum PersonIdentifiers {
     private static let names: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME"]
@@ -22,21 +23,25 @@ enum PersonIdentifiers {
         guard !records.isEmpty else { return }
         // Each field's untouched values in a person's record, and those written as identifiers.
         var fields: [String: (all: Int, shaped: [Int])] = [:]
-        var typed: [Int] = []
+        var typed: [Int] = [], long: [Int] = []
         for index in values.indices {
             let value = values[index], leaf = leaves[index]
             // A typed pair's value in a list of the person's documents is theirs too: its own object is a record of its own.
             guard let record = leaf.lastRecord, records.contains(record) || leaf.key == typedKey && leaf.enclosing.contains(where: records.contains), value.marks.isEmpty, value.unresolved.isEmpty, value.held.isEmpty,
                   value.text == leaf.text, !value.text.trimmingCharacters(in: .whitespaces).isEmpty, !Self.excluded(leaf) else { continue }
             if leaf.key == typedKey {
-                if Self.shaped(value.text) { typed.append(index) }
+                if Self.typedValue(value.text) { typed.append(index) }
+                continue
+            }
+            if Self.longDigits(value.text) {
+                long.append(index)
                 continue
             }
             let field = leaf.field ?? leaf.key ?? leaf.rawKey ?? ""
             fields[field, default: (0, [])].all += 1
             if Self.shaped(value.text) { fields[field]!.shaped.append(index) }
         }
-        let surfaced = fields.values.filter { !$0.shaped.isEmpty && $0.shaped.count * 2 >= $0.all }.flatMap(\.shaped) + typed
+        let surfaced = fields.values.filter { !$0.shaped.isEmpty && $0.shaped.count * 2 >= $0.all }.flatMap(\.shaped) + typed + long
         for index in surfaced {
             let value = values[index]
             let text = value.text, range = 0..<(text as NSString).length
@@ -61,7 +66,8 @@ enum PersonIdentifiers {
                                               "screening", "alert", "match", "list", "source", "vendor", "provider", "model", "config", "policy", "audit", "log", "entry", "record", "result"]
     /// Last words of keys whose values are a machine's or an issuer's, never a person's.
     private static let technical: Set<String> = ["hash", "checksum", "digest", "signature", "nonce", "etag", "index", "seq", "sequence", "page", "offset", "limit", "port", "pid",
-                                                 "latency", "duration", "ms", "ttl", "size", "length", "lat", "lng", "lon", "latitude", "longitude", "ip", "build", "revision", "rev", "sha", "bin", "iin", "mcc"]
+                                                 "latency", "duration", "ms", "millis", "ttl", "amount", "amt", "price", "total", "balance", "fee", "cost", "sum", "count", "qty", "quantity",
+                                                 "timestamp", "ts", "time", "at", "epoch", "created", "updated", "version", "ver", "size", "length", "lat", "lng", "lon", "latitude", "longitude", "ip", "build", "revision", "rev", "sha", "bin", "iin", "mcc"]
 
     private static let shape = TextPattern(#"^[A-Za-z0-9]+(?:[-. ][A-Za-z0-9]+)*$"#)
     private static let notIdentifiers = [
@@ -73,6 +79,18 @@ enum PersonIdentifiers {
         #"^(?=[0-9a-f-]*[a-f])(?=[0-9a-f-]*\d)[0-9a-f]{8,}$"#, #"^(?=[0-9A-F]*[A-F])[0-9A-F]{32,}$"#, #"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"#,
     ].map { TextPattern($0) }
 
+    /// Nine digits or more and nothing else, as a national number, an account or a customer's number is written
+    /// ("1991042312345"): whatever date or time its digits could also spell, under a key that names no time or amount it is asked about.
+    static func longDigits(_ raw: String) -> Bool {
+        let text = raw.trimmingCharacters(in: .whitespaces)
+        return text.count >= 9 && text.count <= 24 && text.allSatisfy { $0.isASCII && $0.isNumber }
+    }
+    /// A typed pair's value whose type is a code no table knows: anything written as one token with a digit or an at sign,
+    /// a UUID, an email or a phone number too ({"tipo": "XYZ", "chave": "7c1e3b2a-…"}), never a word.
+    static func typedValue(_ raw: String) -> Bool {
+        let text = raw.trimmingCharacters(in: .whitespaces)
+        return (4...128).contains(text.count) && text.contains(where: { $0.isNumber || $0 == "@" }) && (shaped(text) || !text.contains(" ") || text.allSatisfy { $0.isNumber || "+-(). ".contains($0) })
+    }
     /// Whether a value is written as an identifier: six characters or more, digits or letters and digits,
     /// possibly in groups split by "-", "." or a space, and no date, amount, time, version, hash or UUID.
     static func shaped(_ raw: String) -> Bool {
