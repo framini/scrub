@@ -196,4 +196,31 @@ func aGivenNameAloneAfterTheFullNameIsThatPerson(_ seed: UInt64) throws {
         #expect(full.split(separator: " ").dropLast().last.map(String.init) == alone, "\(full) / \(alone)")
         #expect(result.findings.allSatisfy { !$0.needsReview || ![note.given, note.full].contains($0.original) }, "\(result.findings.map { "\($0.original) \($0.needsReview)" })")
     }
+
+}
+
+extension ProseNameTests {
+    /// A title or a profession's form of address before a name, in the languages Scrub reads, stays as
+    /// written and the name after it is replaced: no title vanishes with the name, none is taken for one.
+    static let titled: [(note: String, title: String, name: String)] = [
+        ("Bonjour, Maître Hélène Garnaud vous écrit au sujet du dossier 4471.", "Maître", "Hélène Garnaud"),
+        ("Me Paulin Girardot est en copie de ce courrier.", "Me", "Paulin Girardot"),
+        ("Bonjour M. Laurent Dubreuil, voici votre relevé.", "M.", "Laurent Dubreuil"),
+        ("Gentile Avv. Marco Bellandi, le inviamo la pratica.", "Avv.", "Marco Bellandi"),
+        ("Gentile Dott. Giulia Ferracci, la ringraziamo.", "Dott.", "Giulia Ferracci"),
+        ("Sehr geehrter Herr Mag. Klaus Hoferer, anbei die Unterlagen.", "Mag.", "Klaus Hoferer"),
+        ("Ing. Petra Novakova schreibt wegen der Rechnung.", "Ing.", "Petra Novakova"),
+        ("Dear Dr. Margaret Hollowell, your results are ready.", "Dr.", "Margaret Hollowell"),
+        ("Prof. Arthur Penwarden will chair the review.", "Prof.", "Arthur Penwarden"),
+    ]
+    @Test(arguments: Path.allCases)
+    func aTitleBeforeANameStays(_ path: Path) throws {
+        for entry in Self.titled {
+            let (_, output) = try Self.scrub(entry.note, path)
+            #expect(output.contains(entry.title + " "), "\(path): \(output)")
+            for word in entry.name.split(separator: " ") { #expect(!output.contains(word), "\(path): \(output)") }
+            let after = output.components(separatedBy: entry.title + " ").dropFirst().first ?? ""
+            #expect(after.first?.isUppercase == true && !after.hasPrefix(entry.title), "\(path): \(output)")
+        }
+    }
 }

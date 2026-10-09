@@ -97,7 +97,8 @@ enum NameEvidence {
     static let titles: Set<String> = ["mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "dame", "herr", "herrn", "frau", "fräulein", "sr", "sra", "srta",
                                               "don", "doña", "dona", "señor", "señora", "señorita", "senhor", "senhora", "m", "mme", "mlle", "monsieur", "madame",
                                               "mademoiselle", "dhr", "mevr", "mevrouw", "meneer", "heer", "sig", "signor", "signora", "signorina", "dott", "dottor",
-                                              "dottoressa", "pan", "pani", "fru", "bay", "bayan", "ông", "bà", "anh", "chị", "dra", "ing", "mag"]
+                                              "dottoressa", "pan", "pani", "fru", "bay", "bayan", "ông", "bà", "anh", "chị", "dra", "ing", "mag",
+                                              "maître", "maitre", "me", "avv", "avvocato", "arch", "geom", "rag", "dipl", "drs", "ir", "lic"]
     /// Turkish writes the title after the name: "Barış Bey", "Gülsüm Hanım".
     private static let titlesAfter: Set<String> = ["bey", "hanım", "hanim", "beyefendi", "hanımefendi"]
     /// What introduces a name, ending right before it: "mein Name ist", "me llamo", "ik ben", "nazywam się".
@@ -214,6 +215,18 @@ enum NameEvidence {
     static func namesPerson(_ key: String?) -> Bool {
         KeyHints.words(key).contains { personKeys.contains($0.folding(options: .diacriticInsensitive, locale: nil)) }
     }
+    /// "Bonjour M. Laurent Dubreuil": a name a reader ran back over a title and the word before it starts after the title,
+    /// which stays as written.
+    private static let namePartTitles: Set<String> = ["anh", "bà", "ông", "chị", "don", "dona", "doña", "pan", "pani", "bay", "bayan", "me", "m", "sig", "ing",
+                                                      "mag", "dra", "fru", "heer", "sr", "sra", "ir", "lic", "rag", "arch"]
+    static func afterTitle(_ span: Span, in text: String) -> Span {
+        let words = NameShape.words(span.range, in: text)
+        // A title that is also a name's part or a word ("Anh", "Don", "Pan", "Me") counts only with its full stop.
+        guard words.count >= 3, let index = words.indices.dropLast().last(where: { index in
+            index > 0 && titles.contains(words[index].bare) && (words[index].text.hasSuffix(".") || !namePartTitles.contains(words[index].bare))
+        }) else { return span }
+        return Span(range: words[index + 1].range.lowerBound..<span.range.upperBound, entity: span.entity, score: span.score, url: span.url)
+    }
     static func gate(_ spans: [Span], doubts: [Span], evidenced: [Range<Int>], in text: String, document: NLLanguage?) -> (spans: [Span], doubts: [Span]) {
         var kept: [Span] = [], doubted = doubts
         var taken = IndexSet()
@@ -223,7 +236,8 @@ enum NameEvidence {
             taken.insert(integersIn: span.range)
             doubted.append(Span(range: span.range, entity: span.entity == "LOCATION" ? "LOCATION" : "PERSON", score: min(span.score, Doubt.unconfirmed.confidence)))
         }
-        for span in spans {
+        for found in spans {
+            let span = names.contains(found.entity) ? afterTitle(found, in: text) : found
             let person = names.contains(span.entity)
             if span.entity == "ADDRESS", WrittenDates.holds(TextRanges.substring(text, span.range)) || WrittenDates.yearAlone(TextRanges.substring(text, span.range)) { continue }
             guard (person || span.entity == "LOCATION") && span.url == nil && span.score < 1 && !span.range.isEmpty else { kept.append(span); continue }
