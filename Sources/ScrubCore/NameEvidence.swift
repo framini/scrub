@@ -540,6 +540,8 @@ enum NameEvidence {
                 return !People.isTitle(words[0].text) && words[1...].allSatisfy { $0.text.first?.isUppercase == true }
                     && (words[0].text.hasSuffix(".") || !namePartTitles.contains(words[0].bare) || titleOfLanguage(0))
             }
+            // "David M. Klein": a letter after a given name is its middle initial, never "Monsieur".
+            if words[index].bare.count == 1, NameLists.isFirst(words[index - 1].bare) { return false }
             return words[index].text.hasSuffix(".") || !namePartTitles.contains(words[index].bare)
                 || People.leadingTitle(words[index...].map(\.text))
                 || words.count - index >= 3 && words[(index + 1)...].allSatisfy { $0.text.first?.isUppercase == true } && titleOfLanguage(index)
@@ -574,6 +576,24 @@ enum NameEvidence {
         return !words.isEmpty && words.allSatisfy { word in
             isLowercaseWord(word.text, in: language) && !NameLists.isFirst(word.bare) && !NameLists.isSurname(word.bare)
         }
+    }
+    private static let headingLine = TextPattern(#"^[ \t>]*(\p{Lu}[\p{L}\p{M}'’-]+(?:[ \t]+\p{Lu}\.?)?(?:[ \t]+\p{Lu}[\p{L}\p{M}'’-]+){1,2})[ \t]*$"#)
+    /// "Ottoline Wexcombe" alone on a line heading a card or a quoted signature: two or three capitalised words, none of
+    /// them English's own, in a text whose other words are English's, are someone's name, whatever language its letters look like.
+    static func headingName(_ span: Span, among spans: [Span], in text: String) -> Bool {
+        let ns = text as NSString
+        let line = ns.lineRange(for: NSRange(location: span.range.lowerBound, length: 0))
+        guard NSMaxRange(line) >= span.range.upperBound, case let content = ns.substring(with: line).trimmingCharacters(in: .newlines),
+              let match = TextRanges.matches(headingLine, in: content).first,
+              line.location + match.range(at: 1).location == span.range.lowerBound,
+              line.location + NSMaxRange(match.range(at: 1)) == span.range.upperBound,
+              !NameShape.words(span.range, in: text).contains(where: { $0.bare.count > 1 && NameLists.isOrdinary($0.bare) }) else { return false }
+        // The other words, with every name the reader found taken out, are English's.
+        var masked = text as NSString
+        for other in spans.sorted(by: { $0.range.lowerBound > $1.range.lowerBound }) where names.contains(other.entity) && other.range.upperBound <= masked.length {
+            masked = masked.replacingCharacters(in: NSRange(location: other.range.lowerBound, length: other.range.count), with: " ") as NSString
+        }
+        return englishWords(masked as String) == true
     }
     /// Places only guessed, in the same text, kept only as a place Scrub knows, beside a postcode or an address, or under a place's key
     /// ("Wohnort"); one made of the language's own words ("Kopie Ihres", "Strom") is asked about and left as written.
@@ -633,6 +653,7 @@ enum NameEvidence {
             }
             // Only text the recogniser is sure is English, off a log's line, takes a guess without evidence.
             if !technical, language == .english || language == nil && plainEnglish(span, in: text, document: document) { kept.append(span); continue }
+            if person, headingName(span, among: spans, in: text) { kept.append(span); continue }
             if ordinaryAfterTitle(span.range, in: text, language: language ?? .english) { doubt(span); continue }
             if cued(span.range, in: text) || handled(span.range, in: text) { kept.append(span); continue }
             if !foreign, !technical, unread(span, in: text, around: language) { doubt(span); continue }
