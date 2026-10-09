@@ -18,14 +18,57 @@ enum NameEvidence {
 
     /// The language a piece of text is written in, when the recogniser is sure of it.
     static func language(of text: String) -> NLLanguage? {
+        // A line's label or speaker ("Agent:", "Customer:") is written in English whatever the line says.
+        let text = text.contains(":") ? labelled.regex.map { $0.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: (text as NSString).length), withTemplate: "") } ?? text : text
         // Words of letters only: a label, a date or an ID says nothing of the language ("DOB: 1981-11-13, ID: QX-…").
         let words = text.split(whereSeparator: { !$0.isLetter }).filter { $0.count >= 2 }
-        guard words.count >= 5 else { return nil }
+        // Too few words for the recogniser, or too few for it to be sure: English where every one is an English word ("disputed the late fee").
+        // Two letters say little ("po", "da", "sa" are words of many): those must be English's own, and three longer words at least.
+        let english: NLLanguage? = words.count < 12 && words.filter({ $0.count >= 3 }).count >= 3
+            && words.allSatisfy({ $0.count >= 3 ? NameLists.isOrdinary(String($0)) : shortEnglish.contains(String($0).lowercased()) }) ? .english : nil
+        guard words.count >= 5 else { return english }
         let recognizer = NLLanguageRecognizer()
         recognizer.processString(String(text.prefix(2000)))
         // A short line's guess must be surer: a few labels read as any language.
-        guard let (language, confidence) = recognizer.languageHypotheses(withMaximum: 1).first, confidence >= (words.count < 8 ? 0.85 : 0.6) else { return nil }
+        guard let (language, confidence) = recognizer.languageHypotheses(withMaximum: 1).first, confidence >= (words.count < 8 ? 0.85 : 0.6) else { return english }
         return language
+    }
+    private static let shortEnglish: Set<String> = ["a", "an", "am", "as", "at", "be", "by", "do", "go", "he", "if", "in", "is", "it", "me", "my", "no", "of", "ok", "on", "or", "so", "to", "up", "us", "we"]
+    /// Whether the words of `text` of three letters or more are English's, two in three of them: nil for fewer than two.
+    /// A word in capitals ("DOB") is an abbreviation, and a capitalised one a list holds as a name is someone's: neither says.
+    private static func englishWords(_ text: String) -> Bool? {
+        var english = 0, other = 0
+        for word in text.split(whereSeparator: { !$0.isLetter }) where word.count >= 3 && word != word.uppercased() {
+            let word = String(word)
+            if NameLists.isOrdinary(word) { english += 1 }
+            else if word.first?.isUppercase != true || !NameLists.isFirst(word) && !NameLists.isSurname(word) { other += 1 }
+        }
+        guard english + other >= 2 else { return nil }
+        return english >= 2 * other
+    }
+    /// Text no recogniser can place, around a guessed name: English where its line's words are, or else the whole
+    /// text's, or else the document's language. Text with too few words to say anything, in a document of no other
+    /// language, holds no phrase of one to take for a name ("Ottoline Wexcombe, DOB: …").
+    static func plainEnglish(_ span: Span, in text: String, document: NLLanguage?) -> Bool {
+        let ns = text as NSString
+        let masked = ns.replacingCharacters(in: NSRange(location: span.range.lowerBound, length: span.range.count), with: " ") as NSString
+        let lines = masked.lineRange(for: NSRange(location: span.range.lowerBound, length: 0))
+        let unlabelled = { (text: String) in labelled.regex.map { $0.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: (text as NSString).length), withTemplate: "") } ?? text }
+        // English where its words are, or where the recogniser's best guess is, however unsure; another language where that guess is.
+        func english(_ text: String) -> Bool? {
+            // Its words alone say English, never another language: a trade's own words ("biometric") are in no list.
+            if englishWords(text) == true { return true }
+            // Without capitals and capitalised words no dictionary holds: abbreviations and names say nothing of the language.
+            let plain = text.split(whereSeparator: { !$0.isLetter }).filter { $0.count >= 2 && $0 != $0.uppercased() && ($0.first?.isLowercase == true || NameLists.isOrdinary(String($0))) }
+            guard plain.count >= 3 else { return nil }
+            let recognizer = NLLanguageRecognizer()
+            recognizer.processString(plain.prefix(300).joined(separator: " "))
+            guard let best = recognizer.dominantLanguage else { return nil }
+            return best == .english
+        }
+        if let line = english(unlabelled(masked.substring(with: lines))) { return line }
+        if let whole = english(unlabelled(masked as String)) { return whole }
+        return document.map { $0 == .english } ?? true
     }
     /// The language at `range`: its line's, else the whole text's, else the document's. The name itself is
     /// left out, so a Dutch-looking surname never makes an English line Dutch ("per Achterberg, waive the fee").
@@ -98,13 +141,28 @@ enum NameEvidence {
                                               "don", "doña", "dona", "señor", "señora", "señorita", "senhor", "senhora", "m", "mme", "mlle", "monsieur", "madame",
                                               "mademoiselle", "dhr", "mevr", "mevrouw", "meneer", "heer", "sig", "signor", "signora", "signorina", "dott", "dottor",
                                               "dottoressa", "pan", "pani", "fru", "bay", "bayan", "ông", "bà", "anh", "chị", "dra", "ing", "mag",
-                                              "maître", "maitre", "me", "avv", "avvocato", "arch", "geom", "rag", "dipl", "drs", "ir", "lic"]
+                                              "maître", "maitre", "me", "avv", "avvocato", "arch", "geom", "rag", "dipl", "drs", "ir", "lic",
+                                              "gospodin", "gospodine", "gospođa", "gospođo", "gospođica", "gospođice", "ponas", "pone", "ponia", "ponios",
+                                              "bapak", "pak", "ibu", "bwana", "janab"]
     /// Turkish writes the title after the name: "Barış Bey", "Gülsüm Hanım".
     private static let titlesAfter: Set<String> = ["bey", "hanım", "hanim", "beyefendi", "hanımefendi"]
     /// What introduces a name, ending right before it: "mein Name ist", "me llamo", "ik ben", "nazywam się".
-    private static let introduced = TextPattern(#"(?i)(?:\b(?:my name is|i am|this is|named|called|name is|mein name ist|ich bin|ich heiße|hier ist|hier spricht|spricht|me llamo|mi nombre es|soy|je m'appelle|je m’appelle|je suis|je soussignée?|mi chiamo|il mio nome è|sono|meu nome é|me chamo|chamo-me|sou(?: [oa])?|aqui é(?: [oa])?|ik ben|mijn naam is|spreekt met|met|jag heter|jag är|mitt namn är|pratar med|nazywam się|jestem|mam na imię|benim adım|adım|ben|tôi là|tên tôi là|em là)|\b(?:name|full name|nombre|nombre completo|nome|nome completo|nom|nom complet|naam|namn|navn|isim|ad soyad|imię i nazwisko|họ và tên|họ tên)[ \t]*:)[ \t]*$"#)
+    private static let introduced = TextPattern(#"(?i)(?:\b(?:my name is|i am|this is|named|called|name is|mein name ist|ich bin|ich heiße|hier ist|hier spricht|spricht|me llamo|mi nombre es|soy|je m'appelle|je m’appelle|je suis|je soussignée?|mi chiamo|il mio nome è|sono|meu nome é|me chamo|chamo-me|sou(?: [oa])?|aqui é(?: [oa])?|ik ben|mijn naam is|spreekt met|met|jag heter|jag är|mitt namn är|pratar med|nazywam się|jestem|mam na imię|benim adım|adım|ben|tôi là|tên tôi là|em là|zovem se|moje ime je|ime mi je|mano vardas(?: yra)?|mani sauc|mans vārds ir|mera naam|mera nam|jina langu ni|naitwa|ang pangalan ko ay|ako si|ako po si|nama saya(?: adalah)?|orúkọ mi ni|oruko mi ni|contacto|contato|kontaktperson|persona de contacto|a la atención de|a/c)|\b(?:name|full name|nombre|nombre completo|nome|nome completo|nom|nom complet|naam|namn|navn|isim|ad soyad|imię i nazwisko|họ và tên|họ tên|contact|contacto|contato|kontakt|kontaktperson|responsable|titular|attn)[ \t]*:)[ \t]*$"#)
+    private static let introducedAfter = TextPattern(#"^[ \t]+(?i:tōku|toku|taku)[ \t]+ingoa(?![\p{L}\p{N}])"#)
+    /// Whether "tōku ingoa" follows the name, saying it is the writer's.
+    static func introducedAfter(_ range: Range<Int>, in text: String) -> Bool {
+        let ns = text as NSString
+        guard range.upperBound < ns.length else { return false }
+        return !TextRanges.matches(introducedAfter, in: ns.substring(with: NSRange(location: range.upperBound, length: min(16, ns.length - range.upperBound)))).isEmpty
+    }
+    /// "Ko Aroha Ngata tōku ingoa": the particle that opens a Māori name's introduction is none of it.
+    static func withoutKo(_ span: Span, in text: String) -> Span {
+        let words = NameShape.words(span.range, in: text)
+        guard words.count >= 2, words[0].text == "Ko" || words[0].text == "ko", introducedAfter(span.range, in: text) else { return span }
+        return Span(range: words[1].range.lowerBound..<span.range.upperBound, entity: span.entity, score: span.score, url: span.url)
+    }
     /// How a letter or message is signed off, a line above the name alone.
-    private static let closings = TextPattern(#"(?i)(?:regards|thanks|thank you|cheers|best|sincerely|grüßen|grüße|gruß|groet|groeten|saludos?|saludo cordial|atentamente|atenciosamente|cumprimentos|abraços|saluti|cordialement|distinguées|distingués|poważaniem|pozdrawiam|pozdrowienia|hälsningar|hälsning|saygılarımla|selamlar|trân trọng)[ \t]*[,.!]*[ \t]*$"#)
+    private static let closings = TextPattern(#"(?i)(?:regards|thanks|thank you|cheers|best|sincerely|grüßen|grüße|gruß|groet|groeten|saludos?|saludo cordial|atentamente|atenciosamente|cumprimentos|abraços|saluti|cordialement|distinguées|distingués|poważaniem|pozdrawiam|pozdrowienia|hälsningar|hälsning|saygılarımla|selamlar|trân trọng|hvala|pozdrav|pozdravi|s poštovanjem|ačiū|pagarbiai|paldies|ar cieņu|ngā mihi|aroha nui|shukriya|khuda hafiz|allah hafiz|asante sana|maraming salamat|terima kasih|hormat saya|ẹ ṣé|o ṣeun)[ \t]*[,.!]*[ \t]*$"#)
     private static let particles: Set<String> = ["de", "da", "das", "do", "dos", "del", "della", "di", "du", "des", "la", "le", "van", "von", "der", "den", "ten", "ter", "zu", "y", "e", "bin", "al", "el"]
 
     private static let titleBefore = TextPattern("(?i)(?<![\\p{L}\\p{N}])(?:" + titles.sorted { $0.count > $1.count }.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|") + ")(?:\\.-?(?:" + People.titleParts.sorted { $0.count > $1.count }.joined(separator: "|") + "))*\\.?[ \\t]+$")
@@ -118,6 +176,31 @@ enum NameEvidence {
         let start = max(0, range.lowerBound - 20)
         if !TextRanges.matches(titleBefore, in: ns.substring(with: NSRange(location: start, length: range.lowerBound - start))).isEmpty { return true }
         return Context.words(after: range.upperBound, in: text, limit: 1).first.map { titlesAfter.contains($0.lowercased()) } == true
+            || honorific(after: range.upperBound, in: text) != nil
+    }
+    /// Japanese and Korean write a form of address joined after the name: "Kobayashi-san", "Tanaka-sensei", "Lee-ssi".
+    static let honorifics: Set<String> = ["san", "sama", "kun", "chan", "sensei", "shi", "ssi", "nim"]
+    private static let honorificAfter = TextPattern(#"^[-‐‑]([\p{L}]+)(?![\p{L}\p{N}])"#)
+    /// The length of the joined form of address right after `end` ("-san"), nil where none is.
+    static func honorific(after end: Int, in text: String) -> Int? {
+        let ns = text as NSString
+        guard end < ns.length else { return nil }
+        let after = ns.substring(with: NSRange(location: end, length: min(10, ns.length - end)))
+        guard let match = TextRanges.matches(honorificAfter, in: after).first,
+              honorifics.contains((after as NSString).substring(with: match.range(at: 1)).lowercased()) else { return nil }
+        return match.range.length
+    }
+    /// "Kobayashi-san": a name read with the form of address joined after it ends before it, so the form stays
+    /// as written after the surname's stand-in, the one the person's surname takes everywhere.
+    static func withoutHonorifics(_ spans: [Span], in text: String) -> [Span] {
+        spans.map { span in
+            guard names.contains(span.entity), span.url == nil else { return span }
+            let value = TextRanges.substring(text, span.range)
+            guard let dash = value.lastIndex(where: { "-‐‑".contains($0) }), honorifics.contains(value[value.index(after: dash)...].lowercased()) else { return span }
+            let end = span.range.lowerBound + value[..<dash].utf16.count
+            guard end > span.range.lowerBound else { return span }
+            return Span(range: span.range.lowerBound..<end, entity: span.entity, score: span.score, url: span.url)
+        }
     }
     /// A title, a phrase or a label that introduces a name, or a sign-off above it.
     static func cued(_ range: Range<Int>, in text: String) -> Bool {
@@ -134,6 +217,8 @@ enum NameEvidence {
         let line = ns.lineRange(for: NSRange(location: range.lowerBound, length: 0))
         let head = ns.substring(with: NSRange(location: line.location, length: range.lowerBound - line.location))
         if !TextRanges.matches(introduced, in: String(head.suffix(48))).isEmpty { return true }
+        // Māori says it after the name: "Ko Aroha Ngata tōku ingoa".
+        if introducedAfter(range, in: text) { return true }
         // Alone on its line under a sign-off.
         let own = ns.substring(with: line).trimmingCharacters(in: CharacterSet(charactersIn: " \t\r\n-–—~>*,."))
         guard own == ns.substring(with: NSRange(location: range.lowerBound, length: range.count)), line.location > 0 else { return false }
@@ -224,8 +309,8 @@ enum NameEvidence {
 
     /// "Ik ben Lotte", "dla Jana Nowaka", "geboren Schulz": a word of the text's language written in small letters,
     /// with only a name's capitalised words after it, is no part of the name, nor is any word before it. A surname's
-    /// particles ("van", "de") are, and a name written all in small letters is left as it was found. Only where the
-    /// language is one Scrub has the words of: in English a first name is written in small letters too often ("rose Martinez").
+    /// particles ("van", "de") are, and a name written all in small letters is left as it was found. Never in English:
+    /// there a first name is written in small letters too often ("rose Martinez").
     static func withoutLeadingWords(_ spans: [Span], in text: String, document: NLLanguage?) -> [Span] {
         spans.map { span in
             guard ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(span.entity), span.url == nil else { return span }
@@ -234,8 +319,12 @@ enum NameEvidence {
                 let word = words[index].text
                 return word == word.lowercased() && word.allSatisfy(\.isLetter) && !particles.contains(word)
             }), words[(cut + 1)...].allSatisfy({ $0.text.first?.isUppercase == true }) else { return span }
-            guard let language = language(around: span.range, in: text, document: document), language != .english, readable(language),
-                  isLowercaseWord(words[cut].text, in: language) else { return span }
+            let language = language(around: span.range, in: text, document: document)
+            guard language != .english else { return span }
+            // In a language Scrub has no words of ("mano vardas Rūta"), or one it can't tell, any such word no list holds as a name.
+            if let language, readable(language) {
+                guard isLowercaseWord(words[cut].text, in: language) else { return span }
+            } else if NameLists.isFirst(words[cut].text) || NameLists.isSurname(words[cut].text) { return span }
             return Span(range: words[cut + 1].range.lowerBound..<span.range.upperBound, entity: span.entity, score: span.score)
         }
     }
@@ -248,6 +337,43 @@ enum NameEvidence {
         guard !words.isEmpty, words.count >= 2 || words[0].text == words[0].text.lowercased(),
               let language = language(around: span.range, in: text, document: document), language != .english, readable(language) else { return false }
         return words.allSatisfy { $0.text.count <= 3 && isLowercaseWord($0.text, in: language) }
+    }
+
+    private static let labelled = TextPattern(#"(?m)^[ \t]*(?:[\[<(][^\]>)\n]{1,24}[\]>)][ \t]*)?(\p{Lu}[\p{L}\p{M}'’-]*)[ \t]*:(?![/\p{N}])"#)
+    /// A capitalised word alone opening a line, or a chat line after its time, before a colon: "Klijent: …", "[10:03] Agent: …".
+    static func label(_ span: Span, in text: String) -> Bool {
+        TextRanges.matches(labelled, in: text).contains { $0.range(at: 1).location == span.range.lowerBound && NSMaxRange($0.range(at: 1)) == span.range.upperBound }
+    }
+    /// A transcript: two lines or more open with a word before a colon, its speakers'.
+    static func transcript(_ text: String) -> Bool { TextRanges.matches(labelled, in: text).count >= 2 }
+
+    private static let kunya = TextPattern(#"(?<![\p{L}\p{N}])(?:(?:Abu|Abou|Umm|Oum)[ \t]+(\p{Lu}[\p{Ll}'’]+)|(?:أبو|ابو|أم)[ \t]+([\p{Arabic}&&\p{L}]{2,}))(?![\p{L}\p{N}])"#)
+    /// "Abu Yusuf", "Umm Khalid", "أبو يوسف": a parent called by their child's name is a person, whatever a reader took it
+    /// for or missed. Replaced where a reader kept it or where the child it names is a person found in the text; asked about elsewhere.
+    static func kunyas(_ spans: [Span], doubts: [Span], in text: String) -> (spans: [Span], doubts: [Span]) {
+        let matches = TextRanges.matches(kunya, in: text)
+        guard !matches.isEmpty else { return (spans, doubts) }
+        func folded(_ word: String) -> String { word.lowercased().folding(options: .diacriticInsensitive, locale: nil) }
+        var kept = spans, doubted = doubts
+        for match in matches {
+            let range = match.range.location..<NSMaxRange(match.range)
+            let child = match.range(at: 1).location != NSNotFound ? match.range(at: 1) : match.range(at: 2)
+            let name = folded((text as NSString).substring(with: child))
+            let read = kept.contains { $0.range.overlaps(range) && (names.contains($0.entity) || $0.entity == "LOCATION") }
+            let found = kept.contains { span in
+                names.contains(span.entity) && !span.range.overlaps(range) && NameShape.words(span.range, in: text).contains { folded($0.text) == name }
+            }
+            kept.removeAll { $0.range.overlaps(range) && (names.contains($0.entity) || $0.entity == "LOCATION") }
+            doubted.removeAll { $0.range.overlaps(range) }
+            if read || found {
+                kept.append(Span(range: range, entity: "PERSON", score: 0.85))
+            } else {
+                doubted.append(Span(range: range, entity: "PERSON", score: Doubt.unconfirmed.confidence))
+            }
+        }
+        kept.sort { $0.range.lowerBound < $1.range.lowerBound }
+        doubted.sort { $0.range.lowerBound < $1.range.lowerBound }
+        return (kept, doubted)
     }
 
     // MARK: Places
@@ -327,9 +453,9 @@ enum NameEvidence {
     }
 
     private static let names: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME"]
-    /// People only guessed, where the text is in a language Scrub can read the words of or on a technical
-    /// line, kept only with evidence; the rest become doubts. Organisations are no one, and an address that
-    /// runs over a date written out is no address. `evidenced`: what rules that read a cue found.
+    /// People only guessed, anywhere but in text the recogniser is sure is English and off a log's technical
+    /// line, kept only with evidence; the rest become doubts. Text too short or too mixed to tell is no English.
+    /// Organisations are no one, and an address that runs over a date written out is no address. `evidenced`: what rules that read a cue found.
     /// Keys that say their value is a person, in the languages Scrub reads ("cliente", "titular", "Kunde"): evidence for every name in it.
     private static let personKeys: Set<String> = ["cliente", "client", "clients", "customer", "kunde", "kundin", "klant", "titular", "titolare", "musteri", "kund", "klient",
                                                   "nome", "nombre", "nom", "naam", "name", "namn", "isim", "imie", "holder", "applicant", "solicitante", "beneficiario", "contact", "contacto", "contato"]
@@ -395,16 +521,22 @@ enum NameEvidence {
     /// Places only guessed, in the same text, kept only as a place Scrub knows, beside a postcode or an address, or under a place's key
     /// ("Wohnort"); one made of the language's own words ("Kopie Ihres", "Strom") is asked about and left as written.
     static func gate(_ spans: [Span], doubts: [Span], evidenced: [Range<Int>], in text: String, document: NLLanguage?, key: String? = nil) -> (spans: [Span], doubts: [Span]) {
-        var kept: [Span] = [], doubted = doubts
+        var kept: [Span] = [], doubted = doubts.map { names.contains($0.entity) ? withoutKo($0, in: text) : $0 }
+        // A person a reader was unsure of, written right after a label or a phrase that introduces a name ("Kontakt: …"), is one.
+        let introduced = doubted.filter { $0.entity == "PERSON" && $0.url == nil && !label($0, in: text) && cued($0.range, in: text) && !company($0, in: text) && !ordinaryAfterTitle($0.range, in: text, language: .english) }
+        if !introduced.isEmpty {
+            doubted.removeAll { doubt in introduced.contains { $0.range == doubt.range } }
+            kept += introduced.map { Span(range: $0.range, entity: "PERSON", score: max($0.score, 0.6)) }
+        }
         var taken = IndexSet()
-        for doubt in doubts where !doubt.range.isEmpty { taken.insert(integersIn: doubt.range) }
+        for doubt in doubted where !doubt.range.isEmpty { taken.insert(integersIn: doubt.range) }
         func doubt(_ span: Span) {
             guard !taken.intersects(integersIn: span.range) else { return }
             taken.insert(integersIn: span.range)
             doubted.append(Span(range: span.range, entity: span.entity == "LOCATION" ? "LOCATION" : "PERSON", score: min(span.score, Doubt.unconfirmed.confidence)))
         }
         for found in spans {
-            let span = names.contains(found.entity) ? afterTitle(found, in: text, document: document) : found
+            let span = names.contains(found.entity) ? withoutKo(afterTitle(found, in: text, document: document), in: text) : found
             let person = names.contains(span.entity)
             if span.entity == "ADDRESS", WrittenDates.holds(TextRanges.substring(text, span.range)) || WrittenDates.yearAlone(TextRanges.substring(text, span.range)) { continue }
             // "Dumela Lerato", "Terima kasih, Budi": a greeting or a word of thanks opens a message, never a name; the name starts after it.
@@ -422,18 +554,31 @@ enum NameEvidence {
             let language = language(around: span.range, in: text, document: document)
             let foreign = language.map { $0 != .english && readable($0) } ?? false
             if span.entity == "LOCATION" {
+                // In a language Scrub has no words of, only a place with more to it than the guess.
+                let unknown = language.map { $0 != .english && !readable($0) } ?? false
                 if technical && span.score < 0.9 || (foreign || technical) && !placed(span, among: spans, key: key, in: text)
-                    && plainWords(span.range, in: text, language: foreign ? language ?? .english : .english) {
+                    && plainWords(span.range, in: text, language: foreign ? language ?? .english : .english)
+                    || unknown && !placed(span, among: spans, key: key, in: text) {
                     doubt(span)
                 } else {
                     kept.append(span)
                 }
                 continue
             }
-            if !foreign, !technical, unread(span, in: text, around: language) { doubt(span); continue }
-            guard foreign || technical else { kept.append(span); continue }
+            // "Klijent:", "Kunde:", "Agent:": a word opening a line before a colon labels it. A name a list holds is a
+            // speaker in a transcript, or in English text, and in English an unknown word no dictionary holds is still one.
+            if label(span, in: text) {
+                let word = TextRanges.substring(text, span.range), lower = word.lowercased()
+                let listed = NameLists.isFirst(word) || NameLists.isSurname(word), open = language == .english && !technical
+                if listed && (open || transcript(text)) || open && !listed && !NameLists.isOrdinary(lower) && !NameLists.isWordlike(lower) { kept.append(span) } else { doubt(span) }
+                continue
+            }
+            // Only text the recogniser is sure is English, off a log's line, takes a guess without evidence.
+            if !technical, language == .english || language == nil && plainEnglish(span, in: text, document: document) { kept.append(span); continue }
             if ordinaryAfterTitle(span.range, in: text, language: language ?? .english) { doubt(span); continue }
-            if cued(span.range, in: text) || handled(span.range, in: text) || paired(span.range, in: text, language: foreign ? language ?? .english : .english) {
+            if cued(span.range, in: text) || handled(span.range, in: text) { kept.append(span); continue }
+            if !foreign, !technical, unread(span, in: text, around: language) { doubt(span); continue }
+            if paired(span.range, in: text, language: foreign ? language ?? .english : .english) {
                 kept.append(span)
             } else if let rest = NameShape.words(span.range, in: text).dropFirst().first(where: { word in
                 cued(word.range.lowerBound..<span.range.upperBound, in: text)

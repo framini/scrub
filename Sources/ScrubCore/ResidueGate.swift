@@ -110,7 +110,8 @@ enum ResidueGate {
             for hit in hits {
                 let written = TextRanges.substring(value.text, hit.range)
                 let person = people[hit.person]
-                if hit.replace, !surfaceOnly, edits.count < budget, let fake = Self.standIn(hit, written: written, person: person, job: job) {
+                // A part of a name only asked about is asked about too: the whole stays as written, so a stand-in for a part hides nothing.
+                if hit.replace, !surfaceOnly, person.fake != nil || person.doubt == nil, edits.count < budget, let fake = Self.standIn(hit, written: written, person: person, job: job) {
                     edits.append((hit.range, fake))
                     let confidence = job.confidence(of: person.original) ?? 1
                     made.append(Mark(range: hit.range, entity: hit.handle ? "USERNAME" : "PERSON", original: written, confidence: min(confidence, 1)))

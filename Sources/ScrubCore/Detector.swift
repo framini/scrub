@@ -52,9 +52,9 @@ public final class Detector {
             foundLinks = nil
             // A person a reading detector found, cut to what a name can hold (see NameShape).
             // A rule's person keeps its words, but not the verb that opens its sentence ("Call Odalys").
-            var spans = found(text, key: key, contextWords: contextWords, naming: naming, modelled: modelled, context: context).compactMap { span in
+            var spans = NameEvidence.withoutHonorifics(found(text, key: key, contextWords: contextWords, naming: naming, modelled: modelled, context: context).compactMap { span in
                 span.entity != "PERSON" ? span : span.score < 0.95 ? NameShape.trimmed(span, in: text) : NameShape.withoutCommand(span, in: text)
-            }
+            }, in: text)
             // A literal of the code or JSON around a value ("livemode": false, None) is no one, whatever a model reads.
             // In quotes it is a string ("pin": "null"), which may be a secret.
             let units = text.utf16
@@ -128,8 +128,9 @@ public final class Detector {
             if NameEvidence.namesPerson(key) { return whole }
             let gated = NameEvidence.gate(whole, doubts: doubts, evidenced: evidenced, in: text, document: language, key: key)
             let given = Self.givenNamesAlone(gated.spans, doubts: gated.doubts, in: text, document: language)
-            doubts = given.doubts
-            return given.spans
+            let parents = NameEvidence.kunyas(given.spans, doubts: given.doubts, in: text)
+            doubts = parents.doubts
+            return parents.spans
         }
     }
     /// "z domu Zając", "geb. Hofbauer", "née Martel": the capitalised word after a cue for a surname at birth, in the
@@ -164,7 +165,7 @@ public final class Detector {
     }
     private static let titledName = TextPattern(#"(?<![\p{L}\p{N}.])((?i:"# + NameEvidence.titles.filter { $0.count >= 2 }.sorted { $0.count > $1.count }.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|") + #"))\.?[ \t]+(\p{Lu}[\p{Ll}'’-]+(?:[ \t]+\p{Lu}[\p{Ll}'’-]+){0,3})(?![\p{L}\p{N}])"#)
     /// Forms of address that are also a word or a name written before another ("Don", "Pan", "Bay").
-    private static let ambiguousTitles: Set<String> = ["don", "pan", "bay", "ing", "mag", "anh", "heer", "dame", "sir", "miss", "lady"]
+    private static let ambiguousTitles: Set<String> = ["don", "pan", "bay", "ing", "mag", "anh", "heer", "dame", "sir", "miss", "lady", "pak", "ibu", "bapak", "pone"]
     /// "Pieter" alone after "Pieter Hoogeveen": a given name of a person found here, written later on its own,
     /// is that person, and the evidence that found them is evidence for it. Where it is also an ordinary word
     /// of the text's language, or two people found here share it, it is asked about instead.
@@ -308,6 +309,16 @@ public final class Detector {
         guard !TextRanges.matches(accountLabel, in: before).isEmpty else { return false }
         let head = ns.substring(to: min(ns.length, 4096))
         return Set(TextRanges.matches(crashHeader, in: head).map { (head as NSString).substring(with: $0.range) }).count >= 3
+    }
+    /// "Ngā mihi, aroha nui" beside "Aroha Ngata": a name found elsewhere with its capital, written here in small letters
+    /// in a line of words that is no English, is a word of that language. In English chat a name is typed in small letters.
+    static func lowercaseWordOfAnotherLanguage(_ range: Range<Int>, in text: String, document: NLLanguage?) -> Bool {
+        let ns = text as NSString
+        let value = ns.substring(with: NSRange(location: range.lowerBound, length: range.count))
+        guard value.contains(where: \.isLetter), value == value.lowercased() else { return false }
+        let line = ns.substring(with: ns.lineRange(for: NSRange(location: range.lowerBound, length: 0)))
+        guard line.split(whereSeparator: { !$0.isLetter }).count >= 3 else { return false }
+        return NameEvidence.language(around: range, in: text, document: document) != .english
     }
     /// What `base` finds, and the people it doubts.
     func read(_ text: String, key: String? = nil, contextWords: Set<String> = [], naming: Set<String>? = nil, context: ContextStage.Reading? = nil) -> (spans: [Span], doubts: [Span]) {
@@ -882,6 +893,7 @@ public final class Detector {
                 if matcher.unlisted[match.index] && !NameCues.namedWord(match.range, in: text) { continue }
                 // "Okafor, Ama" is one person unless it is two names' ends in a list: "Ama Okafor, Ama Lind".
                 if matcher.lastFirst[match.index] && Self.withinList(match.range, ns) { continue }
+                if matcher.capitalised[match.index] && Self.lowercaseWordOfAnotherLanguage(match.range, in: text, document: language) { continue }
                 spans.append(Span(range: match.range, entity: matcher.entities[match.index], score: GazetteerMatcher.score))
             }
             // A name found elsewhere may be half of this one ("Karol" before a surname already known).
@@ -1261,6 +1273,8 @@ struct GazetteerMatcher {
     let lastFirst: [Bool]
     /// A word a dictionary holds and no list of names does ("Refund"): never found opening a sentence on its own.
     let unlisted: [Bool]
+    /// Learned with a capital ("Aroha"): never written all in small letters.
+    let capitalised: [Bool]
 
     init(_ gazetteer: [String: Set<String>], nameParts: Set<String> = [], cuedParts: Set<String> = [], isCancelled: () -> Bool = { false }) {
         let (literals, labels) = Self.entries(gazetteer, isCancelled: isCancelled)
@@ -1274,6 +1288,7 @@ struct GazetteerMatcher {
         capitalOnly = zip(zip(literals, labels), cuedOnly).map { pair, cued in cued || pair.1 == "PERSON" && nameParts.contains(pair.0) }
         lastFirst = zip(literals, labels).map { $1 == "PERSON" && $0.contains(",") }
         unlisted = zip(literals, labels).map { literal, label in ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(label) && NameLists.isUnlistedWord(literal) }
+        capitalised = zip(literals, labels).map { literal, label in ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(label) && literal.contains(where: \.isUppercase) }
     }
 
     static func ordinaryWord(_ literal: String) -> Bool {
