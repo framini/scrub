@@ -90,3 +90,18 @@ func textWithAStrayNULIsScrubbed(_ text: String) throws {
         #expect(job.digits("7") == fake)
     }
 }
+
+/// Two paragraphs whose commas happen to match are prose, not a table whose first paragraph is a header
+/// left as written: every person in either is replaced.
+@Test(arguments: [UInt64(3), 14])
+func paragraphsWithMatchingCommasAreNoTable(_ seed: UInt64) throws {
+    let text = """
+    Halvard Brennick (client CL-88213, halvard.brennick@example.org, SSN 219-09-9999, born June 3, 1979) is 46 years old. He called about the refund.
+
+    Ysolde Marrick (client CL-77104, ysolde.marrick@example.net, SSN 078-05-1120, born January 9, 1984) is 41 years old. She asked for a statement.
+    """
+    #expect(try Scrubber.classify(Data(text.utf8), name: "Pasted text") == "text")
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: seed)
+    let output = String(decoding: result.output, as: UTF8.self)
+    for word in ["Brennick", "Marrick", "June 3", "January 9", "219-09-9999", "078-05-1120"] { #expect(!output.contains(word), "\(word) left: \(output)") }
+}

@@ -61,12 +61,18 @@ public enum Scrubber {
                rows.allSatisfy({ $0.count == header.count }) {
                 // A header naming a personal field is strong evidence on its own,
                 // so a one-row or one-column export still gets its field hints.
-                let named = header.contains { KeyHints.hint($0.trimmingCharacters(in: .whitespaces)) != nil }
+                // A row holding an email or an identifier's digits is a record, not a header: a paragraph
+                // whose commas match the next one's ("Odalys Ferriter (customer …, odalys@…, SSN 536-21-4417, …")
+                // would otherwise be read as one and left as written.
+                let named = !header.contains(where: Self.holdsValue) && header.contains { KeyHints.hint($0.trimmingCharacters(in: .whitespaces)) != nil }
                 if named || header.count >= 2 && lines.count >= 3 { return "csv" }
             }
         }
         return "text"
     }
+    private static let valueInCell = TextPattern(#"\S@\S+\.\w|\d[\d -]{4,}\d"#)
+    /// Whether a cell holds an email address or a run of six digits or more, as a record's value does and a header never would.
+    private static func holdsValue(_ cell: String) -> Bool { !TextRanges.matches(valueInCell, in: cell).isEmpty }
     static func checkCancellation() throws {
         if Task.isCancelled { throw ScrubError.cancelled }
     }
