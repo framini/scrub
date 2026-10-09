@@ -220,6 +220,34 @@ func aWrittenMonthsStandInIsAMonthInItsLanguage(_ identifier: String) {
     }
 }
 
+/// A month's name several languages write ("mai", "august") is written again in the language of the text
+/// around it, and a first of the month written as a word ("premier") is never kept beside another day.
+@Test func aSharedMonthNameTakesTheTextsLanguage() throws {
+    func months(_ identifier: String) -> Set<String> {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: identifier)
+        return Set((formatter.monthSymbols + formatter.standaloneMonthSymbols).map { $0.lowercased() })
+    }
+    let cases: [(text: String, date: String, language: String)] = [
+        ("Selon son dossier, elle est née le premier mai 1931 à Rouen et habite toujours dans la même maison.", "premier mai 1931", "fr"),
+        ("Conform dosarului, clienta s-a născut pe 14 august 1962 la Sibiu și locuiește acolo de atunci.", "14 august 1962", "ro"),
+        ("Ifølge saken ble hun født 3. mai 1958 i Bergen og har bodd der siden barndommen.", "3. mai 1958", "nb"),
+        ("According to the file, he was born on 14 August 1962 in Leeds and still lives there today.", "14 August 1962", "en_US_POSIX"),
+    ]
+    for (text, date, language) in cases {
+        for seed: UInt64 in 1...6 {
+            let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: seed)
+            let output = String(decoding: result.output, as: UTF8.self)
+            #expect(!output.contains(date), "[\(seed)] \(output)")
+            let made = result.findings.first { $0.original == date }?.standIn ?? ""
+            let words = made.split(whereSeparator: { !$0.isLetter }).map { $0.lowercased() }
+            #expect(words.contains { months(language).contains($0) }, "[\(language) seed \(seed)] \(date) -> \(made)")
+            // Its stand-in day is never the first, so never "premier".
+            if date.hasPrefix("premier") { #expect(!made.hasPrefix("premier"), "\(date) -> \(made)") }
+        }
+    }
+}
+
 /// A birth date written out in words under a birth date's key, with its weekday and its day spelled out or not,
 /// is replaced whole: its day, its weekday, its month and its year, in its language.
 @Test func aWrittenBirthDateUnderItsKeyIsReplacedWhole() throws {

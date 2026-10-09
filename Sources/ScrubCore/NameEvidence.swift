@@ -427,6 +427,7 @@ enum WrittenDates {
     private static let ordinals = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "eleventh", "twelfth", "thirteenth",
                                    "fourteenth", "fifteenth", "sixteenth", "seventeenth", "eighteenth", "nineteenth", "twentieth", "twenty-first", "twenty-second",
                                    "twenty-third", "twenty-fourth", "twenty-fifth", "twenty-sixth", "twenty-seventh", "twenty-eighth", "twenty-ninth", "thirtieth", "thirty-first"]
+    private static let firsts: Set<String> = ["premier", "première", "primero", "primeiro", "primo", "întâi"]
     /// Each locale's days of a month spelled out, 1 to 31, lowercased.
     private static let spelled: [(identifier: String, days: [String])] = locales.map { identifier in
         let formatter = NumberFormatter()
@@ -441,6 +442,8 @@ enum WrittenDates {
         guard lower.count >= 3, (1...31).contains(day) else { return nil }
         func cased(_ made: String) -> String { word.first?.isUppercase == true ? made.prefix(1).uppercased() + made.dropFirst() : made }
         if ordinals.contains(lower) { return cased(ordinals[day - 1]) }
+        // "premier mai", "primero de mayo": a first of the month no other day is written as, so another takes its digits.
+        if firsts.contains(lower) { return day == 1 ? word : String(day) }
         for (identifier, days) in spelled where days.contains(lower) { return cased(days[day - 1]) }
         // An ordinal or a case ending on the day's stem ("huszonegyedikén", "dvanáctého"): its digits, as that language writes them.
         for (identifier, days) in spelled where identifier != "en_US_POSIX" {
@@ -478,10 +481,17 @@ enum WrittenDates {
         let names = found.compactMap { name(month, like: word, in: $0)?.lowercased() }
         return names.map { name in names.filter { $0 == name }.count }.max() ?? 0
     }
+    /// The locale Scrub writes months in for text in `language`, nil for one it doesn't.
+    static func locale(of language: NLLanguage) -> String? {
+        let identifier = language == .english ? "en_US_POSIX" : language == .norwegian ? "nb" : language.rawValue
+        return locales.contains(identifier) ? identifier : nil
+    }
     /// Month `month`'s name in the language and form `word` is written in, in its case. A word several
-    /// languages write ("juli" is Dutch, German and Swedish) takes the name most of them write.
-    static func name(_ month: Int, like word: String) -> String? {
+    /// languages write ("juli" is Dutch, German and Swedish) takes the name of `language`, the text's,
+    /// when it is one of them, else the name most of them write.
+    static func name(_ month: Int, like word: String, language: String? = nil) -> String? {
         let found = locales(of: word)
+        if let language, let own = found.first(where: { $0.identifier == language }) { return name(month, like: word, in: own) }
         let names = found.compactMap { name(month, like: word, in: $0) }
         return names.max { a, b in names.filter { $0.lowercased() == a.lowercased() }.count < names.filter { $0.lowercased() == b.lowercased() }.count }
     }

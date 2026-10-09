@@ -557,8 +557,13 @@ public final class Job {
             // An identifier takes a stand-in of the kind the words before it name, as one under a key does.
             let keyed = standIns.naming
             if Recognizers.drawn.contains(ordered[index].entity) { standIns.naming.formUnion(Recognizers.before(ordered[index].range, in: text)) }
+            // A month's name several languages write is written in the text's ("premier mai 1931" in French).
+            if ordered[index].entity == "DATE_OF_BIRTH", shown.contains(where: \.isLetter) {
+                standIns.language = NameEvidence.language(around: ordered[index].range, in: text, document: nil).flatMap(WrittenDates.locale(of:))
+            }
             let fake = replacement(for: ordered[index].entity, original: shown, persona: owners[index], address: addresses[index], local: local)
             standIns.naming = keyed
+            standIns.language = nil
             fakes[index] = ordered[index].url.map { URLs.encode(fake, like: written, $0) } ?? Visible.rewrite(written, with: fake)
             if lastUnclear { unclear.insert(index) }
         }

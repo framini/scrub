@@ -275,6 +275,9 @@ final class StandIns {
     var naming: Set<String> = []
     /// The identifier the value's field holds, decided across its values: its stand-in is of that kind first.
     var kind: String?
+    /// The locale of the text around the value, when known (see `WrittenDates.locale(of:)`): a month
+    /// name several languages write ("mai", "august") is written again in the text's language.
+    var language: String?
     /// Set by a draw read off another value when the nearest scope holding
     /// one holds several that disagree: it takes the first, and review asks.
     var unclear = false
@@ -1902,7 +1905,7 @@ final class StandIns {
                 for _ in 0..<8 where month == realMonth { month = Int.random(in: 1...12, using: &rng) }
                 // A month name several languages write ("juli", "maj") takes a month that reads in as many of them as any does.
                 if let word = original.split(whereSeparator: { !$0.isLetter }).map(String.init).first(where: { WrittenDates.months[$0.lowercased()] != nil }),
-                   WrittenDates.locales(of: word).count > 1 {
+                   case let found = WrittenDates.locales(of: word), found.count > 1, !found.contains(where: { $0.identifier == language }) {
                     let readers = Dictionary(uniqueKeysWithValues: (1...12).filter { $0 != realMonth }.map { ($0, WrittenDates.readers($0, like: word)) })
                     let best = readers.filter { $0.value == readers.values.max() }.keys.sorted()
                     if !best.contains(month) { month = best[Int.random(in: 0..<best.count, using: &rng)] }
@@ -1953,6 +1956,9 @@ final class StandIns {
         }
         func padded(_ value: Int, like run: String) -> String { run.count >= 2 ? String(format: "%0*d", run.count, value) : String(value) }
         func monthWord(like word: String) -> String {
+            // "premier mai" in French, "14 august" in Romanian: a name the text's language writes is written in it.
+            if word.lowercased() != "sept", let language, let name = WrittenDates.name(month, like: word, language: language),
+               WrittenDates.locales(of: word).contains(where: { $0.identifier == language }) { return name }
             // A month written in another language ("März", "marzo", "maja") is written in it again.
             if !full.contains(word.lowercased()), !short.contains(word.lowercased()), word.lowercased() != "sept", let name = WrittenDates.name(month, like: word) { return name }
             // One English shares with other languages ("august", "nov") takes the name they share, when English writes it too.
