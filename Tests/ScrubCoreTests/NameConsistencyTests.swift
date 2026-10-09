@@ -235,3 +235,27 @@ struct NameConsistencyTests {
         }
     }
 }
+
+/// A screening batch of many people: those of different surnames never share a stand-in surname,
+/// and two of one surname share theirs, whatever the seed.
+@Test func differentSurnamesNeverShareAStandInSurname() throws {
+    let firsts = ["Odalys", "Tamsin", "Benedikt", "Imogen", "Caspian", "Rosalind", "Ignatius", "Philippa", "Lorcan", "Annika", "Evander", "Marisol",
+                  "Thaddeus", "Ottilie", "Leopold", "Clementine", "Barnaby", "Henrietta", "Ambrose", "Wilhelmina", "Cosimo", "Delphine", "Florian", "Josephine"]
+    let lasts = ["Quillfeather", "Ashcombe", "Marlowe", "Penhallow", "Thornbury", "Wexley", "Brackenridge", "Halloran", "Ferriter", "Ravensworth", "Ellery", "Pendergast",
+                 "Kingsmill", "Ostrander", "Fairweather", "Lockhart", "Dunmore", "Whitcombe", "Achterberg", "Merriweather", "Gallagher", "Haverford", "Stanhope", "Vandermeer"]
+    var subjects = zip(firsts, lasts).map { #"{"first_name": "\#($0)", "last_name": "\#($1)", "status": "clear"}"# }
+    // Two of one family.
+    subjects.append(#"{"first_name": "Winifred", "last_name": "Quillfeather", "status": "review"}"#)
+    let json = "{\"batch\": \"B-2207\", \"subjects\": [\n" + subjects.joined(separator: ",\n") + "\n]}\n"
+    for seed: UInt64 in 1...6 {
+        let result = try Scrubber.scrub(Data(json.utf8), name: "screening.json", forceFullDetection: false, seed: seed)
+        let object = try JSONSerialization.jsonObject(with: result.output) as? [String: Any]
+        let rows = try #require(object?["subjects"] as? [[String: Any]])
+        let drawn = rows.compactMap { $0["last_name"] as? String }
+        #expect(drawn.count == lasts.count + 1)
+        for last in lasts { #expect(!drawn.contains(last), "\(last) left as written") }
+        // Rows 0 and the last are one family; every other row is a family of its own.
+        #expect(drawn.first == drawn.last, "seed \(seed): \(drawn)")
+        #expect(Set(drawn.dropLast()).count == lasts.count, "seed \(seed): \(drawn)")
+    }
+}

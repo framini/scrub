@@ -214,6 +214,8 @@ final class People {
     private var reserved: Set<String> = []
     private var blockedChoices: Set<String> = []
     private var usedFullNames: Set<String> = []
+    /// Stand-in surnames drawn for a family, so two people of different surnames never share one while the pool lasts.
+    private var drawnLasts: Set<String> = []
     // A stand-in that matches a real name elsewhere in the document reads as a
     // leak, so every real name part is reserved before any stand-in is drawn.
     func reserve(_ names: [String]) {
@@ -517,9 +519,13 @@ final class People {
     }
     /// A surname for a stand-in first name already drawn, so the full name is still no one else's.
     private func freshLast(first: String, originals: [String], emailSafe: Bool) -> String? {
-        for _ in 0..<64 {
+        for attempt in 0..<64 {
             let last = pick(Self.lastChoices, originals: originals, emailSafe: emailSafe)
-            if fold(first) != fold(last), usedFullNames.insert(fold(first + " " + last)).inserted { return last }
+            guard attempt >= 48 || !drawnLasts.contains(fold(last)) else { continue }
+            if fold(first) != fold(last), usedFullNames.insert(fold(first + " " + last)).inserted {
+                drawnLasts.insert(fold(last))
+                return last
+            }
         }
         return nil
     }
@@ -533,7 +539,12 @@ final class People {
             var last = pick(Self.lastChoices, originals: originals, emailSafe: emailSafe)
             // A suffix also handles documents that exhaust the finite name pool.
             if attempt >= 64 { last += String(attempt) }
-            if fold(first) != fold(last), usedFullNames.insert(fold(first + " " + last)).inserted { return (first, last) }
+            // A new family takes a surname no other family here has, while the pool lasts.
+            if attempt < 48, drawnLasts.contains(fold(last)) { attempt += 1; continue }
+            if fold(first) != fold(last), usedFullNames.insert(fold(first + " " + last)).inserted {
+                drawnLasts.insert(fold(last))
+                return (first, last)
+            }
             attempt += 1
         }
     }
