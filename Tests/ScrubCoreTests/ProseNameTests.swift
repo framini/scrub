@@ -337,3 +337,20 @@ func noPartOfANameIsLeftOutsideItsReplacementOrQuestion(_ seed: UInt64) throws {
         }
     }
 }
+
+/// A verb opening an instruction ("Call", "Ring", "Text") says a name follows and is no part of it, even when it is
+/// also a surname: the name is replaced and nothing is left to ask about.
+@Test(arguments: [UInt64(3), 14])
+func anInstructionsVerbIsNoPartOfTheNameAfterIt(_ seed: UInt64) throws {
+    let notes: [(text: String, verb: String, name: String)] = [
+        ("Call Maria Gonzalez on +1 (415) 555-0132.", "Call", "Gonzalez"),
+        ("Ring Halvard Brennick before noon about the refund.", "Ring", "Brennick"),
+        ("Thanks for the update. Call Odalys Ferriter on 555-0187 tomorrow.", "Call", "Ferriter"),
+    ]
+    for note in notes {
+        let result = try Scrubber.scrub(Data(note.text.utf8), name: "Pasted text", forceFullDetection: false, seed: seed)
+        let output = String(decoding: result.output, as: UTF8.self)
+        #expect(!output.contains(note.name) && output.contains(note.verb + " "), "\(output)")
+        #expect(!result.findings.contains { $0.needsReview }, "\(result.findings.filter(\.needsReview).map(\.original)) in \(output)")
+    }
+}

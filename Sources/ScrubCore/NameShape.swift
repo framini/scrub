@@ -313,6 +313,8 @@ enum NameShape {
                 at = start
                 continue
             }
+            // A verb opening an instruction ("Call Maria Gonzalez on …") says a name follows; it is none of it.
+            if !slug, Self.commands.contains(word.lowercased()) { break }
             guard let sure = classify(word, after: nil, opening: !slug && opensSentence(start)) else { break }
             found.append((start..<(at - 1), sure))
             if !sure { break }
