@@ -130,6 +130,8 @@ final class People {
     private var joined: [UInt64: Candidates]?
     private var domains: [String: String] = [:]
     private var associatedEmails: [String: Persona] = [:]
+    /// Emails written beside two people's records ("assigned_to" in each case): a staff mailbox, no one's of them.
+    private var sharedEmails: Set<String> = []
     private var rng: any RandomNumberGenerator = SystemRandomNumberGenerator()
     init(rng: any RandomNumberGenerator = SystemRandomNumberGenerator()) { self.rng = rng }
     private static func joinedHash(_ value: String) -> UInt64 {
@@ -240,7 +242,25 @@ final class People {
     /// "Rose" beside "first_name": "Cordelia"): the first name of the one person the document
     /// knows by it, else a first name of its own, never `person`'s, the same wherever it is written.
     /// Nil where `name` is their first name, a short form of it, or none is known.
+    /// Given names written for someone in a second script, and whose each is.
+    private var aliasedGiven: [String: Persona] = [:]
+    /// A person's name written in a second script beside the Latin one, as a record gives both
+    /// ("สมชาย ใจดี" and "Somchai Jaidee"): wherever it is written, alone or whole, it is them.
+    func alias(_ person: Persona, first: String?, last: String?, full: String?) {
+        var names: [(first: String?, last: String?, middle: String?)] = []
+        if first != nil || last != nil { names.append((first, last, nil)) }
+        let tokens = (full ?? "").split(whereSeparator: { $0.isWhitespace || $0 == "\u{3000}" }).map(String.init)
+        if tokens.count >= 2 { names.append((tokens[0], tokens[tokens.count - 1], tokens.count > 2 ? tokens.dropFirst().dropLast().joined(separator: " ") : nil)) }
+        for name in names {
+            let f = name.first.map(fold), l = name.last.map(fold), m = name.middle.map(fold)
+            for key in [Key(first: f, last: l, middle: m), Key(first: f, last: nil), Key(first: nil, last: l)] where key.first != nil || key.last != nil {
+                if resolved[key] == nil { resolved[key] = person }
+            }
+            if let f, aliasedGiven[f] == nil { aliasedGiven[f] = person }
+        }
+    }
     func otherGiven(_ name: String, of person: Persona) -> String? {
+        if aliasedGiven[fold(name)] === person { return nil }
         // A first name known only by its initial ("J.") may be this one.
         guard let real = person.realFirst.map(fold), real.filter(\.isLetter).count > 1 else { return nil }
         let given = fold(name)
@@ -736,6 +756,7 @@ final class People {
     }
     func find(email: String) -> Persona? {
         if let associated = associatedEmails[fold(email)] { return associated }
+        if sharedEmails.contains(fold(email)) { return nil }
         let local = String(email.split(separator: "@", maxSplits: 1).first ?? "")
         let parts = Set(local.lowercased().split { !$0.isLetter }.map(String.init))
         let key = local.lowercased().filter(\.isLetter)
@@ -784,8 +805,22 @@ final class People {
     func knowsAsWritten(first: String, last: String) -> Bool {
         (firstBuckets[Self.fold(first)]?.count ?? 0) > 0 || (lastBuckets[Self.fold(last)]?.count ?? 0) > 0
     }
+    /// Whether an email was given as two different people's, so it is neither's.
+    func shared(email: String) -> Bool { sharedEmails.contains(fold(email)) }
+    /// An email already given as someone's, written again among another person's details: a mailbox
+    /// both are written beside (a case's handler), so neither's.
+    func shareIfOthers(_ email: String, with person: Persona) {
+        guard let known = associatedEmails[fold(email)], known !== person else { return }
+        associatedEmails[fold(email)] = nil
+        sharedEmails.insert(fold(email))
+    }
     func associate(_ person: Persona, email: String?) {
-        guard let email else { return }
+        guard let email, !sharedEmails.contains(fold(email)) else { return }
+        if let known = associatedEmails[fold(email)], known !== person {
+            associatedEmails[fold(email)] = nil
+            sharedEmails.insert(fold(email))
+            return
+        }
         associatedEmails[fold(email)] = person
         // Two people of one first name, each with an email of their own (an applicant's record and
         // a spouse's), are no one person under two surnames: the one who took the other's stand-in

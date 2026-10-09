@@ -177,6 +177,10 @@ enum DocumentPipeline {
         var full: String?
         var email: String?
         var gender: String?
+        /// The name written in a second script beside the Latin one ("สมชาย" beside "Somchai"): the same person's.
+        var otherFirst: String?
+        var otherLast: String?
+        var otherFull: String?
         /// Two full names with no word in common: a row's "applicant_name" and
         /// "guarantor_name" are two people, so the record is no one person's.
         /// A middle name, a display name or a nickname beside a name is still one.
@@ -193,14 +197,21 @@ enum DocumentPipeline {
             }
         }
         mutating func set(_ value: String, for hint: String) {
+            // One name written in two scripts ("佐藤 美咲" and "SATO MISAKI", "first_name_th" and "first_name_en")
+            // is one person, known by the Latin one; the other is written for them too.
+            func scripted(_ known: String?, _ other: inout String?) -> String? {
+                guard let known, Self.script(known) != Self.script(value) else { return value }
+                if Self.script(known) != 0 && Self.script(value) == 0 { other = known; return value }
+                other = value
+                return known
+            }
             switch hint {
-            case "FIRST_NAME": first = value
-            case "LAST_NAME": last = value
+            case "FIRST_NAME": first = scripted(first, &otherFirst)
+            case "LAST_NAME": last = scripted(last, &otherLast)
             case "PERSON":
                 func words(_ name: String) -> Set<String> { Set(name.lowercased().split { !$0.isLetter }.map(String.init)) }
-                // One name written in two scripts ("佐藤 美咲" and "SATO MISAKI") is one person, known by the Latin one.
                 if let full, Self.script(full) != Self.script(value) {
-                    if Self.script(full) != 0 && Self.script(value) == 0 { self.full = value }
+                    self.full = scripted(full, &otherFull)
                     return
                 }
                 if let full, words(full).count >= 2, words(value).count >= 2, words(full).isDisjoint(with: words(value)) { several = true }
@@ -726,6 +737,7 @@ enum DocumentPipeline {
             if record.isMultiple(of: 1024) && Task.isCancelled { return Owners() }
             guard let fields = recordFields[record], !fields.several else { continue }
             owners[record] = job.associateRecord(first: fields.first, last: fields.last, full: fields.full, email: fields.email, gender: fields.gender)
+            if let person = owners[record] { job.alias(person, first: fields.otherFirst, last: fields.otherLast, full: fields.otherFull) }
         }
         result.people = identities.map { $0.flatMap { owners[$0] } }
         return result

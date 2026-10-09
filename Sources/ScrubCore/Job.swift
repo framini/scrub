@@ -369,6 +369,10 @@ public final class Job {
         return fake
     }
     @discardableResult
+    /// A person's name written again in another script (see `People.alias`).
+    func alias(_ person: Persona, first: String?, last: String?, full: String?) {
+        standIns.people.alias(person, first: first, last: last, full: full)
+    }
     func associateRecord(first: String?, last: String?, full: String?, email: String?, gender: String? = nil) -> Persona? {
         // "Aisha Bello-Okafor & Chidi Okafor" is two people, each their own.
         if let full, People.joint(full) != nil { return nil }
@@ -482,8 +486,17 @@ public final class Job {
             // An address built from another known person's name ("odalys.ferriter@…"
             // beside "ask oluwaseun") is that person's, wherever it is written.
             let named = fields["EMAIL_ADDRESS"].flatMap(standIns.people.find(email:))
-            if fields["PERSON"] != nil || fields["FIRST_NAME"] != nil && fields["LAST_NAME"] != nil, members.count >= 2,
-               let person = associateRecord(first: fields["FIRST_NAME"], last: fields["LAST_NAME"], full: fields["PERSON"], email: named == nil ? fields["EMAIL_ADDRESS"] : nil, gender: gender(near: members.map { spans[$0].range }, in: text)) {
+            // A full name beside a first or last name that is none of its words ("OKONKWO-REYES (Tobiah) … the
+            // Okonkwos") is someone else's: the parts are one person, the full name another, never joined.
+            var full = fields["PERSON"]
+            if let whole = full, fields["FIRST_NAME"] != nil || fields["LAST_NAME"] != nil {
+                func words(_ value: String) -> [String] { value.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init) }
+                let own = Set(words(whole))
+                if ![fields["FIRST_NAME"], fields["LAST_NAME"]].compactMap({ $0 }).flatMap(words).allSatisfy(own.contains) { full = nil }
+            }
+            if full != nil || fields["FIRST_NAME"] != nil && fields["LAST_NAME"] != nil, members.count >= 2,
+               let person = associateRecord(first: fields["FIRST_NAME"], last: fields["LAST_NAME"], full: full, email: named == nil ? fields["EMAIL_ADDRESS"] : nil, gender: gender(near: members.map { spans[$0].range }, in: text)) {
+                if named != nil, let email = fields["EMAIL_ADDRESS"] { standIns.people.shareIfOthers(email, with: person) }
                 for member in members where spans[member].entity != "PERSON" {
                     if spans[member].entity == "EMAIL_ADDRESS", let named, named !== person { continue }
                     result[member] = person

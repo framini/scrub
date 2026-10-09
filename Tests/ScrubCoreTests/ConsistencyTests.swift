@@ -296,3 +296,65 @@ struct ConsistencyTests {
         }
     }
 }
+
+/// A surname in a record's field and the same surname in its narrative, written in capitals beside
+/// the given name, keep one stand-in, though the narrative also names someone else ("the Okonkwos").
+@Test(arguments: [UInt64(1), 2, 3])
+func aSurnameInAFieldAndANarrativeIsOnePerson(_ seed: UInt64) throws {
+    let input = #"{"case_id": "KYC-20931", "applicant": {"given_name": "Tobiah", "surname": "Okonkwo-Reyes", "birth_date": "1987-06-02"}, "reviewer": {"name": "Priya Ramanathan", "email": "priya.ramanathan@example.com"}, "narrative": "Applicant OKONKWO-REYES (Tobiah) confirmed identity. Reviewer: Priya Ramanathan <priya.ramanathan@example.com>. Okonkwos family business noted."}"#
+    let result = try Scrubber.scrub(Data(input.utf8), name: "case.json", forceFullDetection: false, seed: seed)
+    let object = try #require(try JSONSerialization.jsonObject(with: result.output) as? [String: Any])
+    let applicant = try #require(object["applicant"] as? [String: String])
+    let narrative = try #require(object["narrative"] as? String)
+    let surname = try #require(applicant["surname"]), given = try #require(applicant["given_name"])
+    #expect(narrative.hasPrefix("Applicant \(surname.uppercased()) (\(given)) confirmed identity."), "[\(seed)] \(applicant) / \(narrative)")
+    for original in ["Okonkwo", "OKONKWO", "Tobiah", "Priya", "Ramanathan"] { #expect(!narrative.contains(original), "\(original) in \(narrative)") }
+}
+
+/// A staff member's email written as each of two customers' contact is one address with one stand-in,
+/// and no customer's name: it is neither's.
+@Test(arguments: [UInt64(1), 2, 3])
+func anEmailBesideTwoPeopleKeepsOneStandIn(_ seed: UInt64) throws {
+    let json = #"{"cases": [{"first_name": "Ilse", "last_name": "Brandvold", "contact_email": "k.marsh@example.org"}, {"first_name": "Teodor", "last_name": "Lisboa", "contact_email": "k.marsh@example.org"}]}"#
+    let result = try Scrubber.scrub(Data(json.utf8), name: "cases.json", forceFullDetection: false, seed: seed)
+    let object = try #require(try JSONSerialization.jsonObject(with: result.output) as? [String: [[String: String]]])
+    let cases = try #require(object["cases"])
+    let emails = Set(cases.compactMap { $0["contact_email"] })
+    #expect(emails.count == 1 && !emails.contains("k.marsh@example.org"), "[\(seed)] \(cases)")
+    let text = """
+    Case 1: customer Ilse Brandvold called about her card. Handled by k.marsh@example.org.
+    Case 2: customer Teodor Lisboa asked for a refund. Handled by k.marsh@example.org.
+    """
+    let output = String(decoding: try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: seed).output, as: UTF8.self)
+    let found = output.matches(of: /Handled by ([^ ]+@[^ ]+)\./).map { String($0.1) }
+    #expect(found.count == 2 && Set(found).count == 1, "[\(seed)] \(output)")
+    // The handler is neither customer: the address is no stand-in built from either's name.
+    let customers = output.matches(of: /customer (\w+) (\w+)/).flatMap { [String($0.1).lowercased(), String($0.2).lowercased()] }
+    #expect(!customers.contains { found.first?.lowercased().contains($0) == true }, "[\(seed)] \(output)")
+}
+
+/// A name and its Latin form side by side in one record (a Thai name under "name_th", "nameLocal" or
+/// "name": {"th": …}) is one person: one stand-in for both, and for the Thai name again in a note.
+@Test(arguments: [UInt64(1), 2, 3])
+func aNameAndItsLatinFormAreOnePerson(_ seed: UInt64) throws {
+    let inputs = [
+        #"{"customer": {"first_name_th": "สมชาย", "last_name_th": "ใจดี", "first_name_en": "Somchai", "last_name_en": "Jaidee"}}"#,
+        #"{"applicant": {"full_name": "Somchai Jaidee", "full_name_local": "สมชาย ใจดี"}, "note": "ลูกค้า สมชาย ใจดี ยืนยันตัวตนแล้ว"}"#,
+        #"{"records": [{"id": 1, "name": {"th": "สมชาย ใจดี", "en": "Somchai Jaidee"}}, {"id": 2, "name": {"th": "มาลี รักไทย", "en": "Malee Rakthai"}}]}"#,
+        #"{"contact": {"nameLocal": "มาลี รักไทย", "nameLatin": "Malee Rakthai"}}"#,
+    ]
+    for input in inputs {
+        let result = try Scrubber.scrub(Data(input.utf8), name: "record.json", forceFullDetection: false, seed: seed)
+        let output = String(decoding: result.output, as: UTF8.self)
+        for original in ["สมชาย", "ใจดี", "มาลี", "รักไทย", "Somchai", "Jaidee", "Malee", "Rakthai"] { #expect(!output.contains(original), "\(original) in \(output)") }
+        // Each original has one stand-in, and the two forms of one name share it.
+        var standIns: [String: Set<String>] = [:]
+        for finding in result.findings { standIns[finding.original, default: []].insert(finding.standIn) }
+        #expect(standIns.values.allSatisfy { $0.count == 1 }, "\(standIns)")
+        for (thai, latin) in [("สมชาย", "Somchai"), ("ใจดี", "Jaidee"), ("สมชาย ใจดี", "Somchai Jaidee"), ("มาลี รักไทย", "Malee Rakthai")] {
+            guard let a = standIns[thai], let b = standIns[latin] else { continue }
+            #expect(a == b, "[\(seed)] \(thai) -> \(a), \(latin) -> \(b): \(output)")
+        }
+        #expect(Set(result.findings.filter { $0.original.contains("ใจดี") || $0.original.contains("Jaidee") }.map { $0.standIn.split(separator: " ").last ?? "" }).count <= 1, "\(output)")
+    }
+}

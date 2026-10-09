@@ -275,6 +275,9 @@ public enum KeyHints {
             if ["maiden", "birth", "birthname"].contains(compact) { return "maiden_name" }
             if ["full", "display", "formatted", "text"].contains(compact) { return "full_name" }
             if let part = shortNameParts[compact] { return part }
+            // The name in a script or a language of its own: "name": {"th": …, "en": …}.
+            if own == nil, displayWords.contains(compact) { return "full_name_" + compact }
+        case "FIRST_NAME" where own == nil && displayWords.contains(compact), "LAST_NAME" where own == nil && displayWords.contains(compact): return parent
         case "PHONE_NUMBER" where ["number", "digits", "e164", "national", "nationalnumber", "international", "internationalnumber", "formatted", "raw", "full"].contains(compact): return parent
         case "EMAIL_ADDRESS" where ["address", "addr"].contains(compact): return parent
         case "ADDRESS" where ["line", "lines", "text", "formatted", "full"].contains(compact): return parent

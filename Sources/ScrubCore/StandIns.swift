@@ -82,6 +82,8 @@ final class StandIns {
     /// A username or an email's local part, and the stand-in each took: "user
     /// quillpen77" beside "quillpen77@marrowmail.example" is one account.
     private var handles: [String: String] = [:]
+    /// Each email address, lowercased, and the stand-in and person it was first drawn for.
+    private var emails: [String: (fake: String, owner: Persona?)] = [:]
     /// The lowercase words of every name and handle the document holds, noted
     /// before anything is drawn: a record ID's prefix that is one of them is
     /// someone's name, not a type (see `RecordIDs.keptPrefix`).
@@ -1617,14 +1619,23 @@ final class StandIns {
             owner = person
             return person.last
         case "EMAIL_ADDRESS":
-            if let owner = persona ?? people.find(email: original), original.contains("@") {
+            // One address keeps the stand-in it first took, whoever's record it is written in next.
+            let key = original.lowercased()
+            if let drawn = emails[key] {
+                owner = drawn.owner
+                return drawn.fake
+            }
+            let fake: String
+            if let owner = people.shared(email: original) ? nil : persona ?? people.find(email: original), original.contains("@") {
                 self.owner = owner
-                return people.email(for: owner, original: original)
+                fake = people.email(for: owner, original: original)
+            } else if let local = handleKey(String(original.prefix { $0 != "@" })), let handle = handles[local], original.contains("@") {
+                fake = handle.lowercased() + "@" + (pick(Names.emailDomains) ?? "example.com")
+            } else {
+                fake = "\(people.unrelatedName(first: true).lowercased()).\(people.unrelatedName(first: false).lowercased())@\(pick(Names.emailDomains) ?? "example.com")"
             }
-            if let local = handleKey(String(original.prefix { $0 != "@" })), let handle = handles[local], original.contains("@") {
-                return handle.lowercased() + "@" + (pick(Names.emailDomains) ?? "example.com")
-            }
-            return "\(people.unrelatedName(first: true).lowercased()).\(people.unrelatedName(first: false).lowercased())@\(pick(Names.emailDomains) ?? "example.com")"
+            if original.contains("@") { emails[key] = (fake, owner) }
+            return fake
         case "LOCATION": return pick(Names.cities.filter { !originals.contains($0.lowercased()) }) ?? "Austin"
         case "REGION": return pick(Places.regions.filter { $0.country == "US" && !originals.contains($0.code.lowercased()) && !originals.contains($0.name.lowercased()) }).map { original.count > 3 ? $0.name : $0.code } ?? "TX"
         case "ADDRESS":
