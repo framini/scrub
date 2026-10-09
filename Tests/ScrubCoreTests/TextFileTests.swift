@@ -222,3 +222,87 @@ func anAuditLogKeepsTheKeysAroundAnEmail(_ seed: UInt64) throws {
     #expect(after[1].contains(" target=user/") && after[2].contains(" target=user/") && after[3].contains(" subject=customers/eu/"), "\(output)")
     for original in ["ingrid.halvorsen", "teo.lisboa", "ingrid.brekke"] { #expect(!output.contains(original), "\(original) in \(output)") }
 }
+
+/// A log's pair whose key names a person holds one, written "Surname, Given" or "Given Surname", quoted or
+/// not; a record's key written as a namespace and a reference ("key=cust:CU-55120") keeps its prefix and
+/// shape, the same stand-in wherever it is written, and is never read as a secret.
+@Test(arguments: 1...3)
+func aLogPairUnderAPersonsKeyHoldsTheirName(_ seed: Int) throws {
+    let log = """
+    2026-03-14T09:12:44.118Z INFO  [consumer-3] c.e.payments.SettlementListener - processed offset=88123 partition=4 key=cust:CU-55120 subject="Oyelaran, Babatunde" amount=125.40 currency=EUR status=OK
+    2026-03-14T09:12:45.002Z WARN  [consumer-3] c.e.payments.SettlementListener - retry customer=Ingrid Halvorsen payer='Marta Kowalczyk' beneficiary=Tomasz Nowicki account_holder="Dlamini, Sipho" cache=cust:CU-55120
+    2026-03-14T09:12:46.310Z INFO  [consumer-3] c.e.payments.SettlementListener - committed offset=88124 cust_name="Halvorsen, Ingrid" topic=settlements.v2 subject="Monthly Statement"
+
+    """
+    let result = try Scrubber.scrub(Data(log.utf8), name: "consumer.log", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    for original in ["Oyelaran", "Babatunde", "Ingrid", "Halvorsen", "Marta", "Kowalczyk", "Tomasz", "Nowicki", "Dlamini", "Sipho", "55120"] {
+        #expect(!output.contains(original), "\(original) in \(output)")
+    }
+    let lines = output.split(separator: "\n").map(String.init)
+    #expect(lines.count == 3 && lines[2].hasSuffix(#"topic=settlements.v2 subject="Monthly Statement""#), "\(output)")
+    // "Surname, Given" keeps its order and its comma; the record's key keeps its prefix, the same in both lines.
+    let subject = try #require(lines[0].range(of: #"subject="[^"]+""#, options: .regularExpression)).lowerBound
+    #expect(lines[0][subject...].range(of: #"^subject="\p{Lu}[\p{L}'-]+, \p{Lu}[\p{L}'-]+" amount=125\.40"#, options: .regularExpression) != nil, "\(output)")
+    let key = try #require(lines[0].range(of: #"key=cust:CU-\d{5} "#, options: .regularExpression))
+    #expect(lines[1].hasSuffix("cache=" + lines[0][key].dropFirst(4).dropLast()), "\(output)")
+    #expect(!result.findings.contains { $0.entity == "SECRET" }, "\(result.findings.map { "\($0.entity) \($0.original)" })")
+    #expect(result.unresolved.isEmpty, "\(result.unresolved.map { "\($0.entity) \($0.original ?? "")" })")
+}
+
+/// A company's name ending in a legal form ("Cía. Ltda.", "S.A.C.", "e Hijos", "& Co.") is no person's, and the
+/// place right after its form is its seat, kept with it ("d.o.o. Beograd"); the people beside them are replaced.
+@Test(arguments: 1...3)
+func aCompanysFormAndSeatStayAsWritten(_ seed: Int) throws {
+    let text = """
+    Factura emitida por Example Envíos Cía. Ltda. a nombre de Laura Méndez.
+    Proveedor: Transportes Andinos S.A.C., contacto Pedro Quispe.
+    Distribuidor: Example Ferretería e Hijos, sucursal norte.
+    Isporučilac: Primer Trgovina d.o.o. Beograd, kontakt Marko Petrović.
+    Supplier: Northwind Foods & Co., contact Grace Holt.
+
+    """
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    for kept in ["Example Envíos Cía. Ltda.", "Transportes Andinos S.A.C.", "Example Ferretería e Hijos", "Primer Trgovina d.o.o. Beograd,", "Northwind Foods & Co."] {
+        #expect(output.contains(kept), "\(kept) in \(output)")
+    }
+    for original in ["Laura", "Méndez", "Pedro", "Quispe", "Marko", "Petrović", "Grace", "Holt"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    #expect(!result.findings.contains { $0.original.contains("Envíos") || $0.original == "Beograd" }, "\(result.findings.map { "\($0.entity) \($0.original)" })")
+    #expect(!(result.unresolved.contains { ($0.original ?? "").contains("Envíos") }))
+}
+
+/// An address ends before a phone's label in any language and before a clause a joining word opens: the label,
+/// the clause and the phone's country code stay as written, and the relative the clause names is replaced.
+@Test(arguments: 1...3)
+func anAddressEndsBeforeALabelOrAClause(_ seed: Int) throws {
+    let text = """
+    Vivo en Calle Mayor 12, 3º B, 28013 Madrid con mi hija Lucía desde 2019.
+    Adresas: Gedimino pr. 9-12, LT-01103 Vilnius Telefonas +370 612 34567
+    Adrese: Brīvības iela 118-7, Rīga Tālrunis +371 2955 0123
+
+    """
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    let lines = output.split(separator: "\n").map(String.init)
+    #expect(lines.count == 3, "\(output)")
+    #expect(lines[0].range(of: #" con mi hija \p{Lu}\p{Ll}+ desde 2019\.$"#, options: .regularExpression) != nil, "\(output)")
+    #expect(lines[1].range(of: #" Telefonas \+370 \d{3} \d{5}$"#, options: .regularExpression) != nil, "\(output)")
+    #expect(lines[2].range(of: #" Tālrunis \+371 \d{4} \d{4}$"#, options: .regularExpression) != nil, "\(output)")
+    for original in ["Mayor 12", "28013", "Lucía", "Gedimino", "01103", "612 34567", "Brīvības", "2955 0123"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    #expect(!result.findings.contains { $0.entity == "ADDRESS" && ($0.original.hasSuffix(" con mi hija Lucía") || $0.original.hasSuffix("Telefonas") || $0.original.hasSuffix("Tālrunis")) },
+            "\(result.findings.map { "\($0.entity) \($0.original)" })")
+}
+
+/// The word between a name and a parent's or husband's ("s/o", "binti", "bin", "a/l", "bt.") stays as written,
+/// and both names around it are replaced.
+@Test(arguments: 1...3)
+func aLineageWordStaysBetweenTwoNames(_ seed: Int) throws {
+    let text = "Father's name: Ahmed s/o Rashid. Guardian: Siti binti Abdullah. Next of kin: Ali bin Hassan, Kumar a/l Rajan and Nurul bt. Aziz.\n"
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    let name = #"\p{Lu}[\p{L}'-]+"#
+    let shape = "^Father's name: \(name) s/o \(name)\\. Guardian: \(name) binti \(name)\\. Next of kin: \(name) bin \(name), \(name) a/l \(name) and \(name) bt\\. \(name)\\.$"
+    #expect(output.trimmingCharacters(in: .newlines).range(of: shape, options: .regularExpression) != nil, "\(output)")
+    for original in ["Ahmed", "Rashid", "Siti", "Abdullah", "Ali ", "Hassan", "Kumar", "Rajan", "Nurul", "Aziz"] { #expect(!output.contains(original), "\(original) in \(output)") }
+}

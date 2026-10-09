@@ -311,12 +311,14 @@ public final class Detector {
     }
     /// What `base` finds, and the people it doubts.
     func read(_ text: String, key: String? = nil, contextWords: Set<String> = [], naming: Set<String>? = nil, context: ContextStage.Reading? = nil) -> (spans: [Span], doubts: [Span]) {
-        let spans = Self.contactsOutOfAddresses(base(text, key: key, contextWords: contextWords, naming: naming, context: context), in: text).filter { !Self.served($0, in: text) }
+        let spans = Self.lineageKept(Self.labelsOutOfAddresses(Self.contactsOutOfAddresses(base(text, key: key, contextWords: contextWords, naming: naming, context: context), in: text), in: text), in: text).filter { !Self.served($0, in: text) }
         return (spans.compactMap { Self.companyNamed($0, in: text) }, doubts)
     }
     /// A name a reader found that ends in a company's form, or that one follows ("Example Distribuidora S.A."),
-    /// is a company's: kept as written, or a company's stand-in where its owner's given name is in it.
+    /// is a company's: kept as written, or a company's stand-in where its owner's given name is in it. The place
+    /// after its form is its seat, kept with it.
     static func companyNamed(_ span: Span, in text: String) -> Span? {
+        if span.score < 1, NameEvidence.seat(span, in: text) { return nil }
         guard ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(span.entity), span.score < 1, NameEvidence.company(span, in: text) else { return span }
         let words = TextRanges.substring(text, span.range).split(whereSeparator: { !$0.isLetter })
         guard words.contains(where: { NameLists.isFirst(String($0)) }) else { return nil }
@@ -378,6 +380,50 @@ public final class Detector {
             guard lower != span.range.lowerBound || upper != span.range.upperBound else { return span }
             guard let kept = trimmed(lower..<upper, in: ns) else { return nil }
             return Span(range: kept, entity: "ADDRESS", score: span.score)
+        }
+    }
+    private static let lineageWord = TextPattern(#"[ \t]+"# + WrittenNames.lineageWords + #"[ \t]+(?=\p{Lu})"#)
+    /// A person read across the word that says whose child or wife they are ("Ali bin Hassan", "Ahmed s/o Rashid") is
+    /// two people's names: each is replaced, and the word between stays as written.
+    static func lineageKept(_ spans: [Span], in text: String) -> [Span] {
+        let ns = text as NSString
+        var result: [Span] = []
+        for span in spans {
+            guard ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(span.entity), let match = TextRanges.matches(lineageWord, in: ns.substring(with: NSRange(location: span.range.lowerBound, length: span.range.count))).first else { result.append(span); continue }
+            let cut = span.range.lowerBound + match.range.location, resume = span.range.lowerBound + NSMaxRange(match.range)
+            for part in [span.range.lowerBound..<cut, resume..<span.range.upperBound] where !part.isEmpty && !result.contains(where: { $0.range == part }) {
+                result.append(Span(range: part, entity: "PERSON", score: span.score))
+            }
+        }
+        return result
+    }
+    private static let addressWord = TextPattern(#"(?<=[\s,;])(\p{L}[\p{L}\p{M}-]*)"#)
+    /// Short labels of a phone no key is named ("Mob.", "Cel.", "Handy").
+    private static let phoneLabels: Set<String> = ["mob", "cel", "handy", "tfn", "puh", "gsm", "mobtel"]
+    /// Words that join a clause to an address, not a part of it ("… 28013 Madrid con mi hija").
+    private static let joiningWords: Set<String> = ["con", "y", "e", "and", "und", "et", "with", "mit", "avec", "com", "i", "ir", "un", "ja"]
+    /// An address read on into a phone's or an email's label, in any language ("…, LT-01103 Vilnius Telefonas +370 …",
+    /// "…, Rīga Tālrunis …", "Tel. …", "Móvil: …"), or into a clause a joining word and a word in small letters open
+    /// ("… 28013 Madrid con mi hija Lucía"), ends before them. A label counts only before a number or an email, so
+    /// "Mobile, AL 36602" stays a city.
+    static func labelsOutOfAddresses(_ spans: [Span], in text: String) -> [Span] {
+        guard spans.contains(where: { $0.entity == "ADDRESS" }) else { return spans }
+        let ns = text as NSString
+        return spans.compactMap { span in
+            guard span.entity == "ADDRESS", span.range.count > 4 else { return span }
+            let value = ns.substring(with: NSRange(location: span.range.lowerBound, length: span.range.count)) as NSString
+            let words = TextRanges.matches(addressWord, in: value as String)
+            for (index, match) in words.enumerated() where match.range.location > 0 {
+                let word = value.substring(with: match.range), lower = word.lowercased(), at = span.range.lowerBound + match.range.location
+                let after = ns.substring(with: NSRange(location: at + match.range.length, length: min(48, ns.length - at - match.range.length)))
+                let label = (phoneLabels.contains(lower) || KeyHints.hint(word).map { ["PHONE_NUMBER", "EMAIL_ADDRESS"].contains($0) } == true)
+                    && after.range(of: #"^\.?[ \t]*:?[ \t]*(?:[+(\d]|[^\s@]+@)"#, options: .regularExpression) != nil
+                let joining = joiningWords.contains(word) && index + 1 < words.count && value.substring(with: words[index + 1].range).first?.isLowercase == true
+                    && NSMaxRange(match.range) + 1 == words[index + 1].range.location
+                guard label || joining else { continue }
+                return trimmed(span.range.lowerBound..<at, in: ns).map { Span(range: $0, entity: "ADDRESS", score: span.score) }
+            }
+            return span
         }
     }
     /// Doubted people cut to what a name holds, outside every finding and

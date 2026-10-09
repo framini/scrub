@@ -185,13 +185,21 @@ enum NameEvidence {
         let line = ns.substring(with: ns.lineRange(for: NSRange(location: range.lowerBound, length: 0)))
         return !TextRanges.matches(technical, in: line).isEmpty
     }
-    /// The forms a company's name ends with: "Lda.", "S.A.", "GmbH", "B.V.", "S.r.l.", "Ltd", "Co., Ltd.", "Sdn Bhd", "K.K.", "A.Ş.", "d.o.o.", "Sp. z o.o.", "ООО".
-    static let companyForm = #"(?:S\.?A\.?\s?de\s?C\.?V|GmbH\s?&\s?Co\.?\s?KG|\(Pty\)\s?Ltd|Co\.?,?\s?Ltd|Pte\.?\s?Ltd|Pvt\.?\s?Ltd|Sdn\.?\s?Bhd|Bhd|Berhad|K\.K|G\.?K|Lda|Ltda|S\.?A\.?S?|S\.?L\.?U?|S\.?r\.?l|S\.?p\.?A|S\.?A\.?R\.?L|SARL|GmbH|AG|KG|OHG|e\.?V|B\.?V|N\.?V|V\.?O\.?F|Ltd|Limited|LLC|LLP|L\.?P|Inc|Corp|Co|PLC|AB|ASA|AS|A/S|ApS|Oy|Oyj|A\.?Ş|Ltd\.?\s?Şti|[sS]p\.?\s?z\s?o\.?\s?o|[dD]\.?\s?o\.?\s?o|[sS]\.?\s?r\.?\s?o|S\.?C|SpA|Srl|SAS|SE|S\.?C\.?A|Unipessoal|EIRELI|ME|EPP|Pty|BVBA|SRL|OÜ|SIA|UAB|Kft|Zrt|Nyrt|Bt|Α\.?Ε|Ε\.?Π\.?Ε|ΙΚΕ|ЕООД|ООД|ЕАД|ООО|ОАО|ЗАО|ТОВ|ПАО)\.?"#
+    /// The forms a company's name ends with: "Lda.", "Cía. Ltda.", "y Cía.", "e Hijos", "& Co.", "S.A.C.", "S. de R.L.", "EIRL", "S.A.", "GmbH", "B.V.", "S.r.l.", "Ltd", "Co., Ltd.", "Sdn Bhd", "K.K.", "A.Ş.", "d.o.o.", "Sp. z o.o.", "ООО".
+    static let companyForm = #"(?:C[íi]a\.?\s?Ltda|y\s?C[íi]a|C[íi]a|e\s?Hijos|&\s?Co|S\.?\s?de\s?R\.?\s?L|S\.?A\.?C|S\.?R\.?L|EIRL|S\.?A\.?\s?de\s?C\.?V|GmbH\s?&\s?Co\.?\s?KG|\(Pty\)\s?Ltd|Co\.?,?\s?Ltd|Pte\.?\s?Ltd|Pvt\.?\s?Ltd|Sdn\.?\s?Bhd|Bhd|Berhad|K\.K|G\.?K|Lda|Ltda|S\.?A\.?S?|S\.?L\.?U?|S\.?r\.?l|S\.?p\.?A|S\.?A\.?R\.?L|SARL|GmbH|AG|KG|OHG|e\.?V|B\.?V|N\.?V|V\.?O\.?F|Ltd|Limited|LLC|LLP|L\.?P|Inc|Corp|Co|PLC|AB|ASA|AS|A/S|ApS|Oy|Oyj|A\.?Ş|Ltd\.?\s?Şti|[sS]p\.?\s?z\s?o\.?\s?o|[dD]\.?\s?o\.?\s?o|[sS]\.?\s?r\.?\s?o|S\.?C|SpA|Srl|SAS|SE|S\.?C\.?A|Unipessoal|EIRELI|ME|EPP|Pty|BVBA|SRL|OÜ|SIA|UAB|Kft|Zrt|Nyrt|Bt|Α\.?Ε|Ε\.?Π\.?Ε|ΙΚΕ|ЕООД|ООД|ЕАД|ООО|ОАО|ЗАО|ТОВ|ПАО)\.?"#
     private static let formAround = TextPattern(#"(?:^|[ \t,])"# + companyForm + #"(?![\p{L}\p{N}])"#)
     private static let formOnly = TextPattern(#"^"# + companyForm + #"$"#)
     private static let formAfter = TextPattern(#"^,?[ \t]+"# + companyForm + #"(?![\p{L}\p{N}])"#)
     private static let formAhead = TextPattern(#"^(?:[ \t]+\p{Lu}[\p{L}\p{M}'’&-]*){1,3},?[ \t]+"# + companyForm + #"(?![\p{L}\p{N}])"#)
     private static let formEnding = TextPattern(#"^\p{L}[\p{L}\p{M}\p{N}'’&.\- ]*?,?[ \t]+("# + companyForm + #")$"#)
+    private static let formBefore = TextPattern(#"(?:^|[ \t,])"# + companyForm + #",?[ \t]+$"#)
+    /// A place written right after a company's form is the company's seat ("Primer Trgovina d.o.o. Beograd",
+    /// "Example GmbH, Köln"): it names where the company is, not where anyone lives.
+    static func seat(_ span: Span, in text: String) -> Bool {
+        guard span.entity == "LOCATION", span.range.lowerBound > 0 else { return false }
+        let ns = text as NSString, start = max(0, span.range.lowerBound - 32)
+        return !TextRanges.matches(formBefore, in: ns.substring(with: NSRange(location: start, length: span.range.lowerBound - start))).isEmpty
+    }
     /// Whether a whole value is a company's name: words, then the form it ends with ("Example Distribuidora S.A.").
     static func companyName(_ value: String) -> Bool { companyNameForm(value) != nil }
     /// The form a company's whole name ends with ("Unipessoal Lda." of "… Unipessoal Lda." reads "Lda."), nil for no company's name.

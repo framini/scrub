@@ -69,6 +69,30 @@ public enum CSVFile: FileFormat {
             let people = cells.filter { KeyHints.bareNameIsPerson($0, personsRecord: personsRecord) }.count
             return people > 0 && people * 2 >= cells.count
         })
+        // A column of surnames, by its header or by its cells, makes a column beside it under a header Scrub
+        // can't read one of given names when at least half its cells are given names a list holds, and the
+        // two found by their cells alone are a person's name's parts: "Ilze" beside "Bērziņa".
+        let nameColumns: [Int: String] = {
+            func listed(_ column: Int, _ isListed: (String) -> Bool) -> Bool {
+                guard column >= 0, column < keys.count, KeyHints.hint(keys[column]) == nil, !naming.contains(column) else { return false }
+                let cells = rows.prefix(200).compactMap { column < $0.count ? $0[column].trimmingCharacters(in: .whitespaces) : nil }.filter { !$0.isEmpty }
+                let listed = cells.filter { cell in
+                    cell.first?.isUppercase == true && cell.split(separator: " ").count <= 2 && cell.allSatisfy { $0.isLetter || " '’-".contains($0) }
+                        && cell.split(whereSeparator: { $0 == " " || $0 == "-" }).allSatisfy { isListed(String($0)) && !NameLists.isWordlike(String($0)) }
+                }.count
+                return listed > 0 && listed * 2 >= cells.count
+            }
+            var found: [Int: String] = [:]
+            for column in keys.indices {
+                let surnames = KeyHints.hint(keys[column]) == "LAST_NAME", bySurnames = !surnames && listed(column, NameLists.isSurname)
+                guard surnames || bySurnames else { continue }
+                for beside in [column - 1, column + 1] where listed(beside, NameLists.isFirst) {
+                    found[beside] = "first_name"
+                    if bySurnames { found[column] = "last_name" }
+                }
+            }
+            return found
+        }()
         // A cell holding a body (as JSON, or in base64) is read as a JSON string holding one is,
         // its values read before the cells' and written again in the body's own form.
         let collector = JSONDocument.Collector()
@@ -99,6 +123,7 @@ public enum CSVFile: FileFormat {
                 if let fields = owned[column], KeyHints.ownRecord(fields, value: rows[row][column]) { key = "name" }
                 if KeyHints.holdsWholeName(key, value: cell, siblings: keys.compactMap { $0 }) { key = "name" }
                 if KeyHints.hint(key) == nil, column < keys.count, let part = nameParts[keys[column]] { key = part }
+                if KeyHints.hint(key) == nil, let part = nameColumns[column], !naming.contains(column) { key = part }
                 if let siblings = named[column] {
                     let texts = siblings.compactMap { $0 < rows[row].count ? (KeyHints.words(columns[$0]).last!, rows[row][$0]) : nil }
                     key = KeyHints.namedField("value", siblings: texts) ?? key

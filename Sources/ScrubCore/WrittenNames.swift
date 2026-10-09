@@ -80,6 +80,27 @@ enum WrittenNames {
                 }
             }
         }
+        if text.contains("=") {
+            for match in TextRanges.matches(logPair, in: text, isCancelled: isCancelled) {
+                let value = [2, 3, 4].map { match.range(at: $0) }.first { $0.location != NSNotFound }!
+                guard personKey(ns.substring(with: match.range(at: 1))), isName(ns.substring(with: value)),
+                      case let words = ns.substring(with: value).split(whereSeparator: { !$0.isLetter && $0 != "'" && $0 != "’" && $0 != "-" }).map(String.init),
+                      words.contains(where: { NameLists.isFirst($0) || NameLists.isSurname($0) || !NameLists.isWord($0) }),
+                      !words.contains(where: { NameLists.isOrdinary($0) && !NameLists.isFirst($0) && !NameLists.isSurname($0) }) else { continue }
+                found.spans.append(Span(range: range(value), entity: "PERSON", score: 0.95))
+            }
+        }
+        for match in TextRanges.matches(lineage, in: text, isCancelled: isCancelled) {
+            let sides = [match.range(at: 1), match.range(at: 3)]
+            let words = sides.flatMap { ns.substring(with: $0).split(separator: " ").map(String.init) }
+            guard words.contains(where: { NameLists.isFirst($0) || NameLists.isSurname($0) }), !words.contains(where: { NameLists.isOrdinary($0) && !NameLists.isFirst($0) && !NameLists.isSurname($0) }) else { continue }
+            found.spans += sides.map { Span(range: range($0), entity: "PERSON", score: 0.95) }
+        }
+        for match in TextRanges.matches(kin, in: text, isCancelled: isCancelled) {
+            let name = ns.substring(with: match.range(at: 1))
+            guard NameLists.isFirst(name), !NameLists.isWordlike(name), !NameLists.isOrdinary(name) else { continue }
+            found.spans.append(Span(range: range(match.range(at: 1)), entity: "PERSON", score: 0.9))
+        }
         for match in TextRanges.matches(sender, in: text, isCancelled: isCancelled) where isName(ns.substring(with: match.range(at: 1))) {
             found.spans.append(Span(range: range(match.range(at: 1)), entity: "PERSON", score: 0.95))
         }
@@ -141,6 +162,27 @@ enum WrittenNames {
     /// Two to four capitalised words, or "Last, First": no organisation, no
     /// word that names a role, a day or a group, no word all in capitals
     /// beyond initials ("TK Abernathy", not "CORVANE NORTH AMERICA").
+    /// A name, the word that says whose child or wife its bearer is, and the parent's or husband's name: "Ahmed s/o Rashid",
+    /// "Siti binti Abdullah", "Kumar a/l Rajan". The word stays as written between the two names.
+    static let lineageWords = #"(?:[sdw]/o|a/[lp]|binti|bint|bin|ibn|bt\.)"#
+    private static let lineage = TextPattern(#"(?<![\p{L}\p{N}])(\p{Lu}[\p{L}'’-]+(?:[ \t]+\p{Lu}[\p{L}'’-]+)?)[ \t]+("# + lineageWords + #")[ \t]+(\p{Lu}[\p{L}'’-]+(?:[ \t]+\p{Lu}[\p{L}'’-]+)?)(?![\p{L}\p{N}])"#)
+    /// A relative named after the word for them, in the languages a note is written in: "con mi hija Lucía", "my son Mateo", "avec ma fille Chloé".
+    private static let kin = TextPattern(#"(?i:\b(?:mi|mis|su|sus|tu|my|his|her|our|their|ma|mon|sa|son|minha|meu|mia|mio|meine?|seine?|ihre?)[ \t]+(?:hija|hijo|hijas|hijos|esposa|esposo|madre|padre|hermana|hermano|nieta|nieto|daughter|son|wife|husband|mother|father|sister|brother|fille|fils|femme|mari|m[èe]re|p[èe]re|s[œo]eur|fr[èe]re|filha|filho|figlia|figlio|moglie|marito|tochter|sohn|frau|mann|schwester|bruder))[ \t]+(\p{Lu}\p{Ll}+)(?![\p{L}\p{N}])"#)
+    /// A log's pair whose key names a person (subject="Oyelaran, Babatunde", "payer='Marta Kowalczyk'",
+    /// "customer=Ingrid Halvorsen amount=…"): the value quoted, or capitalised words up to the next pair or the line's end.
+    private static let logPair = TextPattern(#"(?m)(?<![\p{L}\p{N}_.\-])(\p{L}[\p{L}\p{N}_.\-]{1,40})=(?:"([^"\r\n]{2,60})"|'([^'\r\n]{2,60})'|(\p{Lu}[\p{L}'’.\-]*(?:,?[ \t]+\p{Lu}[\p{L}'’.\-]*){1,3}|\p{Lu}[\p{L}'’\-]*,\p{Lu}[\p{L}'’\-]*)(?=[ \t]*(?:$|[\r\n,;|\]}]|\p{L}[\p{L}\p{N}_.\-]*=)))"#)
+    /// The people a log's key names, whatever it calls their name ("cust_name", "account_holder", "Kontoinhaber").
+    private static let loggedPeople: Set<String> = ["subject", "customer", "cust", "client", "holder", "accountholder", "cardholder", "payer", "payee", "beneficiary", "applicant",
+                                                    "user", "member", "debtor", "creditor", "remitter", "insured", "policyholder", "patient", "owner", "sender", "recipient", "guarantor",
+                                                    "titular", "cliente", "pagador", "beneficiario", "solicitante", "ordenante", "kunde", "inhaber", "kontoinhaber", "zahler", "empfanger", "antragsteller",
+                                                    "titulaire", "beneficiaire", "demandeur", "payeur", "klant", "begunstigde", "aanvrager", "intestatario", "richiedente", "klient", "wnioskodawca", "platnik"]
+    private static func personKey(_ key: String) -> Bool {
+        if ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(KeyHints.hint(key) ?? "") { return true }
+        var words = KeyHints.words(KeyHints.plain(key))
+        if words.count >= 2, ["name", "fullname", "nm"].contains(words.last!) { words.removeLast() }
+        if words.count >= 2, ["full"].contains(words.last!) { words.removeLast() }
+        return (1...2).contains(words.count) && (loggedPeople.contains(words.joined()) || words.count == 2 && loggedPeople.contains(words[1]) && !KeyHints.isNotPeople(words[0]))
+    }
     private static func isName(_ value: String) -> Bool {
         let single = value.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         guard !TextRanges.matches(lastFirst, in: single).isEmpty || !TextRanges.matches(firstLast, in: single).isEmpty else { return false }

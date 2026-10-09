@@ -71,6 +71,18 @@ public enum KeyHints {
         ("emailcim sahkoposti sahkopostiosoite", "EMAIL_ADDRESS"),
         ("szemelyiigazolvanyszam szemelyiigazolvany szemelyiszam szemelyiazonosito szigszam utlevelszam jogositvanyszam cisloobcanskehoprukazu cisloop cislopasu cisloobcianskehopreukazu seriebuletin numarbuletin seriesinumar brojosobneiskaznice brojputovnice stevilkaosebneizkaznice arithmostautotitas arithmosdiavatiriou passinnumero henkilokortinnumero", "ID_NUMBER"),
 
+        // The Baltic states', the Balkans', Ukraine's, the Caucasus', Malta's and Iceland's forms, a Cyrillic key read in Latin letters (see `plain`).
+        ("vards vardas eesnimi imia imya imja ima pobatkovi saxeli sakheli anun hayranun emri isem fornafn", "FIRST_NAME"),
+        ("uzvards pavarde perekonnanimi familia familiya prizvyshche prizvishche prizvysche prizvise gvari azganun mbiemri kunjom eftirnafn", "LAST_NAME"),
+        ("vardsuzvards vardsunuzvards pilnsvards vardaspavarde pilnasvardas taisnimi imena trimena imeprezime pib saxeligvari sakheligvari anunazganun emriimbiemri emridhembiemri emerimbiemer isemkunjom isemshih isimkunjom fulltnafn nafn", "PERSON"),
+        ("dzimsanasdatums dzimdat gimdata sunniaeg sunnikuupaev synnikuupaev datanarazhdane datanarazdane datumrodjenja datumroenja datumnaraganje datumnaragane datumnaradjanje datanarodzhennia datanarodzhennya datanarodzenna datanarodzhenya dabadebistarighi dabadebistarigi dabadebisdge cnndyanamsativ tsnndyanamsativ cnndyantaret datelindja datelindje datatattwelid fodingardagur faedingardagur", "DATE_OF_BIRTH"),
+        ("dzimsanasvieta gimimovieta sunnikoht mestonarazhdane mastonarazdane mestonarazdane mestorodjenja mestoroenja mestorodenja mestonaraganje mestonaragane mistsenarodzhennia mistsenarodzhennya miscenarodzenna dabadebisadgili cnndavayr tsnndavayr vendlindja vendlindje postattwelid fodingarstadur faedingarstadur", "LOCATION"),
+        ("adrese dzivesvieta deklaretaadrese faktiskaadrese adresas gyvenamojivieta deklaruotavieta aadress elukoht postiaadress postoyannadres postoannadres adresazaprebivaliste adresanazhivelishche misamarti hasce hastse adresi vendbanimi indirizz heimilisfang heimili logheimili", "ADDRESS"),
+        ("pilseta miestas linn naselenomiasto naselenomasto misto kalaki qalaqi kaghak qaghaq qyteti lokalita postnumerstadur sveitarfelag", "LOCATION"),
+        ("pastaindekss indekss pastokodas postiindeks poshtenskikod posenskikod postovindeks poshtovyiindeks postovijindeks sapostoindeksi postayinindeks kodipostar kodicipostali postnumer", "POSTAL_CODE"),
+        ("talrunis talr telefons mobilais mobilaistalrunis telefonas telefononumeris mobilusis mobiil telefoninumber telefonennomer mobilentelefon mobilni mobilnyi mobilnyitelefon telefoni mobiluri herakhos heraxos celulari numrutattelefon mowbajl simi farsimi simanumer", "PHONE_NUMBER"),
+        ("epasts elpasts elpastas epastas elpost elposhta elposa elektronnaposhta elektronnaposta imejl elektronskaposta elpostha eltposta postaelektronike emaili indirizzelettroniku netfang", "EMAIL_ADDRESS"),
+        ("personaskods personaskodas asmenskodas asmkodas isikukood egn lnch jmbg embg maticnibroj maticenbroj edinstvenmaticenbroj rnokpp ipn identyfikatsiinyikod piradinomeri hvhh numripersonal nrpersonal numriidentifikimit idkarta numrutalkartatalidentita kennitala nodoklumaksatajanumurs nodoklunumurs mokesciumoketojokodas danacennomer dancennomer danachennomer poreskibroj poreskiidentifikacionibroj podatkovyinomer podatkovijnomer sagadasakhadonomeri numrufiskali", "ID_NUMBER"),
         ("noisinh dogumyeri geburtsort geboorteplaats lieudenaissance lieunaissance luogodinascita luogonascita lugardenacimiento lugarnacimiento localdenascimento localnascimento fodelseort paisnacimiento paisdenacimiento ciudadnacimiento ciudaddenacimiento provincianacimiento paesenascita paesedinascita cittanascita cittadinascita comunenascita comunedinascita provincianascita cidadenascimento cidadedenascimento paisnascimento paisdenascimento estadonascimento ufnascimento municipionascimento naturalidade villenaissance villedenaissance paysnaissance paysdenaissance communenaissance geburtsland geboorteland dogumili", "LOCATION"),
         ("ciudad cidade citta ville stadt plaats woonplaats wohnort miasto miejscowosc municipio comune localidad localita sehir ilce mahalle", "LOCATION"),
         ("codepostal codigopostal codicepostale postnummer postnr plz postleitzahl postakodu kodpocztowy", "POSTAL_CODE"),
@@ -119,7 +131,7 @@ public enum KeyHints {
         guard var key, !key.isEmpty else { return nil }
         // "Código postal", "Födelsedatum": a key's accents dropped, as the names above are written.
         // A dotless "ı" has no accent to drop: "Soyadı" is "soyadi".
-        if key.utf8.contains(where: { $0 >= 0x80 }) { key = key.replacingOccurrences(of: "ı", with: "i").folding(options: .diacriticInsensitive, locale: nil) }
+        if key.utf8.contains(where: { $0 >= 0x80 }) { key = plain(key) }
         var compact = key.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
         if compact.hasSuffix("field"), compact.count > 5, case let inner = words(key).joined(), inner.count < compact.count { compact = inner }
         if let exact = hints[compact] { return exact }
@@ -152,6 +164,17 @@ public enum KeyHints {
         // A field's name abbreviated ("natId", "doc_no", "birth_dt") hints as the field written out.
         let expanded = parts.map { abbreviations[$0] ?? $0 }
         return expanded != parts ? hints[expanded.joined()] : nil
+    }
+    /// A key written plainly, as the names above are: its accents dropped, a letter no accent folding
+    /// reaches spelled out ("Fødselsdato", "Fæðingardagur"), and one in Cyrillic or Greek letters
+    /// written in Latin ones ("Фамилия" as "familia", "ЕГН" as "egn").
+    static func plain(_ key: String) -> String {
+        var key = key.lowercased()
+        for (letter, spelled) in [("ı", "i"), ("ø", "o"), ("æ", "ae"), ("ð", "d"), ("đ", "d"), ("þ", "th"), ("ł", "l"), ("œ", "oe"), ("ß", "ss"), ("ħ", "h")] where key.contains(letter) {
+            key = key.replacingOccurrences(of: letter, with: spelled)
+        }
+        if key.unicodeScalars.contains(where: { (0x0370...0x052F).contains($0.value) }), let latin = key.applyingTransform(.toLatin, reverse: false) { key = latin }
+        return key.folding(options: .diacriticInsensitive, locale: nil)
     }
     /// The two fields a key offers a choice of ("houseNumberOrName", "email_or_phone"), the second
     /// written short where it shares the first's opening words: "house number or [house] name".
@@ -775,7 +798,11 @@ public enum KeyHints {
     static let streetNameKeys: Set<String> = ["streetname", "thoroughfare", "buildingname", "street", "housename", "straat", "strasse", "calle", "ulica"]
     private static let unitKeys: Set<String> = ["unit", "apt", "apartment", "street2", "address2", "addr2", "line2", "addressline2", "streetline2", "aptsuite", "apartmentnumber", "aptnumber", "suitenumber", "unitnumber", "flatnumber", "addressline3", "line3", "flat", "flatno", "address3", "addr3", "street3"]
     private static let lineKeys: Set<String> = ["street2", "address2", "addr2", "line2", "addressline2", "streetline2", "addressline3", "line3", "address3", "addr3", "street3", "extendedaddress", "streetaddress2"]
-    private static func compactKey(_ key: String?) -> String { (key ?? "").lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) } }
+    /// A key or a value written as a key is: "Фамилия" as "familia", so a word in Cyrillic is never empty.
+    private static func compactKey(_ key: String?) -> String {
+        let key = key ?? ""
+        return (key.utf8.contains(where: { $0 >= 0x80 }) ? plain(key) : key.lowercased()).filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+    }
     /// A coordinate written to at least two decimals ("47.2529"); a bare 47 is a count.
     private static func coordinate(_ text: String, limit: Double) -> Bool {
         guard let value = Double(text), abs(value) <= limit, let point = text.firstIndex(of: ".") else { return false }

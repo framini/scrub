@@ -252,3 +252,39 @@ func csvHeaderSpelledLikeANameReadElsewhereStays(_ run: Int) throws {
         #expect(!result.findings.contains { $0.entity == "PERSON" && $0.original.hasSuffix(".") }, "\(result.findings.map { "\($0.entity) \($0.original)" })")
     }
 }
+
+/// A register keyed in a language of the Baltic states, the Balkans or eastern Europe, in Latin or Cyrillic
+/// letters, is read whole: given names, surnames, birth dates, addresses, phones and personal codes.
+@Test(arguments: 1...2)
+func aRegisterKeyedInAnotherLanguageIsReadWhole(_ seed: Int) throws {
+    let registers: [(String, String, [String])] = [
+        ("klienti.csv", "id;vārds;uzvārds;dzimšanas_datums;adrese;tālrunis;personas_kods\n1;Ilze;Bērziņa;1984-05-12;Brīvības iela 118-7, Rīga, LV-1001;+371 2955 0123;120584-11234\n2;Jānis;Kalniņš;1979-11-02;Lāčplēša iela 44, Rīga, LV-1011;+371 2611 0456;021179-10457\n",
+         ["Ilze", "Bērziņa", "Jānis", "Kalniņš", "1984-05-12", "Brīvības", "Lāčplēša", "2955 0123", "120584-11234"]),
+        ("klientai.csv", "nr,vardas,pavardė,gimimo_data,adresas,telefonas,el_pastas\n4,Rūta,Petrauskienė,1990-02-17,\"Gedimino pr. 9-12, Vilnius\",+370 612 34567,ruta.p@example.com\n",
+         ["Rūta", "Petrauskienė", "1990-02-17", "Gedimino", "612 34567", "ruta.p@"]),
+        ("kliendid.csv", "eesnimi;perekonnanimi;sünniaeg;aadress;linn;isikukood\nKadri;Tamm;1985-01-02;Pärnu mnt 12-4;Tallinn;48501020010\n",
+         ["Kadri", "Tamm", "1985-01-02", "Pärnu mnt", "48501020010"]),
+        ("klienti-bg.csv", "ид,име,фамилия,дата на раждане,адрес,телефон\n1,Петя,Иванова,1975-01-02,\"ул. Шипка 12, София 1504\",+359 88 123 4567\n",
+         ["Петя", "Иванова", "1975-01-02", "Шипка", "123 4567"]),
+        ("klijenti.csv", "ime,prezime,JMBG,adresa,mesto\nMilica,Jovanović,0101990715003,Knez Mihailova 21,Beograd\n",
+         ["Milica", "Jovanović", "0101990715003", "Mihailova"]),
+    ]
+    for (name, csv, originals) in registers {
+        let result = try Scrubber.scrub(Data(csv.utf8), name: name, forceFullDetection: false, seed: UInt64(seed))
+        let output = String(decoding: result.output, as: UTF8.self)
+        #expect(output.hasPrefix(String(csv.prefix { $0 != "\n" }) + "\n"), "\(output)")
+        for original in originals { #expect(!output.contains(original), "\(original) in \(output)") }
+    }
+}
+
+/// A column beside one of surnames whose cells are given names a list holds is one of given names,
+/// whatever its header; two such columns found by their cells alone are a name's parts.
+@Test func givenNamesBesideSurnamesAreReadAsNames() throws {
+    let csv = "rid,kol_a,kol_b,status,city\n7,Margaret,Holloway,open,Leeds\n8,Daniel,Fischer,closed,Bath\n9,Sophie,Brennan,open,York\n"
+    let result = try Scrubber.scrub(Data(csv.utf8), name: "export.csv", forceFullDetection: false, seed: 3)
+    let output = String(decoding: result.output, as: UTF8.self)
+    for original in ["Margaret", "Holloway", "Daniel", "Fischer", "Sophie", "Brennan"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    #expect(result.findings.filter { $0.entity == "FIRST_NAME" }.count == 3 && result.findings.filter { $0.entity == "LAST_NAME" }.count == 3, "\(result.findings.map { "\($0.entity) \($0.original)" })")
+    let rows = output.split(separator: "\n").map { $0.split(separator: ",", omittingEmptySubsequences: false) }
+    #expect(rows[0].joined(separator: ",") == "rid,kol_a,kol_b,status,city" && rows[1][3] == "open" && rows[2][3] == "closed", "\(output)")
+}

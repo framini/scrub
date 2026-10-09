@@ -228,6 +228,8 @@ enum ProseLabels {
         let capitals = value.filter(\.isUppercase).count
         // A long token of mixed case needs no digit to be one.
         if label.contains("_") { return value.count >= 8 && (hasDigit || value.count >= 16 && capitals >= 2 && value.contains(where: \.isLowercase)) }
+        // A record's or a cache's key, written as a namespace and a reference ("key=cust:CU-55120", "user:4412:profile"), is no key's secret.
+        if label == "key", value.range(of: #"^[a-z]{2,16}(?::(?:[A-Za-z]{0,6}[-_]?\d+|[a-z]{2,16}))+$"#, options: .regularExpression) != nil { return false }
         if ["key", "token", "secret"].contains(label) || label.hasSuffix(" key") {
             // A field name ("key: dateOfBirth", "key: DATE_OF_BIRTH") is not a key.
             return value.count >= 8 && (hasDigit || capitals >= 2 && !value.allSatisfy { $0.isLetter || $0 == "_" })
