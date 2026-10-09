@@ -227,16 +227,20 @@ Not covered, so check for these yourself:
 - Pasted XML with a DOCTYPE is scrubbed as plain text, so its field names don't help detection.
 - Values split across XML elements that hold no text of their own beside them, as in `<first>Odal</first><last>ys</last>`: each element's text is read on its own.
 - Personal data that appears only in XML element or attribute names, unless the same person also appears in the data. Runs of seven or more digits in JSON keys, XML names and CSV headings are always replaced, with the same stand-in wherever the file writes that number (`order_48213907` and `Archived under 48213907`).
-- Addresses outside the US, Canada, the UK and Australia keep their shape, but their parts aren't matched to one real place. So are cities written in running text without a state or postcode after them.
+- Addresses outside the US, Canada, the UK and Australia keep their shape, but their parts aren't matched to one real place, and can mix in a place from another country. So are cities written in running text without a state or postcode after them.
 - Addresses in non-Latin scripts are not read. Addresses written all in lowercase or with no number at all (a house name and a village) are read, but less reliably than written ones: on handwritten cases, about four in five lowercase ones and two in three numberless ones are fully replaced. A lowercase one with no postcode, unit number or known place, and no words before it that say an address follows (`meet me at 12 rue des lilas`), is left as written on purpose, and a numberless one written on a single piece (`I live on Ahornweg now`) is left as written and put to you in review, since sentences that only name a street look the same. A house's kind (`Cottage`, `Rectory`) stays in its stand-in, as a street's kind does. So does a building or a district name the address models leave outside the address, like a name before `Torre` or `Edificio`.
 - Ages with no birth date in the same file stay as they are.
-- Delimited files (CSV, TSV, pipes) with no header row are only partly scrubbed: without column names, each cell is read as running text.
-- Names in non-Latin scripts (Chinese, Japanese, Korean, Hindi, Hebrew, Greek, Persian, Georgian, Armenian and others) in text that isn't English may only be asked about, or missed.
-- Outside plain English, a name only a model guessed is left as written and put to you in review, so expect several questions on a non-English file. Greetings in less common languages, like te reo Māori, can occasionally still be read as names.
-- Some replacements in the review list are already applied and can be wrong: look at each one before you share.
-- Company identifiers (an EIN, a CNPJ, a VAT number) are replaced like a person's, and a company's name can occasionally be replaced as a person's.
-- A national ID's stand-in passes its issuer's check but doesn't always agree with the person's stand-in sex or birth date.
-- Dates in calendars other than the Gregorian and the Hijri may get stand-ins that aren't real dates.
+- A CSV, TSV or pipe-delimited file with no header row is only partly scrubbed: names, birth dates and ID numbers in it can be left as written without being asked about. Add a header row before you scrub it.
+- Names in Chinese, Japanese, Korean, Hindi, Hebrew, Greek, Persian, Georgian or Armenian script, in text that isn't English, may only be asked about, or missed.
+- Outside plain English, a name only a model guessed is left as written and put to you in review, unless something marks it as a name: a title, a label, a name's field, or the same person found elsewhere. Expect several questions on a non-English document, some of them ordinary words, and answer each before you share.
+- Some replacements in the review list are already applied, and can be wrong: a country or an ordinary word read as a place or a name. Check each one.
+- A name that is also an ordinary word can occasionally be replaced where it is used as a word, and an ordinary word can occasionally be replaced as a name. Greetings in less common languages can occasionally be read as names.
+- Company tax and registration numbers (an EIN, a CNPJ, a VAT number) are replaced like a person's. A company whose legal form is less common, written with dots (`L.L.C.`, `Cía. Ltda.`), can be replaced as a person.
+- Session, case and customer reference numbers, bank routing numbers and private IP addresses can be replaced with stand-ins. Keep your own copy if you need to look them up.
+- A long ID number written as a JSON number rather than a string, under a key ending in `_code`, or in a type and number pair whose keys Scrub doesn't know (like `typ` and `nummer`) can be left as written without being asked about.
+- National-ID stand-ins pass their country's check for most countries, but don't always agree with the person's stand-in sex or birth date, and a few (Uruguay's) may not pass their check digit.
+- Dates in the Hijri or Solar Hijri calendar get stand-ins that may not be valid dates in that calendar.
+- A label right after an address (`Telefonas:`) can occasionally be taken into the address's stand-in, and the phone number after it can then get the wrong country code.
 - Each scrub draws fresh stand-ins, so two scrubs of the same file can't be linked to each other. A run with a fixed seed, as the tests use, always gives the same output for the same input.
 
 ## Keyboard
