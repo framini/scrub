@@ -382,11 +382,16 @@ final class StandIns {
     }
     /// A birth year moves one to eight years: enough that the date names no
     /// one, close enough that an age bracket or age estimate beside it still reads true.
+    /// The years a date written in the Hijri calendar may have: never a Gregorian birth's.
+    static let hijriYears = 1300...1500
     private func year(for original: Int) -> Int {
         if let known = years[original] { return known }
+        // A year of the Hijri calendar ("1405-03-12" under "dob_hijri") takes one of its own living people's years.
+        let hijri = Self.hijriYears.contains(original), range = hijri ? 1340...1440 : 1900...now
         func draw() -> Int {
+            if hijri && !range.contains(original) { return Int.random(in: range, using: &rng) }
             let shift = Int.random(in: 1...8, using: &rng) * (Bool.random(using: &rng) ? 1 : -1)
-            return (1900...now).contains(original + shift) ? original + shift : original - shift
+            return range.contains(original + shift) ? original + shift : original - shift
         }
         var fake = draw()
         // Nor any year the document holds: one person's stand-in year is never another's real one.
@@ -1760,8 +1765,11 @@ final class StandIns {
         case "RECORD_ID": return recordID(like: original)
         case "ID_NUMBER", "POSTAL_CODE":
             let lead = original.firstIndex(where: \.isNumber)
+            // An account written after its country's and its bank's codes ("UY-BROU-001827364500") keeps them: only its digits are its holder's.
+            let codes = TextRanges.matches(Self.accountCodes, in: original).first.map { original.index(original.startIndex, offsetBy: ($0.range.length)) } ?? original.startIndex
             return String(original.indices.map { index in
                 let char = original[index]
+                if index < codes { return char }
                 if char.isNumber { return Character(digit(index == lead && char != "0")) }
                 if char.isLowercase { return pick(Array("abcdefghijklmnopqrstuvwxyz")) ?? "a" }
                 if char.isUppercase { return pick(Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")) ?? "A" }
@@ -1776,6 +1784,7 @@ final class StandIns {
     /// (none leading with a zero that had none), a letter of the same case,
     /// hex for hex, and every joiner where it was. So "cus_odalys_ferriter"
     /// becomes "cus_" and 15 letters around one underscore, and joins still work.
+    private static let accountCodes = TextPattern(#"^(?:[A-Z]{2,6}[-/])+(?=[\d -]*\d{8})"#)
     private func recordID(like original: String) -> String {
         let prefix = RecordIDs.keptPrefix(original, named: namedWords)
         let rest = original.dropFirst(prefix.count)
@@ -1940,7 +1949,7 @@ final class StandIns {
         let trimmed = original.trimmingCharacters(in: .whitespacesAndNewlines)
         let compact = trimmed.count == 8 && trimmed.allSatisfy({ $0.isASCII && $0.isNumber })
         if compact, let head = Int(trimmed.prefix(4)), let tail = Int(trimmed.suffix(4)) {
-            let yearFirst = (1900...2030).contains(head)
+            let yearFirst = (1900...2030).contains(head) || Self.hijriYears.contains(head) && !Self.hijriYears.contains(tail)
             year = self.year(for: yearFirst ? head : tail)
             return yearFirst ? String(format: "%04d%02d%02d", year, month, day) : String(format: "%02d%02d%04d", month, day, year)
         }

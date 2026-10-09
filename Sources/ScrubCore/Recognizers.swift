@@ -126,6 +126,20 @@ enum Recognizers {
             }
             return made
         }),
+        Recognizer("UY_CI", keys: ["cedulauy", "ciuy", "cedulauruguaya", "cedulaidentidaduy"], forms: [
+            .init(#"\b\d\.\d{3}\.\d{3}-\d\b"#, 0.4),
+            .init(#"\b\d{3}\.\d{3}-\d\b"#, 0.3),
+            .init(#"\b\d{6,7}-\d\b"#, 0.1),
+            .init(#"\b\d{7,8}\b"#, 0.05),
+        ], context: ["cédula", "cedula", "cédula de identidad", "ci", "uruguay"], check: { characters in
+            // Uruguay's cédula: six or seven digits weighed 2, 9, 8, 7, 6, 3, 4 (a short one led by a zero), its check 10 less the sum mod 10.
+            guard let d = numbers(characters), (7...8).contains(d.count), d.count == 8 || d[0] != 0 else { return false }
+            let body = Array(repeating: 0, count: 8 - d.count) + d.dropLast()
+            return uruguayDigit(body) == d.last
+        }, draw: { like, rng in
+            let body = [Int.random(in: 1...6, using: &rng)] + randomDigits(like.count == 7 ? 5 : 6, &rng)
+            return characters(body + [uruguayDigit(Array(repeating: 0, count: 7 - body.count) + body)])
+        }),
         Recognizer("CURP", keys: ["curp"], forms: [
             .init(#"\b[A-Z][AEIOUX][A-Z]{2}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[HMX](?:AS|BC|BS|CC|CL|CM|CS|CH|DF|DG|GT|GR|HG|JC|MC|MN|MS|NT|NL|OC|PL|QT|QR|SP|SL|SR|TC|TS|TL|VZ|YN|ZS|NE)[B-DF-HJ-NP-TV-Z]{3}[A-Z\d]\d\b"#, 0.6, alone: true),
         ], context: ["curp"], check: { characters in
@@ -352,7 +366,10 @@ enum Recognizers {
         Recognizer("NINO", keys: ["nino", "nationalinsurancenumber", "ninumber"], forms: [
             .init(#"\b(?!BG|GB|NK|KN|NT|TN|ZZ)[A-CEGHJ-PR-TW-Z][A-CEGHJ-NPR-TW-Z] ?\d{2} ?\d{2} ?\d{2} ?[A-D]\b"#, 0.3),
         ], context: ["nino", "national insurance", "ni number"], verifies: false, check: { $0.count == 9 }, draw: { _, rng in
-            [pick("ABCEGHJKLMPRSTWXY", &rng), pick("ABCEHJLMPRSTWXY", &rng)] + characters(randomDigits(6, &rng)) + [pick("ABCD", &rng)]
+            // Never a prefix HMRC withholds ("GB", "NT").
+            var prefix: [Character] = []
+            repeat { prefix = [pick("ABCEGHJKLMPRSTWXY", &rng), pick("ABCEHJLMPRSTWXY", &rng)] } while ["BG", "GB", "NK", "KN", "NT", "TN", "ZZ"].contains(String(prefix))
+            return prefix + characters(randomDigits(6, &rng)) + [pick("ABCD", &rng)]
         }),
         Recognizer("NHS_NUMBER", keys: ["nhs", "nhsnumber", "nhsno"], forms: [
             .init(#"\b\d{3}[- ]?\d{3}[- ]?\d{4}\b"#, 0.05),
@@ -652,9 +669,10 @@ enum Recognizers {
             characters([0] + [Int.random(in: 1...9, using: &rng)] + randomDigits(7, &rng))
         }),
         // Saudi Arabia's national ID (1…) and resident's iqama (2…): ten digits, Luhn's check over all of them.
-        Recognizer("SA_NATIONAL_ID", keys: ["iqama", "iqamanumber", "iqamano", "iqamaid", "saudiid", "saudinationalid", "ksaid", "muqeem", "hawiya", "hawiyanumber"], forms: [
+        Recognizer("SA_NATIONAL_ID", keys: ["iqama", "iqamanumber", "iqamano", "iqamaid", "saudiid", "saudinationalid", "ksaid", "muqeem", "hawiya", "hawiyanumber",
+                                             "hawiyah", "huwiya", "huwiyah", "huwiyanumber", "hawiyano", "huwiyano", "raqamalhawiya", "raqamalhuwiya", "nationalidsa"], forms: [
             .init(#"\b[12]\d{9}\b"#, 0.05),
-        ], context: ["iqama", "saudi id", "saudi national id", "hawiya", "الهوية الوطنية", "رقم الهوية", "الإقامة", "رقم الإقامة", "هوية مقيم"], check: { characters in
+        ], context: ["iqama", "saudi id", "saudi national id", "national id sa", "hawiya", "huwiya", "الهوية الوطنية", "رقم الهوية", "الإقامة", "رقم الإقامة", "هوية مقيم"], check: { characters in
             guard let d = numbers(characters), d.count == 10, d[0] == 1 || d[0] == 2 else { return false }
             return Patterns.luhn(d)
         }, draw: { like, rng in
@@ -928,9 +946,11 @@ enum Recognizers {
             }
             return latvianDigit(Array(d[0..<10])) == d[10]
         }, draw: { like, rng in
-            let date = randomDate(&rng)
-            let body = like.starts(with: ["3", "2"]) ? [3, 2] + randomDigits(8, &rng) : twoDigits(date.day) + twoDigits(date.month) + twoDigits(date.year % 100) + [1] + randomDigits(3, &rng)
-            return characters(body + [latvianDigit(body)])
+            while true {
+                let date = randomDate(&rng)
+                let body = like.starts(with: ["3", "2"]) ? [3, 2] + randomDigits(8, &rng) : twoDigits(date.day) + twoDigits(date.month) + twoDigits(date.year % 100) + [1] + randomDigits(3, &rng)
+                if let last = latvianDigit(body) { return characters(body + [last]) }
+            }
         }),
         Recognizer("CU_NI", keys: ["carnetidentidad", "carnetdeidentidad", "numeroidentidad"], forms: [
             .init(#"\b\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{5}\b"#, 0.05),
@@ -2260,10 +2280,10 @@ enum Recognizers {
         }, draw: { like, rng in
             let prefix: [Character] = like.first == "L" ? ["L", "V"] : []
             let lead = like.dropFirst(prefix.count).first?.wholeNumberValue ?? 4
-            guard lead > 3 else {
+            while lead <= 3 {
                 let date = randomDate(&rng)
                 let body = lead == 3 ? [3, 2] + randomDigits(8, &rng) : twoDigits(date.day) + twoDigits(date.month) + twoDigits(date.year % 100) + [1] + randomDigits(3, &rng)
-                return prefix + characters(body + [latvianDigit(body)])
+                if let last = latvianDigit(body) { return prefix + characters(body + [last]) }
             }
             while true {
                 let d = [lead] + randomDigits(9, &rng)
@@ -4016,7 +4036,12 @@ enum Recognizers {
         }
         return (10 - sum % 10) % 10
     }
-    private static func latvianDigit(_ body: [Int]) -> Int { (1 + zip(body, [10, 5, 8, 4, 2, 1, 6, 3, 7, 9]).reduce(0) { $0 + $1.0 * $1.1 }) % 11 % 10 }
+    private static func uruguayDigit(_ body: [Int]) -> Int { (10 - zip(body, [2, 9, 8, 7, 6, 3, 4]).reduce(0) { $0 + $1.0 * $1.1 } % 10) % 10 }
+    /// A Latvian personal code's check, 1101 less its weighted sum mod 11: none where that is 10, as no code is issued with one.
+    private static func latvianDigit(_ body: [Int]) -> Int? {
+        let rest = (1 + zip(body, [10, 5, 8, 4, 2, 1, 6, 3, 7, 9]).reduce(0) { $0 + $1.0 * $1.1 }) % 11
+        return rest < 10 ? rest : nil
+    }
     private static func ecuadorSum(_ d: [Int]) -> Int {
         d.enumerated().reduce(0) { total, item in let value = (item.offset % 2 == 0 ? 2 : 1) * item.element; return total + (value > 9 ? value - 9 : value) } % 10
     }

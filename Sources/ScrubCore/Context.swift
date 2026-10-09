@@ -93,6 +93,8 @@ public enum KeyHints {
         // A fingerprint's, a face's or an iris's enrolment is its person's.
         ("biometricid biometricidentifier biometricnumber biometrictemplateid biometricref biometricreference", "ID_NUMBER"),
         ("licenceplate licenseplatenumber kenteken kennzeichen immatriculation plaquedimmatriculation matricula placa targa registreringsnummer", "ID_NUMBER"),
+        // A birth date in the Hijri calendar, as Saudi forms write it beside the Gregorian one.
+        ("dobhijri hijridob hijri hijridate hijridateofbirth dateofbirthhijri birthdatehijri hijribirthdate birthdayhijri hijribirthday dobh birthyearhijri hijribirthyear", "DATE_OF_BIRTH"),
         ("dob dateofbirth birthdate birthday birthyear yearofbirth yob birthmonth monthofbirth dobmonth dobday dayofbirth dobyear birth birthdetails birthinfo", "DATE_OF_BIRTH"),
         // Where someone was born is theirs as their address is.
         // A card's number, whole or masked ("999911XXXXXX1234").
@@ -117,6 +119,8 @@ public enum KeyHints {
         ("username login handle screenname nickname", "USERNAME"),
         // A ZIP code's four extra digits in a field of their own name a block or a building.
         ("zip4 plus4 zipplus4code zipext zipextension zipcodeext zipcodeextension zipaddon", "ID_NUMBER"),
+        // A bank account as forms in other languages label it; only a value with a digit is one (see `needsDigit`).
+        ("cuenta numerocuenta nrocuenta numerodecuenta cuentabancaria numerocuentabancaria conta numeroconta numerodaconta contabancaria contacorrente compte numerocompte numerodecompte comptebancaire numerocomptebancaire konto bankkonto kontonumer numerkonta conto numeroconto contocorrente contobancario racun brojracuna tekuciracun ziroracun saskaita saskaitosnumeris konts kontanumurs bankaskonts tili tilinumero pankkitili hesap hesapno hesapnumarasi bankahesabi", "ID_NUMBER"),
         ("nationalid nationalidnumber nationalidentifier nationalinsurancenumber nino personalnumber personalidnumber personnummer idnumber identitynumber identitycard idcard idcardnumber governmentid identitydocument passport passportnumber passportno passportid taxid taxnumber taxpayerid tin sin socialinsurancenumber driverlicense driverslicense driverlicensenumber dlnumber dlno dlnum licensenumber driverlicence driverslicence drivinglicence drivinglicense licencenumber driverlicencenumber nif nie dni cpf curp pesel bsn aadhaar documentnumber accountnumber bankaccountnumber acctnumber accountno acctno acctnum routingnumber sortcode ein creditfilenumber cpfnumber nis nisnumber cic electorkey electornumber docnumber documentno licenseplate platenumber identificationnumber idno photoid photoidnumber imsi ocr mxine ine", "ID_NUMBER")
     ]
     /// Every key name and the kind it hints, the registry's identifiers' keys among them (see `Recognizers`).
@@ -133,6 +137,8 @@ public enum KeyHints {
         // A dotless "ı" has no accent to drop: "Soyadı" is "soyadi".
         if key.utf8.contains(where: { $0 >= 0x80 }) { key = plain(key) }
         var compact = key.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+        // "تاريخ الميلاد", "تاريخ الميلاد هجري": a birth date as Arabic forms label it.
+        if compact.isEmpty, key.contains("الميلاد") { return "DATE_OF_BIRTH" }
         if compact.hasSuffix("field"), compact.count > 5, case let inner = words(key).joined(), inner.count < compact.count { compact = inner }
         if let exact = hints[compact] { return exact }
         // Lists of one field ("names", "phone_numbers", "email_addresses") hint like the field.
@@ -510,6 +516,57 @@ public enum KeyHints {
     static let identifierTypeCodes: [String: String] = [
         "DL": "driver_license_number", "PPN": "passport_number", "SS": "ssn", "TAX": "tax_id", "NI": "national_id", "NPI": "npi", "PRN": "id_number",
         "MR": "mrn", "MRT": "mrn", "PI": "patient_id", "PT": "patient_id", "MA": "member_id", "MC": "member_id", "MB": "member_id", "SN": "subscriber_id"]
+    /// The keys the codes identity documents and registers go by stand for, as a record's type field writes them
+    /// ({"tipo": "DNI", "numero": …}, {"idType": "NIN", "idValue": …}): a national ID, a tax number, a passport.
+    static let identifierCodes: [String: String] = [
+        "DNI": "national_id", "CE": "national_id", "CI": "national_id", "CC": "national_id", "TI": "national_id", "NID": "national_id", "NIC": "national_id",
+        "ID": "national_id", "IDCARD": "national_id", "NATIONALID": "national_id", "CEDULA": "national_id", "CURP": "curp", "CPF": "cpf", "RG": "national_id",
+        "RUC": "tax_id", "NIT": "tax_id", "RFC": "rfc", "TIN": "tax_id", "RUT": "rut", "CUIT": "cuit", "CUIL": "cuil", "NIF": "nif", "NIE": "nie", "ITIN": "itin",
+        "PASSPORT": "passport_number", "PAS": "passport_number", "PP": "passport_number", "PASAPORTE": "passport_number", "PASSAPORTE": "passport_number",
+        "PASSEPORT": "passport_number", "PASSAPORTO": "passport_number", "PASSPORTNUMBER": "passport_number",
+        "NIN": "nin", "BVN": "bvn", "SSN": "ssn", "SIN": "sin", "JMBG": "jmbg", "OIB": "oib", "EMSO": "jmbg", "PESEL": "pesel", "IQAMA": "iqama", "CNIC": "cnic",
+        "AADHAAR": "aadhaar", "PAN": "pannumber", "DL": "driver_license_number", "LICENSE": "driver_license_number", "DRIVERLICENSE": "driver_license_number"]
+    /// Keys whose value is a record's type, and keys whose value is the number of that type, when side by side.
+    private static let pairTypeKeys: Set<String> = ["type", "kind", "tipo", "tip", "typ", "tipe", "vrsta", "idtype", "idkind", "typeid", "documenttype", "doctype", "documentkind",
+                                                    "tipodocumento", "tipodoc", "tipodedocumento", "tipoidentificacion", "tipodeidentificacion", "tipoid", "identtype", "identificationtype",
+                                                    "identifiertype", "identitytype", "typedocument", "typedepiece", "vrstadokumenta", "typdokumentu", "dokumenttyp"]
+    private static let pairValueKeys: Set<String> = ["value", "val", "number", "numero", "num", "no", "nr", "nro", "broj", "numer", "nummer", "idvalue", "idnumber", "idno",
+                                                     "documentnumber", "docnumber", "documentno", "docno", "numerodocumento", "numerodoc", "nrodocumento", "nrodoc",
+                                                     "numerodedocumento", "numeroidentificacion", "numerodeidentificacion", "identvalue", "identnumber", "identificationnumber",
+                                                     "identifiervalue", "identifiernumber", "documentvalue", "brojdokumenta", "numeroid", "dokumentnummer"]
+    /// The key a type field's code stands for: "DNI", "C.C.", "Passport". Nil for a code no table knows.
+    static func identifierCode(_ code: String) -> String? {
+        guard code.utf16.count <= 32 else { return nil }
+        let compact = code.uppercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+        return identifierCodes[compact] ?? identifierTypeCodes[compact]
+    }
+    /// The values a record's type field says the kind of, by key, and the key that kind is
+    /// written under ({"tipo": "DNI", "numero": …} → "numero": "national_id"); the empty key
+    /// where the type is a code no table knows ({"type": "ZQX", "value": …}), so the value is asked about.
+    static func pairedFields(_ keys: [String], strings: [(String, String)]) -> [String: String] {
+        guard keys.count <= 12 else { return [:] }
+        var found: [String: String] = [:]
+        for key in keys {
+            let parts = words(key)
+            guard let last = parts.last, pairValueKeys.contains(parts.joined()) || parts.count >= 2 && pairValueKeys.contains(last) else { continue }
+            let prefix = pairValueKeys.contains(parts.joined()) ? [] : Array(parts.dropLast())
+            for (name, text) in strings where name != key {
+                let nameParts = words(name)
+                guard pairTypeKeys.contains(nameParts.joined()) || nameParts.count >= 2 && pairTypeKeys.contains(nameParts.last!) && Array(nameParts.dropLast()) == prefix,
+                      case let code = text.trimmingCharacters(in: .whitespaces), (2...32).contains(code.utf16.count), !isToken(code) else { continue }
+                // One a field's name says ("Passport", "national-id") only where it names an identifier: a type of "mobile" is the phone's business.
+                if let field = identifierCode(code) ?? identifierField(code).flatMap({ ["ID_NUMBER", "US_SSN"].contains(hint($0) ?? "") ? $0 : nil }) { found[key] = field; break }
+                // A code (capitals and digits, a word at most): a kind no table knows, never a word like "home" or "order".
+                if code.count <= 8, code.allSatisfy({ $0.isASCII && ($0.isUppercase || $0.isNumber || $0 == "_" || $0 == "-") }), code.contains(where: \.isLetter) { found[key] = "" }
+            }
+        }
+        return found
+    }
+    /// Thirteen to nineteen digits passing Luhn's check: a card's number, whatever a type of "CC" may mean.
+    static func cardLike(_ value: String) -> Bool {
+        let digits = value.compactMap(\.wholeNumberValue)
+        return (13...19).contains(digits.count) && Patterns.luhn(digits)
+    }
     /// The last part of a URI's path, which names what it identifies: "us-ssn" of
     /// "http://hl7.org/fhir/sid/us-ssn". Nil for a URI with no path ("http://hospital.example.org").
     static func uriName(_ value: String) -> String? {

@@ -181,6 +181,8 @@ final class JSONDocument {
             nextRecord += 1
             let ancestry = KeyHints.isWrapper(pairs.map(\.0)) && !records.isEmpty ? records : records + [nextRecord]
             let named = pairs.compactMap { pair in pair.1.stringValue.map { (pair.0, $0) } }
+            // A number beside the type it is of ({"tipo": "DNI", "numero": …}): read as that type's key.
+            let paired = KeyHints.pairedFields(pairs.map(\.0), strings: named)
             // A name's parts side by side under keys of their own ({"fn": "TOMASZ", "ln": "WISNIEWSKI"}).
             let nameParts = KeyHints.nameParts(named, parent: key)
             // A name's given names beside its family name ({"family": "Lind", "given": ["Ama", "Rose"]})
@@ -221,6 +223,10 @@ final class JSONDocument {
                 if let expiry = KeyHints.expiry(pair.0, siblings: pairs.map(\.0), parent: ([key ?? ""] + keys).joined(separator: "_"), kind: kind.union(typed)) { inherited = expiry }
                 // A document's own number in a record whose kind names the document ({"object": "driver_license", "number": …}).
                 if KeyHints.hint(inherited) == nil, KeyHints.isDocumentNumber(pair.0), !kind.isDisjoint(with: KeyHints.documentKinds) { inherited = "document_number" }
+                // A card's number is a card's whatever a type of "CC" may mean.
+                if let field = paired[pair.0], [nil, "ID_NUMBER"].contains(KeyHints.hint(inherited)), !KeyHints.cardLike(pair.1.stringValue ?? pair.1.numberText ?? "") {
+                    if !field.isEmpty { inherited = field } else if KeyHints.hint(inherited) == nil { inherited = PersonIdentifiers.typedKey }
+                }
                 if KeyHints.hint(inherited) == nil, let part = nameParts[pair.0] { inherited = part }
                 if KeyHints.hint(inherited) == nil, let born = KeyHints.birthField(pair.0, value: pair.1.stringValue ?? pair.1.numberText, siblings: named, kind: kind) { inherited = born }
                 if individualField, KeyHints.hint(inherited) == nil, Self.codedValueKeys.contains(KeyHints.words(pair.0).joined()), let text = pair.1.stringValue,

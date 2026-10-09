@@ -126,7 +126,11 @@ public enum CSVFile: FileFormat {
                 if KeyHints.hint(key) == nil, let part = nameColumns[column], !naming.contains(column) { key = part }
                 if let siblings = named[column] {
                     let texts = siblings.compactMap { $0 < rows[row].count ? (KeyHints.words(columns[$0]).last!, rows[row][$0]) : nil }
-                    key = KeyHints.namedField("value", siblings: texts) ?? key
+                    // Or by the code its type column writes ("ident_type": "CC"), one no table knows asked about.
+                    if let field = KeyHints.namedField("value", siblings: texts) { key = field }
+                    else if let field = KeyHints.pairedFields(["value"], strings: texts)["value"], KeyHints.hint(key) == nil, !KeyHints.cardLike(cell) {
+                        key = field.isEmpty ? PersonIdentifiers.typedKey : field
+                    }
                 }
                 let header = column < columns.count ? columns[column] : ""
                 switch collector.embed(rows[row][column], key: key, records: [row], keys: header.isEmpty ? [] : [header]) {

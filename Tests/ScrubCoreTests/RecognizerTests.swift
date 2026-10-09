@@ -10,6 +10,7 @@ let recognizerSamples: [String: String] = [
     "CPF": "111.444.777-35",
     "CUIL": "20-12345678-6",
     "RUT": "12.345.678-5",
+    "UY_CI": "3.456.789-4",
     "CURP": "GAXR850314HJCLNS07",
     "RFC": "GAXR850314K73",
     "CODICE_FISCALE": "RSSMRA85T10A562S",
@@ -283,6 +284,36 @@ private func recognizer(_ name: String) -> Recognizer? { Recognizers.all.first {
             #expect(written, "\(recognizer.name) draws a value none of its forms writes: \(drawn)")
         }
     }
+}
+
+/// Stand-ins checked by their issuers' own rules, written apart from the registry's: a Latvian personal
+/// code whose check would be 10 is never issued, and a Uruguayan cédula's check is 10 less its weighted sum.
+@Test func drawnIdentifiersPassTheirIssuersRules() throws {
+    func latvian(_ value: String) -> Bool {
+        let d = value.compactMap(\.wholeNumberValue)
+        guard d.count == 11 else { return false }
+        let check = (1101 - zip(d, [1, 6, 3, 7, 9, 10, 5, 8, 4, 2]).reduce(0) { $0 + $1.0 * $1.1 }) % 11
+        return check < 10 && check == d[10]
+    }
+    func uruguayan(_ value: String) -> Bool {
+        let d = value.compactMap(\.wholeNumberValue)
+        guard (7...8).contains(d.count) else { return false }
+        let body = Array(repeating: 0, count: 8 - d.count) + d.dropLast()
+        return (10 - zip(body, [2, 9, 8, 7, 6, 3, 4]).reduce(0) { $0 + $1.0 * $1.1 } % 10) % 10 == d.last
+    }
+    var rng: any RandomNumberGenerator = SeededGenerator(seed: 17)
+    for (sample, rule) in [("181171-17727", latvian), ("3.456.789-4", uruguayan), ("456.789-0", uruguayan)] as [(String, (String) -> Bool)] {
+        #expect(rule(sample), "\(sample)")
+        for _ in 0..<400 {
+            let made = try #require(Recognizers.standIn(for: sample, using: &rng), "\(sample)")
+            #expect(rule(made) && made.count == sample.count, "\(sample) → \(made)")
+        }
+    }
+    // Written under its key in a record, a cédula's stand-in passes too.
+    let result = try Scrubber.scrub(Data(#"{"cliente": {"nombre": "Martín Olivera", "cedula": "3.456.789-4"}}"#.utf8), name: "cliente.json", forceFullDetection: false, seed: 9)
+    let output = String(decoding: result.output, as: UTF8.self)
+    let made = try #require(output.range(of: #"\d\.\d{3}\.\d{3}-\d"#, options: .regularExpression).map { String(output[$0]) }, "\(output)")
+    #expect(made != "3.456.789-4" && uruguayan(made), "\(made)")
 }
 
 @Test func standInsKeepTheLayoutAndPassTheCheck() throws {
