@@ -280,6 +280,44 @@ enum NameEvidence {
 
     // MARK: The gate
 
+    /// Greetings and words of thanks a message opens with, in languages Scrub has no dictionary of: "Dumela", "Sawubona",
+    /// "Habari", "Jambo", "Asante", "Salamat", "Sige", "Po", "Terima kasih", "Selamat pagi".
+    private static let greetings: [[String]] = [
+        ["dumela"], ["dumelang"], ["sawubona"], ["sanibonani"], ["habari"], ["jambo"], ["asante", "sana"], ["asante"], ["karibu"], ["salamat", "po"], ["salamat"],
+        ["sige", "po"], ["sige"], ["po"], ["opo"], ["mabuhay"], ["kumusta"], ["terima", "kasih"], ["selamat", "pagi"], ["selamat", "siang"], ["selamat", "sore"],
+        ["selamat", "malam"], ["selamat", "datang"], ["selamat"], ["siyabonga"], ["ngiyabonga"], ["ke", "a", "leboga"], ["re", "a", "leboga"],
+    ]
+    /// How many of `words`, from the first, a greeting is: 0 where none opens them.
+    static func greetingLength(_ words: [String]) -> Int {
+        var at = 0
+        while let phrase = greetings.first(where: { phrase in at + phrase.count <= words.count && Array(words[at..<(at + phrase.count)]) == phrase }) { at += phrase.count }
+        return at
+    }
+    /// A name only guessed where the text's language is not English and is none Scrub has the words of, or is too
+    /// short to tell: a capitalised word opening a sentence with a comma after it ("Sige, …"), a name written all
+    /// in small letters ("tumepokea hati zako"), or words a likely language's dictionary holds ("Hendes pas er udløbet")
+    /// are no name unless a name list holds them.
+    private static func unread(_ span: Span, in text: String, around language: NLLanguage?) -> Bool {
+        guard language != .english else { return false }
+        let words = NameShape.words(span.range, in: text)
+        guard !words.isEmpty, !words.allSatisfy({ NameLists.isFirst($0.text) || NameLists.isSurname($0.text) }) else { return false }
+        let ns = text as NSString
+        let lines = ns.lineRange(for: NSRange(location: span.range.lowerBound, length: 0))
+        // The line without the name: a name says nothing of the language around it.
+        let line = ns.substring(with: NSRange(location: lines.location, length: span.range.lowerBound - lines.location)) + " "
+            + ns.substring(with: NSRange(location: span.range.upperBound, length: max(0, NSMaxRange(lines) - span.range.upperBound)))
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(line)
+        let likely = recognizer.languageHypotheses(withMaximum: 2).filter { $0.value >= 0.2 }.map(\.key)
+        guard likely.first != .english else { return false }
+        if words.allSatisfy({ $0.text == $0.text.lowercased() }) { return true }
+        if likely.contains(where: readable), let read = likely.first(where: readable), words.allSatisfy({ isOrdinary($0.text, in: read) }) { return true }
+        guard words.count == 1, !(language.map(readable) ?? false) else { return false }
+        let before = ns.substring(with: NSRange(location: lines.location, length: span.range.lowerBound - lines.location)).trimmingCharacters(in: .whitespaces)
+        let opens = before.isEmpty || before.hasSuffix(".") || before.hasSuffix("!") || before.hasSuffix("?") || before.hasSuffix("\"")
+        return opens && span.range.upperBound < ns.length && ns.character(at: span.range.upperBound) == 0x2C
+    }
+
     private static let names: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME"]
     /// People only guessed, where the text is in a language Scrub can read the words of or on a technical
     /// line, kept only with evidence; the rest become doubts. Organisations are no one, and an address that
@@ -361,6 +399,14 @@ enum NameEvidence {
             let span = names.contains(found.entity) ? afterTitle(found, in: text, document: document) : found
             let person = names.contains(span.entity)
             if span.entity == "ADDRESS", WrittenDates.holds(TextRanges.substring(text, span.range)) || WrittenDates.yearAlone(TextRanges.substring(text, span.range)) { continue }
+            // "Dumela Lerato", "Terima kasih, Budi": a greeting or a word of thanks opens a message, never a name; the name starts after it.
+            if person || span.entity == "LOCATION", span.url == nil, case let words = NameShape.words(span.range, in: text), case let greeted = greetingLength(words.map { $0.bare }), greeted > 0 {
+                guard greeted < words.count, person else { continue }
+                let rest = Span(range: words[greeted].range.lowerBound..<span.range.upperBound, entity: span.entity, score: span.score, url: span.url)
+                // A listed name is kept; one no list holds is asked about, never left unseen.
+                if words[greeted...].contains(where: { NameLists.isFirst($0.text) || NameLists.isSurname($0.text) }) { kept.append(rest) } else { doubt(rest) }
+                continue
+            }
             guard (person || span.entity == "LOCATION") && span.url == nil && span.score < 1 && !span.range.isEmpty else { kept.append(span); continue }
             if person || span.entity == "LOCATION", company(span, in: text) { continue }
             if evidenced.contains(where: { $0.overlaps(span.range) }) { kept.append(span); continue }
@@ -376,6 +422,7 @@ enum NameEvidence {
                 }
                 continue
             }
+            if !foreign, !technical, unread(span, in: text, around: language) { doubt(span); continue }
             guard foreign || technical else { kept.append(span); continue }
             if ordinaryAfterTitle(span.range, in: text, language: language ?? .english) { doubt(span); continue }
             if cued(span.range, in: text) || handled(span.range, in: text) || paired(span.range, in: text, language: foreign ? language ?? .english : .english) {

@@ -260,7 +260,7 @@ enum NameShape {
         var found: [(range: Range<Int>, sure: Bool)] = []
         func classify(_ word: String, after previous: String?, opening: Bool) -> Bool? {
             let lower = word.lowercased()
-            guard word.count >= 2, !People.isTitle(word), !People.isSuffix(word), !NameEvidence.titles.contains(lower) else { return nil }
+            guard word.count >= 2, !People.isTitle(word), !People.isSuffix(word), !NameEvidence.titles.contains(lower), NameEvidence.greetingLength([lower]) == 0 else { return nil }
             // "I'm", "We'll", "Garcia's": a contraction or a possessive is the sentence's, no part of a name.
             if let mark = word.firstIndex(where: { $0 == "'" || $0 == "’" }), word[word.index(after: mark)...].count <= 2 || lower == "i" { return nil }
             if word.first?.isUppercase != true && !(slug && word.count >= 3) { return nil }

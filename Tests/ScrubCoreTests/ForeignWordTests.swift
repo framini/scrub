@@ -224,4 +224,18 @@ import Testing
         }
         for word in ["született", "se narodil", "urodziła się", "s-a născut pe", "γεννήθηκε στις", "on syntynyt"] { #expect(output.contains(word), "\(word) → \(output)") }
     }
+
+    /// A greeting or a word of thanks opening a message in a language Scrub has no dictionary of ("Dumela",
+    /// "Habari", "Sawubona", "Jambo") is never a name, nor part of the name after it.
+    @Test(arguments: ["Pasted text", "messages.json"])
+    func aGreetingIsNoName(_ name: String) throws {
+        let lines = ["Dumela Lerato, re amogetse dikwalo tsa gago.", "Habari Amina, tumepokea hati zako.", "Sawubona Thandiwe, siyabonga.", "Jambo Amina, karibu sana."]
+        let input = name.hasSuffix(".json")
+            ? "{\"messages\": [" + lines.map { "{\"from\": \"agent\", \"text\": \"\($0)\"}" }.joined(separator: ", ") + "]}"
+            : lines.joined(separator: "\n")
+        let result = try Scrubber.scrub(Data(input.utf8), name: name, forceFullDetection: false, seed: 5)
+        let output = String(decoding: result.output, as: UTF8.self)
+        for greeting in ["Dumela ", "Habari ", "Sawubona ", "Jambo "] { #expect(output.contains(greeting), "\(greeting) → \(output)") }
+        #expect(!result.findings.contains { ["dumela", "habari", "sawubona", "jambo"].contains($0.original.lowercased().split(separator: " ").first ?? "") }, "\(result.findings.map(\.original))")
+    }
 }

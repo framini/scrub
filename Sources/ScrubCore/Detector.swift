@@ -275,6 +275,9 @@ public final class Detector {
         var covered = IndexSet()
         for span in spans where !span.range.isEmpty { covered.insert(integersIn: span.range) }
         let ns = text as NSString
+        // "Dumela Lerato, ke a leboga": a greeting before or after the name is none of it.
+        let written = NameShape.words(name, in: text).map(\.bare)
+        guard !written.indices.contains(where: { NameEvidence.greetingLength(Array(written[$0...])) > 0 }) else { return spans }
         var start = name.lowerBound, particled = false, whole = true, named = true
         for end in name.lowerBound...name.upperBound where end == name.upperBound || ns.character(at: end) == 0x20 {
             if end > start, let first = Unicode.Scalar(ns.character(at: start)) {
