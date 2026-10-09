@@ -180,18 +180,26 @@ enum NameEvidence {
         let line = ns.substring(with: ns.lineRange(for: NSRange(location: range.lowerBound, length: 0)))
         return !TextRanges.matches(technical, in: line).isEmpty
     }
-    /// The forms a company's name ends with: "Lda.", "S.A.", "GmbH", "B.V.", "S.r.l.", "Ltd", "A.Ş.".
-    static let companyForm = #"(?:Lda|Ltda|S\.?A\.?S?|S\.?L\.?U?|S\.?r\.?l|S\.?p\.?A|S\.?A\.?R\.?L|SARL|GmbH|AG|KG|OHG|e\.?V|B\.?V|N\.?V|V\.?O\.?F|Ltd|Limited|LLC|LLP|L\.?P|Inc|Corp|Co|PLC|AB|ASA|AS|A/S|ApS|Oy|Oyj|A\.?Ş|Ltd\.?\s?Şti|sp\.?\s?z\s?o\.?\s?o|S\.?C|SpA|Srl|SAS|SE|S\.?C\.?A|Unipessoal|EIRELI|ME|EPP|Pty|BVBA|SRL)\.?"#
-    private static let formAfter = TextPattern(#"^,?[ \t]+"# + companyForm + #"(?![\p{L}\p{N}])"#)
+    /// The forms a company's name ends with: "Lda.", "S.A.", "GmbH", "B.V.", "S.r.l.", "Ltd", "A.Ş.", "d.o.o.", "Sp. z o.o.", "ООО".
+    static let companyForm = #"(?:S\.?A\.?\s?de\s?C\.?V|GmbH\s?&\s?Co\.?\s?KG|\(Pty\)\s?Ltd|Pte\.?\s?Ltd|Lda|Ltda|S\.?A\.?S?|S\.?L\.?U?|S\.?r\.?l|S\.?p\.?A|S\.?A\.?R\.?L|SARL|GmbH|AG|KG|OHG|e\.?V|B\.?V|N\.?V|V\.?O\.?F|Ltd|Limited|LLC|LLP|L\.?P|Inc|Corp|Co|PLC|AB|ASA|AS|A/S|ApS|Oy|Oyj|A\.?Ş|Ltd\.?\s?Şti|[sS]p\.?\s?z\s?o\.?\s?o|[dD]\.?\s?o\.?\s?o|[sS]\.?\s?r\.?\s?o|S\.?C|SpA|Srl|SAS|SE|S\.?C\.?A|Unipessoal|EIRELI|ME|EPP|Pty|BVBA|SRL|OÜ|SIA|UAB|Kft|Zrt|Nyrt|Bt|Α\.?Ε|Ε\.?Π\.?Ε|ΙΚΕ|ЕООД|ООД|ЕАД|ООО|ОАО|ЗАО|ТОВ|ПАО)\.?"#
+    private static let formAround = TextPattern(#"(?:^|[ \t,])"# + companyForm + #"(?![\p{L}\p{N}])"#)
     private static let formOnly = TextPattern(#"^"# + companyForm + #"$"#)
-    private static let formAtEnd = TextPattern(#"[ \t,]"# + companyForm + #"$"#)
-    /// A name ending in a company's form, or followed by one, is an organisation's ("Example Lisboa Consultoria, Lda."), and the form alone names no one.
+    private static let formAfter = TextPattern(#"^,?[ \t]+"# + companyForm + #"(?![\p{L}\p{N}])"#)
+    private static let formAhead = TextPattern(#"^(?:[ \t]+\p{Lu}[\p{L}\p{M}'’&-]*){1,3},?[ \t]+"# + companyForm + #"(?![\p{L}\p{N}])"#)
+    /// A name ending in a company's form, or followed by one, is an organisation's ("Example Lisboa Consultoria, Lda."),
+    /// as is one a reader ended inside its form ("Example Arredamenti S" of "S.r.l.") or that opens one, and the
+    /// form alone names no one. A company's name is no place either.
     static func company(_ span: Span, in text: String) -> Bool {
         let ns = text as NSString
         let value = ns.substring(with: NSRange(location: span.range.lowerBound, length: span.range.count))
-        if !TextRanges.matches(formOnly, in: value).isEmpty || !TextRanges.matches(formAtEnd, in: value).isEmpty { return true }
-        let after = ns.substring(with: NSRange(location: span.range.upperBound, length: min(24, ns.length - span.range.upperBound)))
-        return !TextRanges.matches(formAfter, in: after).isEmpty
+        if !TextRanges.matches(formOnly, in: value).isEmpty { return true }
+        let after = ns.substring(with: NSRange(location: span.range.upperBound, length: min(48, ns.length - span.range.upperBound)))
+        // "Haugen" of "Haugen Eiendom AS": the start of a company's name, its form a few words on.
+        if !TextRanges.matches(formAfter, in: after).isEmpty || !TextRanges.matches(formAhead, in: after).isEmpty { return true }
+        let joined = (value + after) as NSString, end = (value as NSString).length
+        return TextRanges.matches(formAround, in: joined as String).contains { match in
+            match.range.location <= end && NSMaxRange(match.range) >= end && match.range.location > 0 || match.range.location == 0 && NSMaxRange(match.range) >= end
+        }
     }
 
     // MARK: The gate
@@ -219,7 +227,7 @@ enum NameEvidence {
             let person = names.contains(span.entity)
             if span.entity == "ADDRESS", WrittenDates.holds(TextRanges.substring(text, span.range)) || WrittenDates.yearAlone(TextRanges.substring(text, span.range)) { continue }
             guard (person || span.entity == "LOCATION") && span.url == nil && span.score < 1 && !span.range.isEmpty else { kept.append(span); continue }
-            if person, company(span, in: text) { continue }
+            if person || span.entity == "LOCATION", company(span, in: text) { continue }
             if evidenced.contains(where: { $0.overlaps(span.range) }) { kept.append(span); continue }
             let technical = technicalLine(span.range, in: text)
             if span.entity == "LOCATION" {

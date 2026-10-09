@@ -82,4 +82,27 @@ import Testing
         let (_, polish) = try Self.scrub("Urodziłem się 12 maja 1966 r. w Lublinie. Proszę o kontakt w sprawie blokady konta.\n")
         #expect(polish.contains("maja") && polish.contains("Proszę o kontakt"), "\(polish)")
     }
+
+    /// A company with a legal form, however its country writes it, stays as written, name and form,
+    /// in a sentence and in a record: none of them is a person, and "S.r.l." is no one's handle.
+    @Test(arguments: [
+        "Bellandi Arredamenti S.r.l.", "Cortesi Mobili Srl", "Ferrandi Costruzioni S.p.A.", "Horvat Gradnja d.o.o.", "Novotný Strojírny s.r.o.",
+        "Wiśniewski Logistyka Sp. z o.o.", "Brenner Bau GmbH & Co. KG", "Virtanen Ohjelmistot Oy", "Haugen Eiendom AS", "Lindqvist Data ASA",
+        "Ekström Konsult AB", "Tamm Tarkvara OÜ", "Ozols Būve SIA", "Kazlauskas Prekyba UAB", "Nagy Építő Kft.", "Szabó Ipari Zrt.",
+        "Yılmaz Tekstil A.Ş.", "Hargreaves Joinery Ltd", "Mokoena Holdings (Pty) Ltd", "Tan Wei Trading Pte. Ltd.", "Ribeiro Exportações S.A.",
+        "Moreau Conseil S.A.S.", "Lefèvre Peinture SARL", "Garnier Logiciels SAS", "Van Dijk Techniek B.V.", "Peeters Bouw N.V.", "De Wit Advies BV",
+        "Janssens Groep NV", "Ferreira Consultoria Lda.", "Oliveira Comércio Ltda.", "Navarro Reformas S.L.", "Gutiérrez Alimentos S.A. de C.V.",
+        "Παπαδόπουλος Κατασκευές Α.Ε.", "Петров Консулт ЕООД", "Иванов Логистик ООО",
+    ])
+    func aCompanyWithItsLegalFormIsNoOne(_ company: String) throws {
+        for sentence in ["Invoice 2024-118 was issued by \(company) on 3 March and paid by bank transfer.\n",
+                         "Fornitore: \(company), con sede legale in centro. Fattura saldata il 3 marzo.\n",
+                         "Lieferant: \(company). Die Rechnung wurde am 3. März bezahlt.\n",
+                         "Supplier: \(company) invoiced us twice this month.\n"] {
+            let (_, prose) = try Self.scrub(sentence)
+            #expect(prose.contains(company), "\(prose)")
+        }
+        let (_, json) = try Self.scrub(#"{"invoice": {"number": "2024-118", "issuer": "\#(company)", "note": "Paid to \#(company) in full."}}"#, name: "invoice.json")
+        #expect(json.components(separatedBy: company).count == 3, "\(json)")
+    }
 }
