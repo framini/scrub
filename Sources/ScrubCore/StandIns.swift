@@ -1790,6 +1790,7 @@ final class StandIns {
     private func company(like original: String) -> String {
         let trimmed = original.trimmingCharacters(in: .whitespaces)
         let legal = trimmed.split(separator: " ").last.map(String.init).flatMap { Self.legalForms.contains($0.lowercased()) && trimmed.contains(" ") ? $0 : nil }
+            ?? NameEvidence.companyNameForm(trimmed)
         let name = [pick(Self.companyHeads) ?? "Corvane", pick(Self.companyKinds) ?? "Group", legal].compactMap { $0 }.joined(separator: " ")
         return trimmed == trimmed.uppercased() && trimmed != trimmed.lowercased() ? name.uppercased() : name
     }

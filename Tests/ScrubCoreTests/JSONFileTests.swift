@@ -547,3 +547,12 @@ func aKeySpelledLikeANameReadElsewhereStays(_ seed: UInt64) throws {
     #expect(Set(object.keys) == ["pratica", "richiedente", "garante", "note"], "\(output)")
     #expect(!output.contains("Moretti") && !output.contains("Odalys"), "\(output)")
 }
+
+/// A company's name under a person's name key ("full_name": "Example Distribuidora S.A.") stays as written.
+@Test func aCompanyUnderANameKeyIsNoPerson() throws {
+    let input = #"{"parties": [{"role": "applicant", "full_name": "Marta Quintela", "dob": "1984-02-11"}, {"role": "employer", "full_name": "Example Distribuidora S.A."}, {"role": "guarantor", "name": "Norte Comercial Ltda."}, {"role": "payee", "first_name": "Rui", "last_name": "Valadares"}]}"#
+    let result = try Scrubber.scrub(Data(input.utf8), name: "parties.json", forceFullDetection: false, seed: 3)
+    let output = String(decoding: result.output, as: UTF8.self)
+    #expect(output.contains(#""full_name": "Example Distribuidora S.A.""#) && output.contains(#""name": "Norte Comercial Ltda.""#), "\(output)")
+    for original in ["Marta", "Quintela", "Valadares", "1984-02-11"] { #expect(!output.contains(original), "\(original) in \(output)") }
+}

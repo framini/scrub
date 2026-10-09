@@ -119,7 +119,7 @@ enum Fields {
         case "ID_NUMBER": return trimmed.contains(where: \.isNumber) && !trimmed.contains(" ") && !RecordIDs.isUUID(trimmed)
         default:
             return trimmed.allSatisfy { $0.isLetter || " .'’-".contains($0) } && trimmed.split(separator: " ").count <= 5
-                && !KeyHints.isCommonValue(trimmed) && trimmed.first?.isUppercase == true
+                && !KeyHints.isCommonValue(trimmed) && trimmed.first?.isUppercase == true && !NameEvidence.companyName(trimmed)
         }
     }
 }

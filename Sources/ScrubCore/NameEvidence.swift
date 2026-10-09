@@ -191,6 +191,13 @@ enum NameEvidence {
     private static let formOnly = TextPattern(#"^"# + companyForm + #"$"#)
     private static let formAfter = TextPattern(#"^,?[ \t]+"# + companyForm + #"(?![\p{L}\p{N}])"#)
     private static let formAhead = TextPattern(#"^(?:[ \t]+\p{Lu}[\p{L}\p{M}'’&-]*){1,3},?[ \t]+"# + companyForm + #"(?![\p{L}\p{N}])"#)
+    private static let formEnding = TextPattern(#"^\p{L}[\p{L}\p{M}\p{N}'’&.\- ]*?,?[ \t]+("# + companyForm + #")$"#)
+    /// Whether a whole value is a company's name: words, then the form it ends with ("Example Distribuidora S.A.").
+    static func companyName(_ value: String) -> Bool { companyNameForm(value) != nil }
+    /// The form a company's whole name ends with ("Unipessoal Lda." of "… Unipessoal Lda." reads "Lda."), nil for no company's name.
+    static func companyNameForm(_ value: String) -> String? {
+        TextRanges.matches(formEnding, in: value).first.map { (value as NSString).substring(with: $0.range(at: 1)) }
+    }
     /// A name ending in a company's form, or followed by one, is an organisation's ("Example Lisboa Consultoria, Lda."),
     /// as is one a reader ended inside its form ("Example Arredamenti S" of "S.r.l.") or that opens one, and the
     /// form alone names no one. A company's name is no place either.

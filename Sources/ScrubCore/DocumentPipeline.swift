@@ -925,6 +925,8 @@ enum DocumentPipeline {
         let trimmed = ns.range(of: #"\S(?:.*\S)?"#, options: .regularExpression)
         guard trimmed.location != NSNotFound else { return nil }
         let range = trimmed.location..<NSMaxRange(trimmed), name = ns.substring(with: trimmed)
+        // "Example Distribuidora S.A." among the names: a company's, no one to ask about.
+        if NameEvidence.companyName(name) { return nil }
         if EastAsianNames.surnamed(name) == nil, KeyHints.onlyNames(name), model?.readsAsName(name, isCancelled: isCancelled) == true {
             return (Span(range: range, entity: "PERSON", score: NameModel.score), true)
         }

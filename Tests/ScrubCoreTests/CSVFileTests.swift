@@ -230,3 +230,25 @@ func csvHeaderSpelledLikeANameReadElsewhereStays(_ run: Int) throws {
     #expect(output.hasPrefix("pratica,nome,cognome,garante,note\n"), "\(output)")
     #expect(!output.contains("Moretti") && !output.contains("Odalys"), "\(output)")
 }
+
+/// A cell ending in a company's legal form, in a column of people's names, is a company: it stays as
+/// written, never a person's stand-in, and one named after a person takes a company's stand-in instead.
+@Test func aCompanyInAColumnOfNamesIsNoPerson() throws {
+    let csv = """
+    id,titular,ciudad,saldo
+    1,Marta Quintela,Porto,120.00
+    2,Example Distribuidora S.A.,Lisboa,88.10
+    3,Rui Valadares,Braga,15.75
+    4,Norte Comercial Ltda.,Faro,40.00
+    5,Marta Quintela Unipessoal Lda.,Porto,9.99
+    """
+    for seed: UInt64 in 1...3 {
+        let result = try Scrubber.scrub(Data(csv.utf8), name: "titulares.csv", forceFullDetection: false, seed: seed)
+        let output = String(decoding: result.output, as: UTF8.self)
+        let rows = output.split(separator: "\n").map(String.init)
+        #expect(rows[2].hasPrefix("2,Example Distribuidora S.A.,") && rows[4].hasPrefix("4,Norte Comercial Ltda.,"), "\(output)")
+        for original in ["Marta", "Quintela", "Rui", "Valadares"] { #expect(!output.contains(original), "\(original) in \(output)") }
+        #expect(rows[5].contains(" Lda.,"), "\(output)")
+        #expect(!result.findings.contains { $0.entity == "PERSON" && $0.original.hasSuffix(".") }, "\(result.findings.map { "\($0.entity) \($0.original)" })")
+    }
+}

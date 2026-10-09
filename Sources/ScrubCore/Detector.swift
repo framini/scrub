@@ -271,7 +271,7 @@ public final class Detector {
     static func wholeName(_ spans: [Span], in text: String) -> [Span] {
         guard !spans.isEmpty, spans.allSatisfy({ ["PERSON", "FIRST_NAME", "LAST_NAME"].contains($0.entity) && $0.url == nil }),
               let name = writtenName(text), spans.allSatisfy({ name.lowerBound <= $0.range.lowerBound && $0.range.upperBound <= name.upperBound }),
-              spans.count > 1 || spans[0].range != name else { return spans }
+              spans.count > 1 || spans[0].range != name, !NameEvidence.companyName(TextRanges.substring(text, name)) else { return spans }
         var covered = IndexSet()
         for span in spans where !span.range.isEmpty { covered.insert(integersIn: span.range) }
         let ns = text as NSString
@@ -309,7 +309,15 @@ public final class Detector {
     /// What `base` finds, and the people it doubts.
     func read(_ text: String, key: String? = nil, contextWords: Set<String> = [], naming: Set<String>? = nil, context: ContextStage.Reading? = nil) -> (spans: [Span], doubts: [Span]) {
         let spans = Self.contactsOutOfAddresses(base(text, key: key, contextWords: contextWords, naming: naming, context: context), in: text).filter { !Self.served($0, in: text) }
-        return (spans, doubts)
+        return (spans.compactMap { Self.companyNamed($0, in: text) }, doubts)
+    }
+    /// A name a reader found that ends in a company's form, or that one follows ("Example Distribuidora S.A."),
+    /// is a company's: kept as written, or a company's stand-in where its owner's given name is in it.
+    static func companyNamed(_ span: Span, in text: String) -> Span? {
+        guard ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(span.entity), span.score < 1, NameEvidence.company(span, in: text) else { return span }
+        let words = TextRanges.substring(text, span.range).split(whereSeparator: { !$0.isLetter })
+        guard words.contains(where: { NameLists.isFirst(String($0)) }) else { return nil }
+        return Span(range: span.range, entity: "EMPLOYER", score: span.score)
     }
     /// A number an access log writes after the request it answers: its status and sizes, whatever
     /// reading took them for a phone, an ID or an SSN (see `servedLead`).
@@ -414,6 +422,14 @@ public final class Detector {
         // The value before a note written after it is the field's; the note is read as any text is (see `KeyHints.noteStart`).
         if case let head = KeyHints.judged(key, text), head.utf16.count < text.utf16.count { return keyed(head, key: key) }
         let trimmed = text.trimmingCharacters(in: .whitespaces)
+        // "Example Distribuidora S.A." in a column of names: a company's, kept as written. One named after
+        // its owner ("Marta Quintela Lda.") takes a company's stand-in, so the owner's name goes with it.
+        if ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(entity), NameEvidence.companyName(trimmed) {
+            let words = trimmed.split(whereSeparator: { !$0.isLetter }).dropLast()
+            guard words.contains(where: { NameLists.isFirst(String($0)) }), let found = text.range(of: trimmed) else { return [] }
+            let start = NSRange(found, in: text).location
+            return [Span(range: start..<(start + (trimmed as NSString).length), entity: "EMPLOYER", score: 1)]
+        }
         // Someone's value hashed: a stand-in digest of its shape, never an email or a name in its place.
         if KeyHints.digestKinds.contains(entity), KeyHints.isDigest(trimmed), let found = text.range(of: trimmed) {
             let start = NSRange(found, in: text).location
