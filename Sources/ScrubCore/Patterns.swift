@@ -222,8 +222,8 @@ enum Patterns {
         guard let match = TextRanges.matches(keyTail, in: before).last else { return nil }
         return (before as NSString).substring(with: match.range(at: 1))
     }
-    /// Before a key's or a query's value: "user=", "/reset?email=", "uid=7|", "/users/".
-    private static let joinedKey = TextPattern(#"^(?:/[^@\s]*[/?&=]|[A-Za-z_][A-Za-z0-9_.-]{0,31}[=|](?:[^@\s]*[=|&])?)(?=[^@/?&=|]+@)"#)
+    /// Before a key's or a query's value: "user=", "/reset?email=", "uid=7|", "/users/", "target=user/".
+    private static let joinedKey = TextPattern(#"^(?:/[^@\s]*[/?&=]|[A-Za-z_][A-Za-z0-9_.-]{0,31}[=|](?:[^@\s]*[=|&/])?)(?=[^@/?&=|]+@)"#)
     /// Where an address read with a key, a path or a query before it starts: the marks
     /// that join them are allowed in an address's local part, but a local part written
     /// so is a key and its value ("user=ofelia@…"), not one address. Nil when it starts where read.

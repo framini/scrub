@@ -202,3 +202,23 @@ func aDoubleBarrelledNameAndItsInitialsGoWhole(_ message: String) throws {
     #expect(approved.count == 2 && approved[0] == "\(reviewer[0].prefix(1))." && approved[1] == reviewer.last!, "\(output)")
     }
 }
+
+/// An audit log's line keeps every key and path around a person's email: the address after "target=user/"
+/// or "subject=customers/" is replaced alone, never with the key's path read into its local part.
+@Test(arguments: [UInt64(1), 2, 3])
+func anAuditLogKeepsTheKeysAroundAnEmail(_ seed: UInt64) throws {
+    let log = """
+    2026-03-02T10:14:22Z actor=admin.ops target=user/48213 action=update field=surname old="Halvorsen" new="Brekke"
+    2026-03-02T10:14:23Z actor=admin.ops target=user/ingrid.halvorsen@example.no action=view
+    2026-03-02T10:14:24Z actor=k.marsh@example.org target=user/ingrid.halvorsen@example.no action=update field=email old="ingrid.halvorsen@example.no" new="ingrid.brekke@example.no"
+    2026-03-02T10:14:25Z actor=admin.ops subject=customers/eu/teo.lisboa@example.net action=export
+    """
+    let result = try Scrubber.scrub(Data(log.utf8), name: "Pasted text", forceFullDetection: false, seed: seed)
+    let output = String(decoding: result.output, as: UTF8.self)
+    func keys(_ line: Substring) -> [String] { line.matches(of: /([a-z_]+)=/).map { String($0.1) } }
+    let before = log.split(separator: "\n"), after = output.split(separator: "\n")
+    #expect(before.count == after.count, "\(output)")
+    for (original, made) in zip(before, after) { #expect(keys(original) == keys(made), "\(original)\n→ \(made)") }
+    #expect(after[1].contains(" target=user/") && after[2].contains(" target=user/") && after[3].contains(" subject=customers/eu/"), "\(output)")
+    for original in ["ingrid.halvorsen", "teo.lisboa", "ingrid.brekke"] { #expect(!output.contains(original), "\(original) in \(output)") }
+}
