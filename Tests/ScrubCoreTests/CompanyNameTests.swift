@@ -65,4 +65,28 @@ import Testing
         }
         for name in ["Laura Méndez", "Grace Holt", "Wiebke Strothmann", "Ramírez"] { #expect(!NameEvidence.companyName(name), "\(name)") }
     }
+
+    /// A company under a key that names a worker ("agent", "broker") stays as written, a seat in brackets after
+    /// its form too, while a person under the same key is replaced.
+    @Test(arguments: 1...3)
+    func aCompanyUnderAWorkersKeyStays(_ seed: Int) throws {
+        let json = """
+        {"transfers": [
+          {"sender": {"name": "Hadi Qasemi"}, "agent": "Norvale Remesas L.L.C. (Sharjah)", "amount": 250.0},
+          {"remitente": {"nombre_completo": "Celia Orduña"}, "compliance": {"screening": "CLEAR", "agent": "Andelia Envíos Cía. Ltda."}},
+          {"sender": {"name": "Bram Velthuis"}, "broker": "Quillmar Giros Cia. Ltda.", "agent": "Grace Holt"}
+        ]}
+        """
+        let result = try Scrubber.scrub(Data(json.utf8), name: "transfers.json", forceFullDetection: false, seed: UInt64(seed))
+        let output = String(decoding: result.output, as: UTF8.self)
+        #expect((try? JSONSerialization.jsonObject(with: result.output)) != nil, "\(output)")
+        for kept in ["\"Norvale Remesas L.L.C. (Sharjah)\"", "\"Andelia Envíos Cía. Ltda.\"", "\"Quillmar Giros Cia. Ltda.\""] { #expect(output.contains(kept), "\(kept) in \(output)") }
+        for gone in ["Hadi", "Qasemi", "Celia", "Orduña", "Bram", "Velthuis", "Grace Holt"] { #expect(!output.contains(gone), "\(gone) in \(output)") }
+        #expect(!result.findings.contains { ["Norvale", "Andelia", "Quillmar"].contains(where: $0.original.contains) }, "\(result.findings.map(\.original))")
+    }
+
+    @Test func aSeatInBracketsEndsACompanysName() {
+        for name in ["Example Remit L.L.C. (Dubai)", "Example Envíos Cía. Ltda. (Quito)", "Example Handel GmbH (Köln)"] { #expect(NameEvidence.companyName(name), "\(name)") }
+        for name in ["Grace Holt (Dubai)", "Laura Méndez (Quito)"] { #expect(!NameEvidence.companyName(name), "\(name)") }
+    }
 }

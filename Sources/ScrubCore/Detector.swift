@@ -38,7 +38,11 @@ public final class Detector {
         find(text, key: key, matcher: GazetteerMatcher(gazetteer), contextWords: contextWords)
     }
     func find(_ text: String, key: String? = nil, matcher: GazetteerMatcher, contextWords: Set<String> = [], modelled: Bool = true) -> [Span] {
-        autoreleasepool { combined(base(text, key: key, contextWords: contextWords, modelled: modelled), text: text, matcher: matcher) }
+        // A sweep over stand-ins ends an address before a phone's label as the first reading does.
+        autoreleasepool {
+            let found = Self.labelsOutOfAddresses(Self.contactsOutOfAddresses(base(text, key: key, contextWords: contextWords, modelled: modelled), in: text), in: text)
+            return combined(found, text: text, matcher: matcher)
+        }
     }
     /// `modelled: false` leaves out the name model, for a sweep over text that
     /// already holds stand-ins: the model reads the words around each one, so
@@ -642,6 +646,8 @@ public final class Detector {
             for (index, span) in named.enumerated() where !covered.intersects(integersIn: span.range) && !Self.namesNoOne(span, in: text) {
                 if index.isMultiple(of: 64) && isCancelled() { return spans }
                 guard span.entity == "PERSON" else { spans.append(span); continue }
+                // "Elektra 09/2026": a lone word before the month a payment is for names what it pays; asked about, never replaced on a guess.
+                if Self.billed(span.range, in: text) { doubts.append(Span(range: span.range, entity: "PERSON", score: Doubt.unconfirmed.confidence)); continue }
                 let hand = !NameShape.ordinaryGuess(span, in: text)
                 guard scoring || personLog != nil else { if hand { spans.append(span) }; continue }
                 let signals = PersonScorer.signals(span.range, in: text, reading: reading, people: people)
@@ -840,6 +846,14 @@ public final class Detector {
     }
     /// Ladies and gentlemen, as a letter in German, Dutch, French, Spanish or Italian greets them.
     private static let everyone = TextPattern(#"\b(?:Damen und Herren|Dames en Heren|Mesdames(?:,)? Messieurs|Mesdames et Messieurs|Señoras y Señores|Signore e Signori)\b"#)
+    private static let billingPeriod = TextPattern(#"^[ \t]+(?:0?[1-9]|1[0-2])[/.](?:19|20)?\d\d(?![\p{L}\p{N}/.])"#)
+    /// Whether the range is one word with a month and its year written right after it ("Elektra 09/2026", "Miete 10.2026").
+    static func billed(_ range: Range<Int>, in text: String) -> Bool {
+        let ns = text as NSString
+        guard !TextRanges.substring(text, range).contains(" ") else { return false }
+        let after = ns.substring(with: NSRange(location: range.upperBound, length: min(16, ns.length - range.upperBound)))
+        return !TextRanges.matches(billingPeriod, in: after).isEmpty
+    }
     private static func namesNoOne(_ span: Span, in text: String) -> Bool {
         guard span.entity == "PERSON" || span.entity == "LOCATION" else { return false }
         if inHeaderName(span.range, in: text) { return true }
@@ -1120,7 +1134,10 @@ public final class Detector {
             }
         guard let match else { return nil }
         let range = match.range(at: 1).location..<NSMaxRange(match.range(at: 1))
-        return NameTagger.namesOrganisation(TextRanges.substring(text, range)) ? nil : range
+        // "Example Envíos Cía. Ltda.", "Example Exchange L.L.C. (Dubai)": a company's name, though written as a person's.
+        let written = TextRanges.substring(text, range)
+        return NameTagger.namesOrganisation(written) || NameEvidence.companyName(written)
+            || NameEvidence.companyNameForm(text.trimmingCharacters(in: .whitespaces)) != nil ? nil : range
     }
     private func system(_ text: String) -> [Span] {
         guard let detector = systemDetector else { return [] }

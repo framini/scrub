@@ -160,7 +160,7 @@ enum ContextStage {
         case "LOCATION":
             // A country, a continent or a nationality ("a Danish citizen", "the
             // United Kingdom") is shared by millions: no one's place.
-            guard named(value), !isNation(value), !holidays.contains(normalPlace(value)) else { return nil }
+            guard named(value), !isNation(value), !holidays.contains(normalPlace(value)), !qualifiesDocument(range, in: text) else { return nil }
             entity = "LOCATION"
         case "ORG":
             guard named(value), employment(around: range, in: text) else { return nil }
@@ -377,12 +377,23 @@ enum ContextStage {
         """.split(whereSeparator: { $0.isWhitespace }).map(String.init)).union([
         "united kingdom", "united states", "united states of america", "usa", "uk", "us", "new zealand", "south africa", "south korea", "north korea",
         "saudi arabia", "sri lanka", "costa rica", "el salvador", "sierra leone", "ivory coast", "czech republic", "dominican republic",
-        "united arab emirates", "great britain", "northern ireland", "north america", "south america", "latin america", "central america",
+        "united arab emirates", "uae", "emirati", "great britain", "northern ireland", "north america", "south america", "latin america", "central america",
         "middle east", "south african", "new zealander", "sri lankan", "saudi", "british isles", "soviet union", "ussr", "eu", "european union",
         "republic of turkey", "russian federation", "people's republic of china", "republic of ireland", "republic of poland",
     ])
 
     /// Whether a place is a country, a continent or the word for a people: in English, or a country in a language Scrub reads ("Algérie", "Alemania", "Litauen").
+    private static let documentAfter = TextPattern(#"(?i)^[ \t]+(?:residence[ \t]+(?:permit|card|visa)|residency[ \t]+(?:permit|card)|passport|visa|(?:national[ \t]+)?id(?:entity)?[ \t]+card|id\b|driv(?:ing|er'?s|er’s)[ \t]+licen[cs]e|work[ \t]+permit|travel[ \t]+document)"#)
+    private static let regionCodes = Set(Locale.Region.isoRegions.map(\.identifier).filter { $0.count == 2 && $0.allSatisfy(\.isLetter) })
+    /// "a UAE residence permit", "her German passport", "GB driving licence": a country, or its code, before a
+    /// document's kind says which country issued it, not where anyone lives.
+    static func qualifiesDocument(_ range: Range<Int>, in text: String) -> Bool {
+        let value = TextRanges.substring(text, range)
+        guard isNation(value) || value.count == 2 && value == value.uppercased() && regionCodes.contains(value) else { return false }
+        let ns = text as NSString
+        let after = ns.substring(with: NSRange(location: range.upperBound, length: min(40, ns.length - range.upperBound)))
+        return !TextRanges.matches(documentAfter, in: after).isEmpty
+    }
     static func isNation(_ value: String) -> Bool {
         let place = normalPlace(value)
         return nations.contains(place) || countriesAbroad.contains(place.folding(options: .diacriticInsensitive, locale: nil))

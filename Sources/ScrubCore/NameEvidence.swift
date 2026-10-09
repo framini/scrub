@@ -354,7 +354,8 @@ enum NameEvidence {
     private static let formOnly = TextPattern(#"^"# + companyForm + #"$"#)
     private static let formAfter = TextPattern(#"^,?[ \t]+"# + companyForm + #"(?![\p{L}\p{N}])"#)
     private static let formAhead = TextPattern(#"^(?:[ \t]+\p{Lu}[\p{L}\p{M}'’&-]*){1,3},?[ \t]+"# + companyForm + #"(?![\p{L}\p{N}])"#)
-    private static let formEnding = TextPattern(#"^\p{L}[\p{L}\p{M}\p{N}'’&.\- ]*?,?[ \t]+("# + companyForm + #")$"#)
+    /// A seat written after the form in brackets ("Example Exchange L.L.C. (Dubai)") still ends the company's name.
+    private static let formEnding = TextPattern(#"^\p{L}[\p{L}\p{M}\p{N}'’&.\- ]*?,?[ \t]+("# + companyForm + #")(?:[ \t]+\([\p{L}\p{M} .,'’-]{2,40}\))?$"#)
     private static let formBefore = TextPattern(#"(?:^|[ \t,])"# + companyForm + #",?[ \t]+$"#)
     /// A place written right after a company's form is the company's seat ("Primer Trgovina d.o.o. Beograd",
     /// "Example GmbH, Köln"): it names where the company is, not where anyone lives.

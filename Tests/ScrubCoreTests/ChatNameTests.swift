@@ -139,3 +139,21 @@ import Testing
     #expect(lines[1].contains("ops2: \(first)'s ssn looks mistyped") && lines[2].hasSuffix("ping \(first) later") && lines[3].contains("tell \(first) to resend"), "\(output)")
     #expect(result.unresolved.isEmpty, "\(result.unresolved.map(\.original))")
 }
+
+/// An ordinary English word in small letters opening a chat message stays as written, though a reporting verb
+/// ("called", "emailed") follows it; the people the chat names are replaced.
+@Test(arguments: 1...3)
+func aSmallWordBeforeAReportingVerbStays(_ seed: Int) throws {
+    let chat = """
+    09:13 Dana Whitlock: Ivo Marchetti's session is one of the stuck ones
+    09:15 Dana Whitlock: done, called her. All good now
+    09:16 Petra Lindqvist: thanks, emailed the summary to Ivo
+    09:18 Dana Whitlock: sorted, phoned him back too
+
+    """
+    let result = try Scrubber.scrub(Data(chat.utf8), name: "Pasted text", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    for kept in [": done, called her. All good now", ": thanks, emailed the summary to ", ": sorted, phoned him back too"] { #expect(output.contains(kept), "\(kept) in \(output)") }
+    for gone in ["Dana", "Whitlock", "Marchetti", "Petra", "Lindqvist"] { #expect(!output.contains(gone), "\(gone) in \(output)") }
+    #expect(!result.findings.contains { ["done", "thanks", "sorted"].contains($0.original) }, "\(result.findings.map(\.original))")
+}

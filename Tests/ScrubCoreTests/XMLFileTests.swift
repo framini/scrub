@@ -149,3 +149,21 @@ func xmlElementSpelledLikeANameReadElsewhereStays(_ run: Int) throws {
     #expect(output.contains("<garante><nome>") && output.contains("</cognome></garante>"), "\(output)")
     #expect(!output.contains("Moretti") && !output.contains("Odalys"), "\(output)")
 }
+
+/// A payment's remittance text that opens with what it pays and the month ("Elektra 09/2026") keeps that word,
+/// asked about at most, while the debtors' names are replaced or asked about.
+@Test func aRemittanceWordBeforeItsMonthStays() throws {
+    let xml = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <Document><CstmrDrctDbtInitn><PmtInf>
+      <DrctDbtTxInf><Dbtr><Nm>Jonas Petrauskas</Nm></Dbtr><RmtInf><Ustrd>Elektra 09/2026 – sutartis 55-0912</Ustrd></RmtInf></DrctDbtTxInf>
+      <DrctDbtTxInf><Dbtr><Nm>Ona Kazlauskienė</Nm></Dbtr><RmtInf><Ustrd>Dujos 10.2026 sutartis 55-1187</Ustrd></RmtInf></DrctDbtTxInf>
+    </PmtInf></CstmrDrctDbtInitn></Document>
+    """
+    let result = try Scrubber.scrub(Data(xml.utf8), name: "debits.xml")
+    let output = String(decoding: result.output, as: UTF8.self)
+    #expect(output.contains("<Ustrd>Elektra 09/2026 – sutartis 55-0912</Ustrd>") && output.contains("<Ustrd>Dujos 10.2026 sutartis 55-1187</Ustrd>"), "\(output)")
+    // Each debtor is replaced, or asked about where a name in another language leaves a guess unsure; never left unseen.
+    let asked = result.unresolved.compactMap(\.original).joined(separator: " ")
+    for gone in ["Jonas", "Petrauskas", "Ona", "Kazlauskienė"] { #expect(!output.contains(gone) || asked.contains(gone), "\(gone) in \(output)") }
+}

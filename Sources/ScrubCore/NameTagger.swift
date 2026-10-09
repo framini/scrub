@@ -144,6 +144,8 @@ enum NameTagger {
                     let known = Names.firstFolded.contains(value.lowercased()) || Names.lastFolded.contains(value.lowercased())
                     let cue = cued(mapped, in: original)
                     if (!known && !cue) || (Names.ambiguousFirst.contains(value.lowercased()) && !cue) || (value == value.uppercased() && value.count >= 2 && !known) { return true }
+                    // "done, called her": a word in small letters no list of names holds is the word, whatever cue stands beside it.
+                    if !known, value == value.lowercased(), NameLists.isWord(value) { return true }
                 } else {
                     // "Possible SYN flooding": a word and an acronym, neither a name anyone is known by, are no person.
                     let words = tokens.map { (value as NSString).substring(with: $0.range) }

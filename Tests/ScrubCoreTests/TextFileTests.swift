@@ -387,3 +387,41 @@ func aCountryInAnotherLanguageStays(_ seed: Int) throws {
     #expect(!result.findings.contains { $0.entity == "LOCATION" && ["Algérie", "Espagne", "Allemagne", "Alemania", "Lituania", "Litauen", "Italia"].contains(where: $0.original.contains) },
             "\(result.findings.map { "\($0.entity) \($0.original)" })")
 }
+
+/// An address whose sentence ends before a phone's label ("Kaunas. Telefonas +370 …") ends there in every pass:
+/// the label stays, and the phone keeps its country's code.
+@Test(arguments: 1...3)
+func anAddressEndsBeforeAPhonesLabelAfterItsSentence(_ seed: Int) throws {
+    let text = """
+    Naujas adresas: Laisvės al. 14-3, LT-44240 Kaunas. Telefonas +370 655 50 112.
+    Adresas: Savanorių pr. 61-4, LT-03144 Vilnius, Mobilusis +370 612 50 199.
+    Uusi osoite: Hämeenkatu 21 B 9, 33200 Tampere. Puhelin +358 40 555 0147.
+
+    """
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    let lines = output.split(separator: "\n").map(String.init)
+    #expect(lines.count == 3, "\(output)")
+    #expect(lines[0].range(of: #"\. Telefonas \+370 \d{3} \d{2} \d{3}\.$"#, options: .regularExpression) != nil, "\(output)")
+    #expect(lines[1].range(of: #", Mobilusis \+370 \d{3} \d{2} \d{3}\.$"#, options: .regularExpression) != nil, "\(output)")
+    #expect(lines[2].range(of: #"\. Puhelin \+358 \d{2} \d{3} \d{4}\.$"#, options: .regularExpression) != nil, "\(output)")
+    for original in ["Laisvės", "44240", "655 50 112", "Savanorių", "03144", "612 50 199", "Hämeenkatu", "33200", "555 0147"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    #expect(!result.findings.contains { $0.entity == "ADDRESS" && ["Telefonas", "Mobilusis", "Puhelin", "+3"].contains(where: $0.original.contains) },
+            "\(result.findings.map { "\($0.entity) \($0.original)" })")
+}
+
+/// A country, or its code, before a document's kind ("a UAE residence permit", "her German passport") says who
+/// issued it: it stays as written, while the person and their address are replaced.
+@Test(arguments: 1...3)
+func aCountryBeforeADocumentStays(_ seed: Int) throws {
+    let text = """
+    Customer Karim Nasser (DOB 1984-12-05) uploaded a UAE residence permit and a utility bill for Flat 802, Harbour View, Dubai.
+    Customer Ilse Vandermeer sent her German passport and a UK driving licence; the US visa page was blurred.
+
+    """
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    for kept in [" a UAE residence permit ", " her German passport ", " a UK driving licence;", " the US visa page "] { #expect(output.contains(kept), "\(kept) in \(output)") }
+    for gone in ["Karim", "Nasser", "1984-12-05", "Ilse", "Vandermeer"] { #expect(!output.contains(gone), "\(gone) in \(output)") }
+    #expect(!result.findings.contains { ["UAE", "UK", "US", "German"].contains($0.original) }, "\(result.findings.map { "\($0.entity) \($0.original)" })")
+}
