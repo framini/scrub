@@ -84,7 +84,7 @@ enum Places {
     Regina|SK|S4P S4S S4T|306|50.4452,-104.6189|America/Regina
     """
     private static let gb = """
-    London|England|SE1 N1 E2 NW3 W2 SW4|20|51.5072,-0.1276|Europe/London
+    London|England|SE1 N1 E2 NW3 W2 SW4 EC1A WC2N W1T SW1P|20|51.5072,-0.1276|Europe/London
     Manchester|England|M1 M4 M14 M20|161|53.4808,-2.2426|Europe/London
     Birmingham|England|B1 B5 B15|121|52.4862,-1.8904|Europe/London
     Leeds|England|LS1 LS6 LS7|113|53.8008,-1.5491|Europe/London
@@ -251,6 +251,18 @@ enum Places {
         }
     }
 
+    /// A country written as a code ("IT", "ITA", "UK") or a name ("Italy"), as its two-letter code.
+    static func code(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespaces).uppercased()
+        if trimmed == "UK" { return "GB" }
+        if trimmed.count == 2, trimmed.allSatisfy({ $0.isASCII && $0.isLetter }), ["US", "CA", "GB", "AU"].contains(trimmed) || abroad.contains(where: { $0.country == trimmed }) { return trimmed }
+        if trimmed.count == 3, let code = alpha3[trimmed] { return code }
+        return AddressBlock.countryName(value)
+    }
+    private static let alpha3 = ["USA": "US", "CAN": "CA", "GBR": "GB", "AUS": "AU", "DEU": "DE", "FRA": "FR", "NLD": "NL", "BEL": "BE", "ESP": "ES", "ITA": "IT", "PRT": "PT", "AUT": "AT",
+                                 "CHE": "CH", "SWE": "SE", "DNK": "DK", "NOR": "NO", "FIN": "FI", "POL": "PL", "CZE": "CZ", "IRL": "IE", "NZL": "NZ", "ZAF": "ZA", "IND": "IN", "SGP": "SG",
+                                 "MEX": "MX", "BRA": "BR", "JPN": "JP"]
+
     private static let canadian = TextPattern(#"^[A-Za-z]\d[A-Za-z] ?\d[A-Za-z]\d$"#)
     private static let british = TextPattern(#"^[A-Za-z]{1,2}\d[A-Za-z\d]? ?\d[A-Za-z]{2}$"#)
     /// The country a postcode is written for, from its shape alone.
@@ -274,7 +286,8 @@ enum Places {
         if city == nil, region == nil, postal == nil, let coordinates, coordinates.trimmingCharacters(in: .whitespaces).hasPrefix("-"), Double(coordinates.split(separator: ",").first ?? "").map({ abs($0) <= 90 }) == true { return "AU" }
         if let postal, let known = Self.country(postal: postal) { return known }
         if let region, let known = Self.region(region) { return known.country }
-        if let city, let known = all.first(where: { $0.city.caseInsensitiveCompare(city.trimmingCharacters(in: .whitespaces)) == .orderedSame }) { return known.country }
+        // "Montréal" is Montreal, however its accents are written.
+        if let city, let known = all.first(where: { $0.city.compare(city.trimmingCharacters(in: .whitespaces), options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }) { return known.country }
         return "US"
     }
 
@@ -283,8 +296,8 @@ enum Places {
         let trimmed = original.trimmingCharacters(in: .whitespaces)
         let region = regions.first { $0.country == place.country && ($0.code == place.region || $0.name == place.region) }
         let asName = region.map { trimmed.count > 3 || byName[trimmed.lowercased()] != nil ? $0.name : $0.country == "GB" ? $0.name : $0.code } ?? place.region
-        if trimmed.count > 1, trimmed == trimmed.uppercased() { return asName.uppercased() }
-        if trimmed.count > 1, trimmed == trimmed.lowercased() { return asName.lowercased() }
+        if trimmed.count > 1, StandIns.shouted(trimmed) { return asName.uppercased() }
+        if trimmed.count > 1, StandIns.hushed(trimmed) { return asName.lowercased() }
         return asName
     }
 }

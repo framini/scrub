@@ -57,7 +57,7 @@ private func place(_ city: String?, _ region: String?, _ postal: String?) -> Pla
         case "AU":
             for code in place.postal { #expect(australian[place.region]?.contains { $0.contains(Int(code)!) } == true, "\(code) is not in \(place.region)") }
         default:
-            #expect(place.postal.allSatisfy { $0.range(of: #"^[A-Z]{1,2}\d{1,2}$"#, options: .regularExpression) != nil })
+            #expect(place.postal.allSatisfy { $0.range(of: #"^[A-Z]{1,2}\d[A-Z\d]?$"#, options: .regularExpression) != nil })
         }
         #expect(TimeZone(identifier: place.timeZone) != nil, "\(place.timeZone)")
         #expect(bounds[place.country]!.0.contains(place.latitude) && bounds[place.country]!.1.contains(place.longitude), "\(place.city) lies outside \(place.country)")

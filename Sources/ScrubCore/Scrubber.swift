@@ -16,6 +16,7 @@ public enum Scrubber {
         switch format {
         case "json": result = try JSONFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
         case "xml": result = try XMLFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
+        case "jsonl": result = try TextFile.processLines(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
         case "csv": result = try CSVFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
         default: result = try TextFile.process(data, job: job, progress: progress, forceFullDetection: forceFullDetection)
         }
@@ -33,6 +34,7 @@ public enum Scrubber {
         let ext = (name as NSString).pathExtension.lowercased()
         switch ext {
         case "json": return "json"
+        case "jsonl", "ndjson": return "jsonl"
         case "xml": return "xml"
         case "csv", "tsv": return "csv"
         case "txt", "md", "markdown", "log", "text": return "text"
@@ -48,6 +50,8 @@ public enum Scrubber {
             catch ScrubError.unsupported("too_deep") { throw ScrubError.unsupported("too_deep") }
             catch {}
         }
+        // A document a line, as a log or an export writes them, before its commas make it a table.
+        if head.hasPrefix("{") || head.hasPrefix("["), try JSONSource.lines(in: text) != nil { return "jsonl" }
         if head.hasPrefix("<"), try XMLFile.parses(Data(head.utf8)) { return "xml" }
         let lines = text.split(whereSeparator: \.isNewline).prefix(20).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         if lines.count >= 2 {
@@ -57,12 +61,18 @@ public enum Scrubber {
                rows.allSatisfy({ $0.count == header.count }) {
                 // A header naming a personal field is strong evidence on its own,
                 // so a one-row or one-column export still gets its field hints.
-                let named = header.contains { KeyHints.hint($0.trimmingCharacters(in: .whitespaces)) != nil }
+                // A row holding an email or an identifier's digits is a record, not a header: a paragraph
+                // whose commas match the next one's ("Odalys Ferriter (customer …, odalys@…, SSN 536-21-4417, …")
+                // would otherwise be read as one and left as written.
+                let named = !header.contains(where: Self.holdsValue) && header.contains { KeyHints.hint($0.trimmingCharacters(in: .whitespaces)) != nil }
                 if named || header.count >= 2 && lines.count >= 3 { return "csv" }
             }
         }
         return "text"
     }
+    private static let valueInCell = TextPattern(#"\S@\S+\.\w|\d[\d -]{4,}\d"#)
+    /// Whether a cell holds an email address or a run of six digits or more, as a record's value does and a header never would.
+    private static func holdsValue(_ cell: String) -> Bool { !TextRanges.matches(valueInCell, in: cell).isEmpty }
     static func checkCancellation() throws {
         if Task.isCancelled { throw ScrubError.cancelled }
     }

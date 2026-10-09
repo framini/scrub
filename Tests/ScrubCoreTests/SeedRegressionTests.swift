@@ -200,3 +200,16 @@ import Testing
         #expect(try doc.leaks(in: result.output).isEmpty)
     }
 }
+
+/// A kind whose draw picks from a set of codes (a Thai province, a routing number's or an EIN's
+/// prefix) draws the same stand-in for the same seed in every run: a set's order changes from one
+/// run of the app to the next, so it is drawn from in sorted order. Pinned to the values seed 5 gives.
+@Test func codesDrawnFromASetFollowTheSeed() throws {
+    let pinned = ["THAI_ID": "7412013954640 7204998414190 8231791482191", "ABA_ROUTING": "227201394 274641842 729841414", "EIN": "417201395 446418499 824141918"]
+    for (name, expected) in pinned.sorted(by: { $0.key < $1.key }) {
+        let recognizer = try #require(Recognizers.all.first { $0.name == name })
+        var rng: any RandomNumberGenerator = SeededGenerator(seed: 5)
+        let drawn = (0..<3).map { _ in String(recognizer.draw([], &rng)) }.joined(separator: " ")
+        #expect(drawn == expected, "\(name)")
+    }
+}

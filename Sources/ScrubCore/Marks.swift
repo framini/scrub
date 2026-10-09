@@ -181,12 +181,13 @@ extension ScrubResult {
     /// The choices and marks that replace `texts` as `entity`: each marked as
     /// the value it reads (a selection split by markup or a hidden character
     /// is the value without them; `pick` has already read one encoded in a
-    /// link, where it was selected), and any finding of the same value left
-    /// as written replaced again.
+    /// link, where it was selected), and any finding of the same value a
+    /// person left as written replaced again. A suspect's places are the
+    /// mark's (see `Review.overruled`), so it is no finding of the mark's value.
     public func marking(_ texts: [String], as entity: String, choices: Choices, marks: Marks) -> (Choices, Marks) {
         var choices = choices, marks = marks
         for text in texts.map({ review?.identity($0) ?? $0 }) {
-            for finding in findings where Review.matchKey(finding.original, entity: finding.entity) == Review.matchKey(text, entity: finding.entity)
+            for finding in findings where !finding.suspected && Review.matchKey(finding.original, entity: finding.entity) == Review.matchKey(text, entity: finding.entity)
                 && finding.places.contains(where: { choices.leaves($0, of: finding) }) {
                 choices.set(finding, leave: false)
             }

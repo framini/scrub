@@ -64,6 +64,120 @@ enum ListedNames {
         return spans
     }
 
+    /// A chat line's speaker, after the time it was sent if any: "sarah: did the
+    /// customer reply?", "[09:14] aisha: can someone check…", "<tom> on it".
+    private static let speaker = TextPattern(#"(?m)^[ \t>]*(\[[^\]\n]{1,24}\][ \t]*|\d{1,2}:\d{2}(?::\d{2})?(?:[ \t]*(?i:am|pm))?[ \t]+)?(?:<(\p{L}[\p{L}'’]*)>|(\p{L}[\p{L}'’]*):)[ \t]+\S"#)
+    private static let mention = TextPattern(#"(?<![\p{L}\p{N}.])@(\p{L}[\p{L}'’]*)(?![\p{L}\p{N}@.'’-])"#)
+    /// A lowercase name that is also a word, after what names a person in chat
+    /// ("spoke to will", "ask grace", "cc mark", "per june", "@rose") or before
+    /// a verb only a person does ("grace mentioned").
+    private static let lowerCued = TextPattern(#"(?:(?<![\p{L}\p{N}])(?:spoke (?:to|with)|talked (?:to|with)|ask|asked|cc|bcc|ping|pinged|per|according to|assigned to|reassigned to|escalated to|forwarded to|handed (?:over )?to)[ \t]+|@)(\p{Ll}+)(?![\p{L}\p{N}@.'’-])|(?<![\p{L}\p{N}@.'’-])(\p{Ll}+)(?= (?:said|says|mentioned|emailed|replied|confirmed|wrote|texted|messaged)\b)"#)
+
+    /// The people chat lines are spoken by. A speaker is a listed first name
+    /// that is no word, or in a transcript of two speakers or more one that is
+    /// a word and speaks again ("wren:" twice); beside such a speaker, one no
+    /// list holds. One that is also a word and speaks once ("will:"), or one no
+    /// list holds that speaks again with no listed speaker beside it, is too
+    /// likely to ignore and not sure enough to replace, so it is in `unsure`.
+    /// So is a lowercase name that is also a word after what names a person
+    /// in chat ("spoke to will", "ask grace about it"): never replaced on a
+    /// list's word alone, never silently left.
+    static func spoken(in text: String, isCancelled: () -> Bool = { false }) -> (sure: [Span], unsure: [Span]) {
+        var sure: [Span] = [], unsure: [Span] = []
+        let ns = text as NSString
+        if text.contains(":") || text.contains("<") {
+            // Each speaker's lines: in a transcript of two speakers or more, one who speaks again is someone.
+            var lines: [String: [Range<Int>]] = [:], order: [String] = [], stamped: Set<String> = []
+            for match in TextRanges.matches(speaker, in: text, isCancelled: isCancelled) {
+                let group = match.range(at: 2).location != NSNotFound ? match.range(at: 2) : match.range(at: 3)
+                let word = ns.substring(with: group)
+                guard word.count >= 2, !People.isTitle(word), !NameShape.isRole(word) else { continue }
+                if lines[word] == nil { order.append(word) }
+                if match.range(at: 1).location != NSNotFound || match.range(at: 2).location != NSNotFound { stamped.insert(word) }
+                lines[word, default: []].append(group.location..<NSMaxRange(group))
+            }
+            let transcript = lines.count >= 2
+            // Beside a listed speaker, one no list holds speaks too ("deepa:"); with none, it is asked
+            // about, since a log's lines open with a program's name ("sshd:") as a chat's with a person's.
+            var unknown: [Span] = []
+            func doubted(_ spans: [Span]) -> [Span] { spans.map { Span(range: $0.range, entity: "PERSON", score: Doubt.unconfirmed.confidence) } }
+            for word in order {
+                let spans = lines[word]!.map { Span(range: $0, entity: "PERSON", score: cuedScore) }
+                let again = transcript && spans.count >= 2
+                if !NameLists.isFirst(word) {
+                    if word.count >= 3, again && !NameLists.isOrdinary(word) || !NameLists.isWord(word) { unknown += spans }
+                } else if (NameLists.isWordlike(word) || NameLists.isOrdinary(word)) && !again {
+                    unsure += doubted(spans)
+                } else { sure += spans }
+            }
+            // A word that speaks again at the times a chat writes, beside a listed speaker, is someone too ("[13:01] fleur:").
+            let worded = order.filter { word in !NameLists.isFirst(word) && NameLists.isOrdinary(word) && stamped.contains(word) && (lines[word]?.count ?? 0) >= 2 }
+            if !sure.isEmpty {
+                sure += unknown + worded.flatMap { lines[$0]!.map { Span(range: $0, entity: "PERSON", score: cuedScore) } }
+                // A speaker mentioned with "@" ("@yaw can you look") is that speaker.
+                let speakers = Set(sure.map { TextRanges.substring(text, $0.range).lowercased() })
+                var taken = Set(sure.map(\.range))
+                for match in TextRanges.matches(mention, in: text, isCancelled: isCancelled) where speakers.contains(ns.substring(with: match.range(at: 1)).lowercased()) {
+                    let range = match.range(at: 1).location..<NSMaxRange(match.range(at: 1))
+                    if taken.insert(range).inserted { sure.append(Span(range: range, entity: "PERSON", score: cuedScore)) }
+                }
+            } else { unsure += doubted(unknown.filter { span in lines[TextRanges.substring(text, span.range)]?.count ?? 0 >= 2 && transcript }) }
+        }
+        unsure += mentioned(in: text, besides: sure + unsure, isCancelled: isCancelled)
+        for match in TextRanges.matches(lowerCued, in: text, isCancelled: isCancelled) {
+            let group = match.range(at: 1).location != NSNotFound ? match.range(at: 1) : match.range(at: 2)
+            let word = ns.substring(with: group)
+            guard word.count >= 3, NameLists.isFirst(word), NameLists.isWordlike(word) || NameLists.isOrdinary(word), !NameShape.joining.contains(word),
+                  !NameShape.months.contains(word) || match.range(at: 1).location != NSNotFound else { continue }
+            unsure.append(Span(range: group.location..<NSMaxRange(group), entity: "PERSON", score: Doubt.unconfirmed.confidence))
+        }
+        return (sure, unsure)
+    }
+
+    /// A chat line sent at a time, by a handle a system writes ("[14:03:05] agent_lena: …", "customer: …").
+    private static let handleLine = TextPattern(#"(?m)^[ \t]*(?:\[[^\]\n]{1,24}\][ \t]*|\d{1,2}:\d{2}(?::\d{2})?[ \t]+)(\p{L}[\p{L}\p{N}._-]{0,30}):[ \t]+\S"#)
+    private static let lowerWord = TextPattern(#"(?<![\p{L}\p{N}@._'’-])(\p{Ll}{2,})(?![\p{L}\p{N}@'’-]|\.\p{L})"#)
+    /// Words that, in chat, put a person after them: "pass this to raghav", "sorry about that priya".
+    private static let mentionCues: Set<String> = ["to", "with", "ask", "asked", "tell", "told", "ping", "cc", "thanks", "thank", "thx", "ty", "hi", "hey", "hello", "sorry", "that", "from", "by", "for"]
+    private static let chatRoles: Set<String> = ["agent", "customer", "user", "client", "support", "rep", "me", "staff", "operator", "member", "guest", "caller", "visitor"]
+    /// The people a chat between someone and the person they serve mentions in lowercase ("sorry
+    /// about that priya", "i'll pass this to raghav"): a first name no word spells, anywhere in a
+    /// line, or a word no list holds after what puts a person there. Neither is sure enough to replace
+    /// on a transcript's case alone, and neither may be left unseen, so both are asked about.
+    /// A chat is two lines or more, sent at a time by two handles or more, one a person's or a role's.
+    private static func mentioned(in text: String, besides found: [Span], isCancelled: () -> Bool) -> [Span] {
+        guard text.contains(":") else { return [] }
+        let ns = text as NSString
+        let lines = TextRanges.matches(handleLine, in: text, isCancelled: isCancelled)
+        let handles = Set(lines.map { ns.substring(with: $0.range(at: 1)).lowercased() })
+        guard lines.count >= 2, handles.count >= 2, handles.contains(where: { handle in
+            handle.split(whereSeparator: { "._-".contains($0) }).contains { part in chatRoles.contains(String(part)) || NameLists.isName(String(part)) && !NameLists.isWord(String(part)) }
+        }) else { return [] }
+        var taken = IndexSet()
+        for span in found where !span.range.isEmpty { taken.insert(integersIn: span.range) }
+        var spans: [Span] = []
+        for line in lines {
+            let body = NSMaxRange(line.range) - 1
+            let end = NSMaxRange(ns.lineRange(for: NSRange(location: body, length: 0)))
+            let said = NSRange(location: body, length: end - body)
+            var previous: (word: String, end: Int)?
+            for match in TextRanges.matches(lowerWord, in: ns.substring(with: said), isCancelled: isCancelled) {
+                let range = said.location + match.range.location..<said.location + NSMaxRange(match.range)
+                let word = ns.substring(with: NSRange(location: range.lowerBound, length: range.count))
+                defer { previous = (word, range.upperBound) }
+                guard word.count >= 3, !taken.intersects(integersIn: range), !NameShape.joining.contains(word), !NameShape.months.contains(word), !NameShape.weekdays.contains(word) else { continue }
+                // The cue right before it, one space between.
+                let cued = previous.map { mentionCues.contains($0.word) && $0.end == range.lowerBound - 1 && ns.character(at: $0.end) == 0x20 } == true
+                let listed = NameLists.isFirst(word) && !NameLists.isWordlike(word) && !NameLists.isWord(word)
+                let unknown = cued && !NameLists.isFirst(word) && !NameLists.isSurname(word) && !NameLists.isWord(word) && word.count >= 4
+                guard listed || unknown else { continue }
+                taken.insert(integersIn: range)
+                spans.append(Span(range: range, entity: "PERSON", score: Doubt.unconfirmed.confidence))
+            }
+        }
+        return spans
+    }
+
     static func scan(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
         var spans: [Span] = []
         let ns = text as NSString
@@ -138,6 +252,13 @@ enum ListedNames {
     /// (see `CapitalNames`): any after a greeting's word with `capitals`
     /// ("Hi JINX,"), and above a sign-off only one the lists hold or no
     /// ordinary word ("Thanks,⏎ODALYS").
+    /// A word run together with "am", "have", "are", "will", "would" or "not"
+    /// ("I'm", "We've", "Can't"): a greeting goes on to say who, it names no one.
+    /// "O'Neil" and "D'Souza" are names.
+    static func contraction(_ word: String) -> Bool {
+        guard let mark = word.firstIndex(where: { $0 == "'" || $0 == "’" }) else { return false }
+        return ["m", "ve", "re", "ll", "d", "t"].contains(word[word.index(after: mark)...].lowercased())
+    }
     private static func people(in range: NSRange, _ ns: NSString, greeted: Bool, capitals: Bool) -> [Span] {
         let value = ns.substring(with: range)
         var groups: [[(String, Int)]] = [[]]
@@ -149,13 +270,16 @@ enum ListedNames {
             offset += (text as NSString).length + 1
         }
         var spans: [Span] = []
-        for group in groups where !group.isEmpty {
+        for written in groups {
+            // "Hi, I'm Bartholomew Ng": the greeting's contraction says who follows; the name is the rest.
+            let group = Array(written.drop { contraction($0.0.trimmingCharacters(in: CharacterSet(charactersIn: ".'’"))) })
+            guard !group.isEmpty else { continue }
             let words = group.map(\.0)
             if NameTagger.namesOrganisation(words.joined(separator: " ")) { continue }
             let lower = words.allSatisfy { $0 == $0.lowercased() }
             guard words.count <= 3, words.allSatisfy({ word in
                 let bare = word.trimmingCharacters(in: CharacterSet(charactersIn: ".'’"))
-                guard !bare.isEmpty, !People.isTitle(bare), !NameShape.isRole(bare), !NameShape.joining.contains(bare.lowercased()) else { return false }
+                guard !bare.isEmpty, !People.isTitle(bare), !NameShape.isRole(bare), !NameShape.joining.contains(bare.lowercased()), !contraction(bare) else { return false }
                 // An initial ("J.") or a name-shaped word; lowercase only as a whole ("hey beatriz").
                 if bare.count == 1 { return bare.first!.isUppercase }
                 if lower { return NameLists.isFirst(bare) && !NameLists.isWordlike(bare) && !NameLists.isOrdinary(bare) }

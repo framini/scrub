@@ -124,6 +124,7 @@ enum ContextStage {
     /// A finding as Scrub names it, or nil for one the stage leaves to others:
     /// a person in Latin script counts only where something else agrees (`person`),
     /// and a handle needs a digit, dot or underscore to be told from a word.
+    private static let qualifiedName = TextPattern(#"^(?:[a-z][a-z0-9_]*\.){2,}[A-Z][A-Za-z0-9_$]*$"#)
     static func span(_ found: ContextModel.Found, in text: String, links: [Range<Int>] = []) -> Span? {
         let ns = text as NSString
         guard let range = cleaned(found.range, in: text, links: links) else { return nil }
@@ -136,6 +137,8 @@ enum ContextStage {
         // unless the sentence calls it a key or token.
         if ["SECRET", "ID"].contains(found.kind), !TextRanges.matches(objectID, in: value).isEmpty,
            TextRanges.matches(secretWord, in: sentence(around: range, in: text).text).isEmpty { return nil }
+        // So is one under a key an API calls its "token" ("entity_token": "P-MSBW…", see `KeyHints.fits`).
+        if found.kind == "SECRET", let key = Patterns.keyBefore(ns, range.lowerBound), KeyHints.hint(key) == "SECRET", !KeyHints.fits(key, value) { return nil }
         let entity: String
         switch found.kind {
         case "PERSON":
@@ -150,11 +153,14 @@ enum ContextStage {
                   inner.contains(where: { $0.isLowercase || $0.isNumber }),
                   // A file name is no handle: "AHMED.mpg".
                   !fileExtensions.contains(inner.split(separator: ".").last.map { $0.lowercased() } ?? "") || !inner.contains(".") else { return nil }
+            // Nor is a logger's or a class's qualified name ("c.e.infra.Health", "com.example.kyc.Retry").
+            if !TextRanges.matches(qualifiedName, in: inner).isEmpty, let last = inner.split(separator: ".").last.map({ $0.lowercased() }),
+               !NameLists.isFirst(last), !NameLists.isSurname(last) { return nil }
             entity = "USERNAME"
         case "LOCATION":
             // A country, a continent or a nationality ("a Danish citizen", "the
             // United Kingdom") is shared by millions: no one's place.
-            guard named(value), !nations.contains(normalPlace(value)), !holidays.contains(normalPlace(value)) else { return nil }
+            guard named(value), !isNation(value), !holidays.contains(normalPlace(value)), !qualifiesDocument(range, in: text) else { return nil }
             entity = "LOCATION"
         case "ORG":
             guard named(value), employment(around: range, in: text) else { return nil }
@@ -166,6 +172,9 @@ enum ContextStage {
             guard digits >= 4, !amount(range, in: text), TextRanges.matches(decimal, in: value).isEmpty, !value.contains("\t"), !value.contains("  ") else { return nil }
             // A calendar date ("Last backup 2022-11-28") is a date, not an ID; a birth date is DOB's.
             guard TextRanges.matches(calendarDate, in: value).isEmpty else { return nil }
+            // Nor is a reading, a code or a reference no one is filed under (see `notFiledUnder`).
+            // Unless its own words call it a person's ("license plate FYT-9375", "MRN-65881").
+            guard !notFiledUnder(value) || namedPersonal(range, in: text) else { return nil }
             // A bare run of digits is someone's only where the sentence ties it to
             // someone: a deal, notice or ticket number in a business email is not.
             if value.allSatisfy(\.isNumber) {
@@ -256,6 +265,49 @@ enum ContextStage {
     private static let secretWord = TextPattern(#"(?i)(?:pass(?:word|wd|code|phrase)?|pwd|secret|token|key|credential|auth|bearer)"#)
     /// An amount ("12.50") or a measure or score ("0.874", "3.14159"): one
     /// point, at most three digits before it.
+    /// A value no person is filed under, however much it looks like an ID: a
+    /// reading ("BP 156/62"), a diagnosis code ("R07.89"), a reference its prefix
+    /// names as an application's, a request's, an order's or a ticket's
+    /// ("APP-95146469", "ref-55af36d14d"), or a tracker's key, a project's
+    /// capitals and a short number ("PAY-1693"). A prefix that names an
+    /// account, a customer or a member ("ACC-0610949") still marks an ID.
+    static func notFiledUnder(_ value: String) -> Bool {
+        if !TextRanges.matches(reading, in: value).isEmpty || !TextRanges.matches(diagnosis, in: value).isEmpty { return true }
+        guard let match = TextRanges.matches(referenced, in: value).first else { return false }
+        let ns = value as NSString
+        let prefix = ns.substring(with: match.range(at: 1)), number = ns.substring(with: match.range(at: 2))
+        if RecordIDs.personPrefixes.contains(prefix.lowercased()) { return false }
+        return referencePrefixes.contains(prefix.lowercased())
+            || prefix == prefix.uppercased() && (1...5).contains(number.count) && number.allSatisfy(\.isNumber)
+    }
+    /// Whether an ID is a person's by its own words, though shaped like a reference: its prefix is a
+    /// medical record's or a customer's code ("MRN-65881", "CID-92281"), or the words before it in its
+    /// sentence name a person's record, licence, plate or biometric ID with no request, order or ticket
+    /// after them ("The license plate for the vehicle is VXP-3921", "| Employee ID: | MKT-3928").
+    static func namedPersonal(_ range: Range<Int>, in text: String) -> Bool {
+        let value = TextRanges.substring(text, range)
+        if let match = TextRanges.matches(referenced, in: value).first,
+           personCodes.contains((value as NSString).substring(with: match.range(at: 1)).lowercased()) { return true }
+        let around = sentence(around: range, in: text)
+        let before = (text as NSString).substring(with: NSRange(location: around.range.lowerBound, length: range.lowerBound - around.range.lowerBound))
+        guard let cue = TextRanges.matches(personsID, in: before).last else { return false }
+        return TextRanges.matches(referenceWord, in: (before as NSString).substring(from: NSMaxRange(cue.range))).isEmpty
+    }
+    private static let personCodes: Set<String> = ["mrn", "cid"]
+    private static let personsID = TextPattern(#"(?i)\b(?:medical[ \t]+records?|mrn|patient|customer|client|member|employee|biometric|licen[cs]e|plates?)\b"#)
+    private static let referenceWord = TextPattern(#"(?i)\b(?:order|ticket|request|invoice|application|case|transaction|incident|quote)s?\b"#)
+    /// A value whose prefix names a request's, an order's or a ticket's reference ("ref-55af36d14d", "REQ-20417").
+    static func referencePrefixed(_ value: String) -> Bool {
+        guard let match = TextRanges.matches(referenced, in: value).first else { return false }
+        // "app_" opens an applicant's ID as often as an application's reference.
+        let prefix = (value as NSString).substring(with: match.range(at: 1)).lowercased()
+        return referencePrefixes.contains(prefix) && !["app", "application"].contains(prefix)
+    }
+    private static let reading = TextPattern(#"^(?:[A-Za-z][A-Za-z0-9]{0,4}[ \t:]+)?\d{2,3}/\d{2,3}$"#)
+    private static let diagnosis = TextPattern(#"^[A-Z]\d{2}\.[0-9A-Z]{1,4}$"#)
+    private static let referenced = TextPattern(#"^([A-Za-z]{2,10})[-_]([A-Za-z0-9]+)$"#)
+    private static let referencePrefixes: Set<String> = ["app", "application", "ref", "reference", "req", "request", "rq", "ticket", "tkt", "case", "order", "ord", "inv", "invoice",
+                                                         "txn", "trx", "tx", "quote", "rma", "inc", "chg", "task", "bug", "issue", "job", "run", "batch", "build", "msg", "evt", "event", "trace", "corr"]
     private static let decimal = TextPattern(#"^[-+]?(?:\d+[.,]\d{1,2}|\d{1,3}\.\d+)$"#)
     private static let calendarDate = TextPattern(#"^(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{4})$"#)
     /// Days of the year read as places: "visit at Easter".
@@ -292,10 +344,13 @@ enum ContextStage {
 
     /// A place or company is named: some word in it is capitalised (or in
     /// another script) and not one of the commonest words ("the", "aviation", "twerk").
-    /// A place as `nations` lists it: lowercase, without "the" or a possessive.
+    /// A place as `nations` lists it: lowercase, without "the", an article elided before it ("l'Algérie", "dell'Italia") or a possessive.
     static func normalPlace(_ value: String) -> String {
         var words = value.lowercased().replacingOccurrences(of: "’", with: "'").split(whereSeparator: { $0.isWhitespace }).map(String.init)
         if words.first == "the" { words.removeFirst() }
+        if let first = words.first, let elided = first.range(of: #"^(?:l|d|dell|nell|all|dall|sull)'(?=\p{L})"#, options: .regularExpression) {
+            words[0] = String(first[elided.upperBound...])
+        }
         if let last = words.last, last.hasSuffix("'s") { words[words.count - 1] = String(last.dropLast(2)) }
         return words.joined(separator: " ")
     }
@@ -322,10 +377,41 @@ enum ContextStage {
         """.split(whereSeparator: { $0.isWhitespace }).map(String.init)).union([
         "united kingdom", "united states", "united states of america", "usa", "uk", "us", "new zealand", "south africa", "south korea", "north korea",
         "saudi arabia", "sri lanka", "costa rica", "el salvador", "sierra leone", "ivory coast", "czech republic", "dominican republic",
-        "united arab emirates", "great britain", "northern ireland", "north america", "south america", "latin america", "central america",
+        "united arab emirates", "uae", "emirati", "great britain", "northern ireland", "north america", "south america", "latin america", "central america",
         "middle east", "south african", "new zealander", "sri lankan", "saudi", "british isles", "soviet union", "ussr", "eu", "european union",
         "republic of turkey", "russian federation", "people's republic of china", "republic of ireland", "republic of poland",
     ])
+
+    /// Whether a place is a country, a continent or the word for a people: in English, or a country in a language Scrub reads ("Algérie", "Alemania", "Litauen").
+    private static let documentAfter = TextPattern(#"(?i)^[ \t]+(?:residence[ \t]+(?:permit|card|visa)|residency[ \t]+(?:permit|card)|passport|visa|(?:national[ \t]+)?id(?:entity)?[ \t]+card|id\b|driv(?:ing|er'?s|er’s)[ \t]+licen[cs]e|work[ \t]+permit|travel[ \t]+document)"#)
+    private static let regionCodes = Set(Locale.Region.isoRegions.map(\.identifier).filter { $0.count == 2 && $0.allSatisfy(\.isLetter) })
+    /// "a UAE residence permit", "her German passport", "GB driving licence": a country, or its code, before a
+    /// document's kind says which country issued it, not where anyone lives.
+    static func qualifiesDocument(_ range: Range<Int>, in text: String) -> Bool {
+        let value = TextRanges.substring(text, range)
+        guard isNation(value) || value.count == 2 && value == value.uppercased() && regionCodes.contains(value) else { return false }
+        let ns = text as NSString
+        let after = ns.substring(with: NSRange(location: range.upperBound, length: min(40, ns.length - range.upperBound)))
+        return !TextRanges.matches(documentAfter, in: after).isEmpty
+    }
+    static func isNation(_ value: String) -> Bool {
+        let place = normalPlace(value)
+        return nations.contains(place) || countriesAbroad.contains(place.folding(options: .diacriticInsensitive, locale: nil))
+    }
+    /// Every country's name in the languages Scrub reads, lowercase and without accents.
+    private static let countriesAbroad: Set<String> = {
+        let languages = ["fr", "es", "pt", "it", "de", "nl", "pl", "sv", "da", "nb", "fi", "cs", "sk", "ro", "hu", "tr", "id", "vi", "lt", "lv", "et", "hr", "sl", "sr-Latn", "sq", "ca", "el", "ru", "uk", "bg"]
+        let codes = Locale.Region.isoRegions.map(\.identifier).filter { $0.count == 2 && $0.allSatisfy(\.isLetter) }
+        var names: Set<String> = []
+        for language in languages {
+            let locale = Locale(identifier: language)
+            for code in codes {
+                guard let name = locale.localizedString(forRegionCode: code) else { continue }
+                names.insert(name.lowercased().folding(options: .diacriticInsensitive, locale: nil))
+            }
+        }
+        return names
+    }()
 
     private static func named(_ value: String) -> Bool {
         let common = ContextModel.shared?.common ?? []
@@ -359,8 +445,8 @@ enum ContextStage {
     private static let year = TextPattern(#"(?<!\d)(?:19|20)\d{2}(?!\d)"#)
     private static let link = TextPattern(#"(?i)\b[a-z][a-z0-9+.\-]*://[^\s<>"]+|\bwww\.[^\s<>"]+|(?<![\w&])#\w+"#)
     private static let money = TextPattern(#"(?i)(?:[$£€¥]|\b(?:usd|gbp|gpb|eur|pln|try|chf|cad|aud|inr|jpy)\b)\s?[\d.,]+[kmb]?\b|\b\d[\d.,]*\s?(?:k|m|bn|billion|million|thousand)\b|\b\d{1,3}(?:,\s?\d{3})+(?:\.\d+)?\b"#)
-    private static let fileExtensions: Set<String> = ["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "log", "json", "xml", "zip", "gz", "png", "jpg", "jpeg", "gif", "heic", "mov",
-                                                      "mp4", "mpg", "mp3", "wav", "avi", "ppt", "pptx", "md", "py", "js", "swift", "html", "exe", "dmg"]
+    static let fileExtensions: Set<String> = ["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "log", "json", "xml", "zip", "gz", "png", "jpg", "jpeg", "gif", "heic", "mov",
+                                                      "mp4", "mpg", "mp3", "wav", "avi", "ppt", "pptx", "md", "py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "rb", "go", "rs", "java", "kt", "c", "h", "cpp", "sh", "yml", "yaml", "toml", "css", "html", "exe", "dmg"]
     /// Links and hashtags in `text`, where the stage finds nothing.
     static func links(in text: String) -> [Range<Int>] {
         guard text.contains("://") || text.contains("www.") || text.contains("#") else { return [] }

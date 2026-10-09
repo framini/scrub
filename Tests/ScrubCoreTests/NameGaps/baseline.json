@@ -8,14 +8,14 @@
   "diverse" : {
     "apple" : 37,
     "cases" : 40,
-    "detector" : 38,
+    "detector" : 40,
     "scrub" : 40
   },
   "fragments" : {
     "apple" : 13,
     "cases" : 40,
-    "detector" : 26,
-    "scrub" : 28
+    "detector" : 31,
+    "scrub" : 33
   },
   "greeting" : {
     "apple" : 11,
@@ -38,8 +38,8 @@
   "lowercase" : {
     "apple" : 3,
     "cases" : 40,
-    "detector" : 23,
-    "scrub" : 39
+    "detector" : 24,
+    "scrub" : 40
   },
   "plain" : {
     "apple" : 39,
@@ -68,7 +68,7 @@
   "wordNames" : {
     "apple" : 21,
     "cases" : 40,
-    "detector" : 10,
+    "detector" : 12,
     "scrub" : 14
   },
   "wordsNotNames" : {

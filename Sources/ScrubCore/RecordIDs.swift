@@ -17,14 +17,27 @@ enum RecordIDs {
         "employee", "employees", "emp", "person", "people", "applicant", "applicants", "subscriber", "subscribers", "student", "students", "contact", "contacts",
         "owner", "buyer", "seller", "driver", "rider", "guest", "guests", "cardholder", "holder", "beneficiary", "profile", "profiles", "candidate", "tenant",
         "resident", "passenger", "traveler", "traveller", "donor", "payee", "payer", "borrower", "policyholder", "insured", "claimant", "lead", "prospect",
-        "visitor", "attendee", "author", "assignee", "reporter", "requester", "requestor", "recipient", "sender", "mrn", "uid", "userid", "customerid"]
+        "visitor", "attendee", "author", "assignee", "reporter", "requester", "requestor", "recipient", "sender", "mrn", "uid", "userid", "customerid",
+        // A device or a browser a person uses, and the pseudonym a site knows them by.
+        "device", "devices", "browser", "anonymous", "social", "socials",
+        // A loyalty scheme's or a club's member: "loyalty_number", "frequent_flyer_id".
+        "loyalty", "membership", "flyer", "rewards"]
     /// The last word of a key that holds an identifier.
-    private static let idWords: Set<String> = ["id", "ids", "number", "no", "num", "ref", "reference", "uid", "guid", "uuid", "identifier"]
+    private static let idWords: Set<String> = ["id", "ids", "number", "no", "num", "ref", "reference", "uid", "guid", "uuid", "identifier",
+                                                // What a person's device or account is hashed to: "device_hash", "device_fingerprint".
+                                                "hash", "fingerprint", "md5"]
     /// Keys that hold one person's identifier on their own.
-    private static let whole: Set<String> = ["uid", "userid", "customerid", "accountid", "patientid", "memberid", "clientid", "mrn", "medicalrecordnumber", "employeeid", "personid", "subscriberid", "studentid"]
+    private static let whole: Set<String> = ["uid", "userid", "customerid", "accountid", "patientid", "memberid", "clientid", "mrn", "medicalrecordnumber", "employeeid", "personid", "subscriberid", "studentid",
+                                             "deviceid", "visitorid", "globaldeviceid", "devicefingerprint", "linkedid", "browserid", "blackbox", "deviceblackbox",
+                                             "loyaltyprogramid", "loyaltyprogramnumber", "frequentflyernumber", "membershipnumber",
+                                             // A phone's own identifier and the one its advertisers know it by: a vendor's, an app's, an OS's.
+                                             "idfa", "idfv", "gaid", "adid", "aaid", "androidid", "advertisingid", "advertisingidentifier", "udid", "deviceuuid"]
 
+    /// What a person has rather than is: their ID only right before an ID's word ("device_id", "loyalty_number"), never a key alone ("browser": "FIREFOX10").
+    private static let belongings: Set<String> = ["device", "devices", "browser", "anonymous", "social", "socials", "loyalty", "membership", "flyer", "rewards"]
+    private static let idQualifiers: Set<String> = ["web", "external", "internal", "platform", "app", "portal", "login", "account", "system", "crm", "merchant", "partner", "vendor", "legacy", "global", "unique", "program"]
     /// Whether a collection or key names people ("customers", "patient").
-    static func isPersonCollection(_ word: String?) -> Bool { word.map { people.contains($0.lowercased()) } ?? false }
+    static func isPersonCollection(_ word: String?) -> Bool { word.map { people.contains($0.lowercased()) && !belongings.contains($0.lowercased()) } ?? false }
 
     /// Whether `key` names a person's identifier: "customer_id", "patientNumber",
     /// "member_ref", "uid", or a person's own key ("customer": "cus_…") over a value shaped like an ID.
@@ -34,20 +47,33 @@ enum RecordIDs {
         let compact = words.joined()
         if whole.contains(compact) { return true }
         guard let last = words.last else { return false }
+        // A device's fingerprint blob under its vendor's name ("acme_blackbox").
+        if last == "blackbox" { return true }
+        // An identity document's number under the document's ID ("document_id": "123.456.789-00"): digits in
+        // groups, as a national number is written, never a record's generated ID nor a date.
+        if documentIDKeys.contains(words.suffix(2).joined()), groupedNumber(value) { return true }
+        // The device itself, written as its identifier ("device": "d3f1c9a2-7b44-…", "device=9774d56d682e549c"); "device": "iPhone16,2" is a model.
+        if words == ["device"], isUUID(value) || hexIdentifier(value) { return true }
+        // Any of its identifiers under a key naming the device or the browser ("DEVICE_LAYERS": "DF65…..99CF.E3D1…", "browser_hash").
+        if words.contains("device") || words.contains("browser"), isUUID(value) || hexIdentifier(value) || layeredHex(value) { return true }
         // The person names the ID right before it: "customer_id", "patientNumber", not "applicant_address_country_id".
         if idWords.contains(last), words.count >= 2, people.contains(words[words.count - 2]) { return true }
+        // A person's ID in one of their systems: "customer_web_id", "user_external_id".
+        if idWords.contains(last), words.count >= 3, people.contains(words[words.count - 3]), idQualifiers.contains(words[words.count - 2]) { return true }
         // "customer": "cus_4TUvJhQkMeNW3t", "owner": "usr_19f3", "created_by": "u_1234": a reference
         // to someone. An ID has a digit: "owner": "platform-team" is a team's slug.
-        guard value.contains(where: \.isNumber) else { return false }
-        return words.count == 1 && people.contains(last) || KeyHints.isRole(key)
+        // A tool's version, a release's tag, a standard or a file is no one's: "agent": "curl8.0", "owner": "release_2026".
+        // A client's handle is theirs whatever it ends in: "user": "jdoe42.js".
+        guard value.contains(where: \.isNumber), !versioned(value), !isFileName(value) || Detector.clientKey(key) else { return false }
+        return words.count == 1 && people.contains(last) && !belongings.contains(last) || KeyHints.isRole(key)
     }
 
     /// Whether a value under `key` can be a person's ID at all, by the key alone (see `isPersonal`).
     static func keyMayName(_ key: String) -> Bool {
         let words = KeyHints.words(key)
         guard let last = words.last else { return false }
-        return whole.contains(words.joined()) || words.count == 1 && people.contains(last) || KeyHints.isRole(key)
-            || idWords.contains(last) || last == "slug" || last == "handle"
+        return whole.contains(words.joined()) || words.count == 1 && people.contains(last) && !belongings.contains(last) || KeyHints.isRole(key)
+            || idWords.contains(last) || last == "slug" || last == "handle" || last == "blackbox" || words.contains("device") || words.contains("browser")
     }
 
     /// Whether a key names a person's identifier by itself: "customer_id", "patientNumber", "uid".
@@ -102,7 +128,8 @@ enum RecordIDs {
         let made = generated(body, typed: listed || isCode(letters))
         // Before words, a type that is also a name starts one: "pat-ferriter" is Pat Ferriter.
         if listed { return made || !named }
-        guard made, !named, letters == lower || letters == letters.uppercased() else { return false }
+        // A word that is also a surname ("card", "bill") still names a type before a generated body.
+        guard made, !named || NameLists.isOrdinary(lower), letters == lower || letters == letters.uppercased() else { return false }
         return letters.count <= (letters == lower ? 3 : 4) || NameLists.isOrdinary(lower)
     }
 
@@ -148,7 +175,7 @@ enum RecordIDs {
     }
 
     /// Type prefixes of people's and accounts' identifiers.
-    private static let personPrefixes: Set<String> = ["cus", "cust", "customer", "usr", "user", "acct", "acc", "account", "pat", "patient", "mem", "member", "emp", "employee",
+    static let personPrefixes: Set<String> = ["cus", "cust", "customer", "usr", "user", "acct", "acc", "account", "pat", "patient", "mem", "member", "emp", "employee",
                                                       "sub", "subscriber", "person", "per", "prof", "profile", "contact", "ctc", "stu", "student", "applicant"]
 
     /// A person's or account's ID by its type prefix, in any text: "cus_4TUvJhQkMeNW", "usr_19f3a8b2".
@@ -203,8 +230,10 @@ enum RecordIDs {
         return (named, unsure)
     }
 
+    // Each repeated piece starts with its separator: with the separator optional, a long run
+    // of letters can be split into pieces in exponentially many ways before the match fails.
     private static let nameNumberID = TextPattern(
-        #"(?<![\w./@#-])(?:[A-Za-z]{3,}(?:[_.-]?[A-Za-z]{2,})*[_.-]?[0-9]{2,}|[0-9]{2,}[_-][A-Za-z]{3,}(?:[_-][A-Za-z]{2,})*)(?![\w-]|[.,][0-9A-Za-z])"#)
+        #"(?<![\w./@#-])(?:[A-Za-z]{3,}(?:[_.-][A-Za-z]{2,})*[_.-]?[0-9]{2,}|[0-9]{2,}[_-][A-Za-z]{3,}(?:[_-][A-Za-z]{2,})*)(?![\w-]|[.,][0-9A-Za-z])"#)
     /// IDs in prose built from the name of someone the same text names, and
     /// a number ("pat-1987" or "ferriter07" beside Pat Ferriter): theirs,
     /// however short or unlisted the name. `names` holds the words, of three
@@ -270,13 +299,50 @@ enum RecordIDs {
         }
     }
     /// Prefixes of identifiers that name a thing, not a person: an order, a charge, an event, a request.
-    private static let thingPrefixes: Set<String> = ["ord", "order", "inv", "invoice", "ch", "charge", "txn", "tx", "trx", "evt", "event", "req", "request", "pay", "pi", "pm", "py",
+    private static let thingPrefixes: Set<String> = ["card", "crd", "ord", "order", "inv", "invoice", "ch", "charge", "txn", "tx", "trx", "evt", "event", "req", "request", "pay", "pi", "pm", "py",
                                                      "sess", "session", "sk", "pk", "rk", "tok", "src", "prod", "price", "sku", "ver", "build", "job", "task", "run", "trace", "span",
                                                      "msg", "file", "doc", "vrf", "chk", "ref", "re", "dp", "po", "sub_sched", "plan", "coupon", "promo", "batch", "item", "line", "wh", "hook"]
+    /// A name and its version ("curl8.0", "name1.2"), a release's or a build's tag ("release_2026",
+    /// "build-418", "v2.3.1"), or a standard's name ("RFC4716", "ISO-8601"): the same for everyone who writes it.
+    static func versioned(_ value: String) -> Bool {
+        !TextRanges.matches(versionTag, in: value).isEmpty || Standards.ranges(in: value) == [0..<value.utf16.count]
+    }
+    private static let versionTag = TextPattern(#"^(?:[A-Za-z][A-Za-z-]*?[-_]?[vV]?\d+(?:\.\d+)+[A-Za-z]?|(?i:release|build|rc|version|ver|tag|hotfix|snapshot|nightly|beta|alpha|patch|sprint|milestone|stable|v)[-_.]?\d[\d._-]*[A-Za-z]?)$"#)
+    /// A file's name: a document's, a script's or a configuration's ("config.ini", "deploy.sh").
+    static func isFileName(_ value: String) -> Bool {
+        guard let dot = value.lastIndex(of: "."), value.index(after: dot) < value.endIndex else { return false }
+        let ext = value[value.index(after: dot)...].lowercased()
+        return ContextStage.fileExtensions.contains(ext) || configExtensions.contains(ext)
+    }
+    private static let configExtensions: Set<String> = ["ini", "cfg", "conf", "config", "env", "lock", "bak", "tmp", "dat", "db", "sql", "plist", "properties", "swift", "php",
+                                                        "pl", "lua", "jar", "war", "dll", "so", "bin", "tar", "tgz", "bz2", "xz", "7z", "rar", "svg", "webp", "ico", "bmp", "tif", "tiff",
+                                                        "ttf", "otf", "woff", "woff2", "wasm", "map", "scss", "sass", "less", "vue", "ipynb", "cs", "scala", "dart", "tf", "pem", "crt"]
     static func technical(_ value: String) -> Bool { thingPrefixes.contains(keptPrefix(value).dropLast().lowercased()) }
+    /// What else a fingerprint is taken of: a certificate, a key, a file or a build.
+    private static let technicalOwners: Set<String> = ["certificate", "certificates", "cert", "certs", "tls", "ssl", "x509", "ssh", "key", "keys", "publickey", "pgp", "gpg", "signing",
+                                                       "file", "files", "commit", "build", "image", "artifact", "package", "host", "server", "checksum", "jwk", "jwks"]
     private static let uuid = TextPattern(#"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"#)
     /// A UUID names whatever the system made it for; only what is around it says that was a person.
     static func isUUID(_ value: String) -> Bool { !TextRanges.matches(uuid, in: value).isEmpty }
+    /// Sixteen hex digits or more with a digit and a letter among them, as a device's identifier or fingerprint is written ("9774d56d682e549c").
+    static func hexIdentifier(_ value: String) -> Bool {
+        (16...64).contains(value.count) && value.allSatisfy(\.isHexDigit) && value.contains(where: \.isNumber) && value.contains(where: \.isLetter)
+    }
+
+    /// What a person's record of the law numbers: a case, a docket, a citation, a warrant, a booking.
+    private static let legalRecords: Set<String> = ["case", "docket", "court", "citation", "warrant", "booking", "arrest", "inmate", "offender", "conviction", "charge", "indictment"]
+    private static let documentIDKeys: Set<String> = ["documentid", "docid", "iddocumentid"]
+    private static let grouped = TextPattern(#"^\d{1,4}(?:[.\-/]\d{1,4}){2,5}$"#)
+    private static let dated = TextPattern(#"^(?:\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2}|\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4})$"#)
+    /// Digits in groups, eight or more of them, as a national number is written ("123.456.789-00", "12.345.678-5"); no date.
+    static func groupedNumber(_ value: String) -> Bool {
+        value.filter(\.isNumber).count >= 8 && !TextRanges.matches(grouped, in: value).isEmpty && TextRanges.matches(dated, in: value).isEmpty
+    }
+    /// Runs of hex joined by dots, some empty, as a device's fingerprint writes its layers ("DF651ACF30..99CF09F417.E3D16F2CB7").
+    static func layeredHex(_ value: String) -> Bool {
+        let runs = value.split(separator: ".")
+        return runs.count >= 2 && runs.allSatisfy { $0.count >= 8 && $0.allSatisfy(\.isHexDigit) } && value.contains(where: \.isNumber) && value.contains(where: \.isLetter)
+    }
 
     /// The names, email local parts and phone numbers a document holds.
     struct Known {
@@ -325,6 +391,10 @@ enum RecordIDs {
         let number = body.dropFirst(word.count)
         return word.count >= 3 && number.count <= 2 && number.allSatisfy { $0.isASCII && $0.isNumber } && NameLists.isOrdinary(String(word))
     }
+    private static let reference = TextPattern(#"^(?:[A-Z]+(?:_[A-Z]+)*|[a-z]+(?:[A-Z][a-z]+)+)[_-]\d{1,3}$"#)
+    /// A label a document gives its own parts so they can point at each other
+    /// ("PRIMARYPARTY_1", "BORROWER_1", "proofDoc-2"): words and a small count, no one's ID.
+    static func crossReference(_ value: String) -> Bool { !TextRanges.matches(reference, in: value).isEmpty }
     static func idLike(_ value: String) -> Bool {
         let kept = keptPrefix(value)
         let type = kept.dropLast().lowercased()
@@ -351,14 +421,38 @@ enum RecordIDs {
             && !NameLists.isOrdinary(lower) && !NameLists.isFirst(lower) && !NameLists.isSurname(lower)
     }
 
+    /// A key for a client's own ID ("referrer_customer_id", "memberNumber"), not a reference a client keeps ("client_reference").
+    static func clientsID(_ key: String?) -> Bool {
+        let words = KeyHints.words(key)
+        guard let last = words.last, ["id", "ids", "number", "no", "num", "nr"].contains(last) else { return false }
+        return words.dropLast().contains(where: Detector.clients.contains)
+    }
     /// `ownRecord`: the leaf's object holds a person's name or email itself, or says it is a person.
     static func isPersonal(_ leaf: DocumentLeaf, spelled: Known, ownRecord: Bool) -> Bool {
         let key = leaf.rawKey ?? leaf.key
-        guard shaped(leaf.text) else { return false }
+        // An address spelled as an ID ("18_larkspur_ave_tacoma_wa_98402_us", "7_fő_utca_pécs_7621_hu") names where someone lives.
+        if idKey(key), leaf.contextWords.contains("address"), !leaf.text.contains(" "), leaf.text.split(separator: "_").count >= 4,
+           leaf.text.contains(where: \.isNumber), leaf.text.contains(where: \.isLetter), leaf.text.count <= 128 { return true }
+        guard shaped(leaf.text), !crossReference(leaf.text) else { return false }
+        // A value its own prefix calls a request's, an application's or an order's reference ("ref-55af36d14d") is filed under no one,
+        // unless its key says whose it is ("referrer_customer_id": "ref_9876").
+        if ContextStage.referencePrefixed(leaf.text), !Self.clientsID(key) { return false }
+        // A sample that writes its own field's name ("accountRef": "ACCOUNTREF", "user": "USER_1") holds no one's ID;
+        // a number after the field's code is one ("mrn": "MRN-00482913").
+        if KeyHints.words(leaf.text).joined() == KeyHints.words(key).joined()
+            || leaf.text.lowercased().filter(\.isLetter) == (key ?? "").lowercased().filter(\.isLetter) && leaf.text.filter(\.isNumber).count < 3 { return false }
         if identifying(key: key, value: leaf.text) { return true }
         guard idKey(key) else { return false }
         // A flattened column names its object first ("actor.id"): the field is its last part, as a nested key is.
         let words = KeyHints.words(key?.split(separator: ".").last.map(String.init))
+        // Any of a device's identifiers is the person's who uses it: "device": {"signals": {"hashId": …}}, "device": {"fingerprint": …}.
+        if leaf.contextWords.contains("device"), ["id", "fingerprint", "hash"].contains(words.last ?? ""), plainID(leaf.text) || isUUID(leaf.text) || leaf.text.count >= 16 && leaf.text.allSatisfy(\.isHexDigit) { return true }
+        // A fingerprint alone, a long hex digest, is the device's a fraud check took it of ("FINGERPRINT": "290D1C01…");
+        // a certificate's, a key's or a file's is no one's.
+        if words == ["fingerprint"], leaf.text.count >= 32, hexIdentifier(leaf.text), leaf.contextWords.isDisjoint(with: technicalOwners) { return true }
+        // A court's or a police case's number in a person's own record ("case_number" beside their name and birth date)
+        // is their case's, as the record is theirs; an invoice's or a ticket's elsewhere names no one.
+        if ownRecord, words.count >= 2, legalRecords.contains(words[words.count - 2]), leaf.text.contains(where: \.isNumber) { return true }
         if words == ["id"] || words == ["uid"] {
             let prefix = keptPrefix(leaf.text).dropLast().lowercased()
             // A person's own object: under a collection of people, beside their name or email, or with a person's prefix.

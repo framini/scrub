@@ -58,3 +58,13 @@ private struct ParityCase: Decodable {
     #expect(NameModel.verified(data) == nil, "an altered file is refused")
     #expect(NameModel.verified(try Data(contentsOf: url), checksum: String(repeating: "0", count: 64)) == nil)
 }
+
+/// A word written with a combining accent is scored as written, whichever spelling was read first.
+@Test func nameModelScoresEachSpellingOfAnAccentAsWritten() throws {
+    let url = try #require(ModelResources.bundle?.url(forResource: "NameModel", withExtension: "bin"))
+    let data = try Data(contentsOf: url)
+    let composed = NameModel.tokens("Ren\u{E9}e Dub\u{E9} wrote"), decomposed = NameModel.tokens("Rene\u{301}e Dube\u{301} wrote")
+    let alone = try #require(NameModel(data)), warmed = try #require(NameModel(data))
+    _ = warmed.logits(composed)
+    #expect(warmed.logits(decomposed) == alone.logits(decomposed))
+}

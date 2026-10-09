@@ -20,7 +20,7 @@ notarize() {
   grep -q "status: Accepted" build/notary.log
 }
 
-scripts/bundle.sh
+SCRUB_REQUIRE_TAGGER=1 scripts/bundle.sh
 ditto -c -k --keepParent "$APP" build/Scrub.zip
 notarize build/Scrub.zip
 xcrun stapler staple "$APP"

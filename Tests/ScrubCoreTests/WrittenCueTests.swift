@@ -159,4 +159,32 @@ struct WrittenCueTests {
         #expect(AddressModel.streetAlone("Mill Lane") && AddressModel.streetAlone("Ahornweg") && AddressModel.streetAlone("Pear Tree Cottage"))
         #expect(!AddressModel.streetAlone("Mountain View") && !AddressModel.streetAlone("Notting Hill") && !AddressModel.streetAlone("Leeds") && !AddressModel.streetAlone("14 Mill Lane"))
     }
+
+    // A lowercase title still leaves no surname behind; a word spelled like a title never makes the next word a person.
+    @Test(arguments: Path.allCases) func lowercaseTitlesAndTitleWords(path: Path) throws {
+        for title in ["sgt", "SGT", "capt", "cpl", "insp"] {
+            let text = "Please speak to \(title) Baker at the front desk."
+            let (output, _) = try Self.scrub(text, path, seed: 7)
+            #expect(!output.contains("Baker") && output.hasPrefix("Please speak to \(title) "), "[\(path)] \(output)")
+        }
+        for text in ["We will miss Christmas with the family.", "Readings col Temperature were high.", "Sorry, we miss Tuesday standups again."] {
+            let (output, _) = try Self.scrub(text, path, seed: 7)
+            #expect(output == text, "[\(path)] \(output)")
+        }
+    }
+
+    // A name learned elsewhere in the text is no person after "a" or "an".
+    @Test(arguments: Path.allCases) func aNameAfterAnArticleIsAThing(path: Path) throws {
+        for (text, kept) in [("Mason Treloar hired a Mason.", " hired a Mason."), ("Amber Lindqvist wore an Amber ring.", " wore an Amber ring.")] {
+            let (output, _) = try Self.scrub(text, path, seed: 7)
+            #expect(!output.hasPrefix(String(text.prefix(12))) && output.hasSuffix(kept), "[\(path)] \(output)")
+        }
+    }
+
+    @Test(arguments: Path.allCases) func ordinaryClinicalPhrasesStay(path: Path) throws {
+        for text in ["he may want to be there", "Referred onto the Cardiac REHAB Service.", "We might need to revisit the plan."] {
+            let (output, _) = try Self.scrub(text, path, seed: 7)
+            #expect(output == text, "[\(path)] \(output)")
+        }
+    }
 }

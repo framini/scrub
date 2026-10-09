@@ -7,8 +7,25 @@ enum Kind: String {
     case fullName, firstName, lastName, middleName, email, phone, ssn, ssnLast4, taxID, dob, dobYear
     case street, city, zip, ip, card, account, license, passport, username
     case region, unit, addressLine, latitude, longitude, lastDigits, age, initials
+    /// An address split into its parts, as identity APIs send it: the house
+    /// number and the street's name in fields of their own, beside the line
+    /// that joins them. A province written as a code of a country with no US-style regions ("TO").
+    case houseNumber, streetName, province
+    /// A birth date's month or day in a field of its own: it changes with the
+    /// date, but may by chance come out the same, so only the relations judge it.
+    case dobMonth, dobDay
+    /// A passport's or ID card's machine-readable zone: one line, or all of them.
+    case mrz
     /// A person's or account's record ID ("customer_id"), replaced in its own shape (see README).
     case recordID
+    /// A card's or an identity document's expiry, whole or a part ("exp_month": 6, "expiry": "04/29").
+    case expiry
+    /// Identity-check values (see `kycSSN` and the shapes beside it): an ITIN, a
+    /// national number checked by its `scheme`, an IBAN, a device's ID or
+    /// fingerprint, a ZIP's last four, and a whole address on one line. A
+    /// routing number or sort code names a bank branch, so it may stay, but a
+    /// stand-in for one must pass its check.
+    case itin, nationalID, iban, routing, sortCode, deviceID, zip4, fullAddress
     var isName: Bool { [.fullName, .firstName, .lastName, .middleName].contains(self) }
 }
 
@@ -32,6 +49,8 @@ struct PLeaf {
     /// ("p1.dob"), a number and its last digits ("p1.ssn"), or one address's
     /// parts with the time zone and phone number beside it ("a3").
     var links: [String] = []
+    /// The rule a generated national number passes ("nino", "cpf"), which its stand-in must pass too.
+    var scheme: String? = nil
 }
 
 enum PNode {
@@ -75,7 +94,8 @@ struct Person {
     func link(_ what: String) -> String { "p\(id).\(what)" }
 }
 
-enum KeyStyle { case snake, camel, pascal, kebab, upper }
+/// `field`: generated classes' members, "nameField", "address2Field".
+enum KeyStyle { case snake, camel, pascal, kebab, upper, field }
 
 struct PayloadGen {
     var gen: Gen
@@ -84,7 +104,7 @@ struct PayloadGen {
     init(seed: UInt64) {
         gen = Gen(seed: seed)
         style = .snake
-        style = [KeyStyle.snake, .snake, .snake, .camel, .camel, .camel, .pascal, .kebab, .upper][gen.int(0...8)]
+        style = [KeyStyle.snake, .snake, .snake, .camel, .camel, .camel, .pascal, .kebab, .upper, .field][gen.int(0...9)]
     }
 
     // Given and family names from many places, common and rare. Most are
@@ -170,6 +190,7 @@ struct PayloadGen {
         case .kebab: return words.joined(separator: "-")
         case .upper: return words.joined(separator: "_").uppercased()
         case .camel: return words.enumerated().map { $0.offset == 0 ? $0.element : $0.element.capitalized }.joined()
+        case .field: return words.enumerated().map { $0.offset == 0 ? $0.element : $0.element.capitalized }.joined() + "Field"
         case .pascal: return words.map(\.capitalized).joined()
         }
     }
@@ -269,6 +290,7 @@ struct PayloadGen {
     }
     static let userAgents = ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                              "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+                             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0",
                              "okhttp/4.12.0", "python-requests/2.32.3", "PostmanRuntime/7.39.0"]
     static let companies = ["Northwind Traders LLC", "Harborview Logistics Inc.", "Bluebird Dental Group", "Cascade Mountain Outfitters", "Riverside Community Credit Union"]
     static let titles = ["Senior Accountant", "Staff Engineer", "Registered Nurse", "Operations Manager", "Customer Success Lead"]

@@ -7,6 +7,9 @@ public final class Job {
     private(set) var nameParts: Set<String> = []
     /// Parts that are also ordinary words, and short forms: someone only where written as a name (see `NameCues.position`).
     private(set) var cuedParts: Set<String> = []
+    /// Given names people of more than one surname share ("Tobias" of Tobias Wren and Tobias Hale): alone, either's.
+    private(set) var sharedFirsts: Set<String> = []
+    private var families: [String: String] = [:]
     private(set) var replacements: [Replacement] = []
     private(set) var sensitiveOriginals: [SensitiveOriginal] = []
     /// How sure the detectors that found each original were, by its lowercase
@@ -31,7 +34,7 @@ public final class Job {
     private var kinds: [String: (entity: String, score: Double, whole: Bool)] = [:]
     /// Names and places take their stand-ins from a person or an address, and
     /// these from what they are read off; each keeps the kind it was read as.
-    private static let ownKinds: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME", "INITIALS", "LOCATION", "REGION", "POSTAL_CODE", "ADDRESS", "LATITUDE", "LONGITUDE", "COORDINATES", "AGE", "LAST_DIGITS", "TIME_ZONE"]
+    private static let ownKinds: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME", "INITIALS", "LOCATION", "REGION", "POSTAL_CODE", "ADDRESS", "LATITUDE", "LONGITUDE", "COORDINATES", "AGE", "LAST_DIGITS", "TIME_ZONE", "EXPIRY_DATE"]
     private func noteKind(_ original: String, _ span: Span, whole: Bool) {
         guard !Self.ownKinds.contains(span.entity) else { return }
         if let known = kinds[original], known.score > span.score || known.score == span.score && (known.whole || !whole) { return }
@@ -74,8 +77,12 @@ public final class Job {
     /// Kinds whose words are someone's name: an ID that starts with one is theirs.
     private static let naming: Set<String> = ["PERSON", "FIRST_NAME", "LAST_NAME", "USERNAME"]
     func observeSpans<S: Sequence>(_ fields: S) where S.Element == (String, [Span]) {
+        var spelling: [(email: String, score: Double)] = []
+        defer { learnSpelled(spelling) }
         for (text, spans) in fields {
             let length = (text as NSString).length
+            // Where each name in the text starts, in order: the next one after a name ends its pronouns' reach.
+            let starts = spans.contains { $0.entity == "PERSON" } ? spans.filter { Self.naming.contains($0.entity) }.map(\.range.lowerBound).sorted() : []
             for span in spans {
                 // A link's part is the value it spells: "Odalys+Ferriter" is Odalys Ferriter.
                 let value = span.url.map { URLs.decode(TextRanges.substring(text, span.range), $0) } ?? TextRanges.substring(text, span.range)
@@ -89,13 +96,86 @@ public final class Job {
                 let value = span.url.map { URLs.decode(TextRanges.substring(text, span.range), $0) } ?? TextRanges.substring(text, span.range)
                 // Replaced wherever it appears, so a name must at least have letters.
                 if span.entity != "PHONE_NUMBER", !value.contains(where: \.isLetter) { continue }
+                // An initial alone ("middleName": "A") is a letter of every word and ID: it stays where it was found.
+                if span.entity != "PHONE_NUMBER", value.filter(\.isLetter).count < 2 { continue }
                 gazetteer[span.entity, default: []].insert(value)
                 if span.entity == "PERSON" {
-                    _ = standIns.people.registerFull(value)
+                    let next = Self.first(in: starts, atLeast: span.range.upperBound) ?? length
+                    _ = standIns.people.registerFull(value, gender: Self.pronounGender(of: value, after: span.range, before: next, in: text))
                     rememberParts(of: value, confidence: span.score)
                 }
+                if span.entity == "EMAIL_ADDRESS" { spelling.append((value, span.score)) }
             }
         }
+    }
+    /// The first of `sorted` at least `bound`, found by halving.
+    private static func first(in sorted: [Int], atLeast bound: Int) -> Int? {
+        var low = 0, high = sorted.count
+        while low < high {
+            let middle = (low + high) / 2
+            if sorted[middle] < bound { low = middle + 1 } else { high = middle }
+        }
+        return low < sorted.count ? sorted[low] : nil
+    }
+    /// The sex the first pronoun after a name in its sentence gives a person whose
+    /// first name gives none ("Dr. Benedikt Sauer, can speak to my work; he is …"),
+    /// with no other name between them. A first name of one sex keeps its own.
+    static func pronounGender(of name: String, after range: Range<Int>, before next: Int, in text: String) -> String? {
+        let words = name.split(whereSeparator: { !$0.isLetter && $0 != "'" && $0 != "’" }).map(String.init).drop { People.isTitle($0) }
+        guard words.count >= 2, let first = words.first, NameLists.gender(ofFirst: first) == nil else { return nil }
+        let ns = text as NSString
+        let end = min(next, ns.length, range.upperBound + 160)
+        guard end > range.upperBound else { return nil }
+        let rest = ns.substring(with: NSRange(location: range.upperBound, length: end - range.upperBound))
+        // The sentence ends at a full stop before a space, a question or an exclamation mark, or a line's end.
+        let sentence = rest.components(separatedBy: CharacterSet(charactersIn: "!?\n\r")).first?.components(separatedBy: ". ").first ?? rest
+        for word in sentence.lowercased().split(whereSeparator: { !$0.isLetter }) {
+            switch word {
+            case "he", "him", "his", "himself": return "male"
+            case "she", "her", "hers", "herself": return "female"
+            default: continue
+            }
+        }
+        return nil
+    }
+    /// An address that spells its owner's name ("marisol.quintero@…") names them: written
+    /// later alone or in part, they are that person, with the stand-in the address is built from.
+    /// Read after the names written beside it, so it never makes a second person of one the
+    /// document names otherwise ("fatima.binsaleh@" beside Fatima bin Saleh); written surname
+    /// first ("lombardi.ilaria@"), it is read so where only the second word is a given name, only
+    /// the first a surname, or the document names the person that way round.
+    private func learnSpelled(_ emails: [(email: String, score: Double)]) {
+        for (email, score) in emails {
+            guard let words = Self.spelledWords(email), standIns.people.find(email: email) == nil else { continue }
+            let people = standIns.people
+            let given = Self.givenFirst(words) && !people.namesOtherwise(first: words.0, last: words.1)
+            let turned = !given && (people.knowsAsWritten(first: words.1, last: words.0) || NameLists.isFirst(words.1) && !NameLists.isFirst(words.0)
+                                       || NameLists.isSurname(words.0) && !NameLists.isSurname(words.1))
+                && !people.namesOtherwise(first: words.1, last: words.0)
+            guard given || turned else { continue }
+            let (first, last) = given ? words : (words.1, words.0)
+            people.associate(first: first, last: last, email: email)
+            let confidence = min(score, ListedNames.cuedScore), full = first + " " + last
+            gazetteer["PERSON", default: []].insert(full)
+            note(full, confidence: confidence)
+            rememberParts(of: full, confidence: confidence)
+        }
+    }
+    /// The two words an email's local part spells a name with, capitalised: joined by
+    /// a dot, an underscore or a hyphen, each a name or no word ("marisol.quintero",
+    /// "cosmin.radu"). "rose.hill", "sales.team" and "jdoe" spell no one surely enough.
+    static func spelledWords(_ email: String) -> (String, String)? {
+        guard let at = email.firstIndex(of: "@"), !People.isRoleMailbox(email) else { return nil }
+        let parts = email[..<at].split(whereSeparator: { ".-_".contains($0) }).map { $0.lowercased() }
+        guard parts.count == 2, parts.allSatisfy({ $0.count >= 3 && $0.allSatisfy { $0.isLetter && $0.isASCII } && $0.contains { "aeiouy".contains($0) } }), parts[0] != parts[1],
+              parts.allSatisfy({ !NameLists.isWordlike($0) && (NameLists.isName($0) && !NameLists.isOrdinary($0) || !NameLists.isWord($0)) }) else { return nil }
+        let capitalised = parts.map { $0.prefix(1).uppercased() + $0.dropFirst() }
+        return (capitalised[0], capitalised[1])
+    }
+    /// Whether the first word reads as a given name: a listed first name, or, beside a surname
+    /// the lists hold, no word at all. Neither listed ("cosmin.radu") reads given name first, as most addresses are.
+    static func givenFirst(_ words: (String, String)) -> Bool {
+        NameLists.isFirst(words.0) || !NameLists.isFirst(words.1) && !NameLists.isSurname(words.0)
     }
     // "Thanks, Maria" after "Maria Gonzalez" is the same person, and so are
     // "Gonzalez's", "GONZALEZ", "M. Gonzalez", "Gonzalez, Maria" and handles
@@ -119,6 +199,7 @@ public final class Job {
         // holds it and no list of names does, so it too counts only where written as a name.
         func wordlike(_ part: String) -> Bool { Names.ambiguousFirst.contains(part.lowercased()) || NameLists.isWordlike(part) || NameLists.isOrdinary(part) || NameLists.isUnlistedWord(part) }
         let parts = [first, last].filter(usable)
+        if let family = families[first], family != last.lowercased() { sharedFirsts.insert(first) } else { families[first] = last.lowercased() }
         for part in parts {
             learn(part)
             if wordlike(part) { cuedParts.insert(part); nameParts.insert(part) }
@@ -173,7 +254,12 @@ public final class Job {
     /// `object`: the object a flattened header names within the innermost record
     /// ("applicant" of "applicant.dob"), a scope of its own inside that record, so
     /// two people in one row each keep their own birth date's parts.
-    func enter(value: Int, records: [Int], part: KeyHints.DatePart? = nil, object: String = "") {
+    /// `naming`: the words naming the value (its key's), so an identifier two kinds' checks pass is
+    /// given a stand-in of the kind they name.
+    /// `kind`: the identifier its field was decided to hold, which its stand-in is before any kind words name.
+    func enter(value: Int, records: [Int], part: KeyHints.DatePart? = nil, object: String = "", naming: Set<String> = [], kind: String? = nil) {
+        standIns.naming = naming
+        standIns.kind = kind
         var scopes = records.map { "r\($0)" }
         if let innermost = scopes.first, !object.isEmpty {
             // "applicant.birth" sits in "applicant" too: innermost first, each a scope of the record.
@@ -283,7 +369,13 @@ public final class Job {
         return fake
     }
     @discardableResult
+    /// A person's name written again in another script (see `People.alias`).
+    func alias(_ person: Persona, first: String?, last: String?, full: String?) {
+        standIns.people.alias(person, first: first, last: last, full: full)
+    }
     func associateRecord(first: String?, last: String?, full: String?, email: String?, gender: String? = nil) -> Persona? {
+        // "Aisha Bello-Okafor & Chidi Okafor" is two people, each their own.
+        if let full, People.joint(full) != nil { return nil }
         if let full {
             let person = standIns.people.registerFull(full, emailSafe: email != nil, gender: gender).0
             standIns.people.associate(person, email: email)
@@ -378,7 +470,7 @@ public final class Job {
         for index in spans.indices {
             guard let leaf = leafOf[index] else { continue }
             addresses[index] = placed[leaf]
-            if ["FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "USERNAME", "INITIALS"].contains(spans[index].entity) { owners[index] = people.of(leaves[leaf]) }
+            if ["FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS", "USERNAME", "INITIALS", "MRZ"].contains(spans[index].entity) { owners[index] = people.of(leaves[leaf]) }
         }
         return (addresses, owners)
     }
@@ -394,8 +486,17 @@ public final class Job {
             // An address built from another known person's name ("odalys.ferriter@…"
             // beside "ask oluwaseun") is that person's, wherever it is written.
             let named = fields["EMAIL_ADDRESS"].flatMap(standIns.people.find(email:))
-            if fields["PERSON"] != nil || fields["FIRST_NAME"] != nil && fields["LAST_NAME"] != nil, members.count >= 2,
-               let person = associateRecord(first: fields["FIRST_NAME"], last: fields["LAST_NAME"], full: fields["PERSON"], email: named == nil ? fields["EMAIL_ADDRESS"] : nil, gender: gender(near: members.map { spans[$0].range }, in: text)) {
+            // A full name beside a first or last name that is none of its words ("OKONKWO-REYES (Tobiah) … the
+            // Okonkwos") is someone else's: the parts are one person, the full name another, never joined.
+            var full = fields["PERSON"]
+            if let whole = full, fields["FIRST_NAME"] != nil || fields["LAST_NAME"] != nil {
+                func words(_ value: String) -> [String] { value.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init) }
+                let own = Set(words(whole))
+                if ![fields["FIRST_NAME"], fields["LAST_NAME"]].compactMap({ $0 }).flatMap(words).allSatisfy(own.contains) { full = nil }
+            }
+            if full != nil || fields["FIRST_NAME"] != nil && fields["LAST_NAME"] != nil, members.count >= 2,
+               let person = associateRecord(first: fields["FIRST_NAME"], last: fields["LAST_NAME"], full: full, email: named == nil ? fields["EMAIL_ADDRESS"] : nil, gender: gender(near: members.map { spans[$0].range }, in: text)) {
+                if named != nil, let email = fields["EMAIL_ADDRESS"] { standIns.people.shareIfOthers(email, with: person) }
                 for member in members where spans[member].entity != "PERSON" {
                     if spans[member].entity == "EMAIL_ADDRESS", let named, named !== person { continue }
                     result[member] = person
@@ -436,7 +537,7 @@ public final class Job {
     /// `held` marks places left as written in `text`; they come back where
     /// they stand in the output, without any a replacement covers.
     func apply(_ text: String, spans: [Span], owner: Persona?, address: AddressParts? = nil, held: inout [Mark]) throws -> (String, [Mark]) {
-        let ordered = spans.sorted { $0.range.lowerBound < $1.range.lowerBound }
+        let ordered = Self.outsideTimeZones(spans, in: text).sorted { $0.range.lowerBound < $1.range.lowerBound }
         var fakes = Array(repeating: "", count: ordered.count)
         var addresses: [AddressParts?], owners: [Persona?]
         if address == nil && owner == nil, let structured = records(in: text, ordered) {
@@ -448,10 +549,14 @@ public final class Job {
         // Stand-ins are drawn last span first, as seeded runs have always done;
         // a username after the email and name it may follow ("user quillpen77"
         // below "quillpen77@…"), and an age or last four digits after what they are read from.
-        let later = { (index: Int) in StandIns.derived.contains(ordered[index].entity) || StandIns.isMasked(TextRanges.substring(text, ordered[index].range)) }
+        let later = { (index: Int) in StandIns.derived.contains(ordered[index].entity) || ordered[index].entity == "MRZ" || StandIns.isMasked(TextRanges.substring(text, ordered[index].range)) }
         let handle = { (index: Int) in ordered[index].entity == "USERNAME" && !later(index) }
         for span in ordered where span.entity == "LAST_DIGITS" { standIns.noteEnding(TextRanges.substring(text, span.range)) }
-        let drawOrder = ordered.indices.reversed().filter { !later($0) && !handle($0) } + ordered.indices.reversed().filter(handle) + ordered.indices.reversed().filter(later)
+        // Zones last, in the text's order, an ID card's first lines stored alone before any second line (see `MachineZone.opensCard`).
+        let zone = { (index: Int) in ordered[index].entity == "MRZ" }
+        let opens = { (index: Int) in zone(index) && MachineZone.opensCard(TextRanges.substring(text, ordered[index].range)) }
+        let drawOrder = ordered.indices.reversed().filter { !later($0) && !handle($0) } + ordered.indices.reversed().filter(handle) + ordered.indices.reversed().filter { later($0) && !zone($0) }
+            + ordered.indices.filter(opens) + ordered.indices.filter { zone($0) && !opens($0) }
         // Numbers, birth dates and what is read off them note where they sit.
         let spots = ordered.contains { StandIns.anchored($0.entity) } ? self.spots(text) : nil
         var unclear: Set<Int> = []
@@ -462,7 +567,16 @@ public final class Job {
             // A link's part is replaced as what it spells, and written back encoded the same way;
             // a value with hidden characters or markup inside, as what it reads (see `Visible`).
             let shown = Visible.plain(ordered[index].url.map { URLs.decode(written, $0) } ?? written)
+            // An identifier takes a stand-in of the kind the words before it name, as one under a key does.
+            let keyed = standIns.naming
+            if Recognizers.drawn.contains(ordered[index].entity) { standIns.naming.formUnion(Recognizers.before(ordered[index].range, in: text)) }
+            // A month's name several languages write is written in the text's ("premier mai 1931" in French).
+            if ordered[index].entity == "DATE_OF_BIRTH", shown.contains(where: \.isLetter) {
+                standIns.language = NameEvidence.language(around: ordered[index].range, in: text, document: nil).flatMap(WrittenDates.locale(of:))
+            }
             let fake = replacement(for: ordered[index].entity, original: shown, persona: owners[index], address: addresses[index], local: local)
+            standIns.naming = keyed
+            standIns.language = nil
             fakes[index] = ordered[index].url.map { URLs.encode(fake, like: written, $0) } ?? Visible.rewrite(written, with: fake)
             if lastUnclear { unclear.insert(index) }
         }
@@ -478,6 +592,18 @@ public final class Job {
                 : Mark(range: range, entity: kind(of: original, read: span.entity), original: original, confidence: sure)
         })
     }
+    /// The spans that touch no time zone's identifier ("Europe/London",
+    /// "America/Argentina/Buenos_Aires"): a city inside one names a zone, not
+    /// where anyone is, and an edit inside it leaves a zone no system knows.
+    static func outsideTimeZones(_ spans: [Span], in text: String) -> [Span] {
+        guard text.contains("/") else { return spans }
+        let zones = TextRanges.matches(zoneName, in: text).compactMap { match -> Range<Int>? in
+            let range = match.range.location..<NSMaxRange(match.range)
+            return TimeZone(identifier: TextRanges.substring(text, range)) != nil ? range : nil
+        }
+        return zones.isEmpty ? spans : spans.filter { span in span.entity == "TIME_ZONE" || !zones.contains { $0.overlaps(span.range) } }
+    }
+    private static let zoneName = TextPattern(#"(?<![\p{L}\p{N}_-])(?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Europe|Indian|Pacific)/[A-Za-z_+-]+(?:/[A-Za-z_+-]+)?(?![\p{L}\p{N}_])"#)
     func scrubValue(_ text: String, key: String? = nil, owner: Persona? = nil, contextWords: Set<String> = []) throws -> (String, [Mark], [Mark]) {
         let spans = observe([(text, key)], contextWords: contextWords)[0]
         let (initial, marks) = try apply(text, spans: spans, owner: owner)

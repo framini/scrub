@@ -38,6 +38,16 @@ func orderedJSONFixtureOutput(_ name: String) throws {
     }
 }
 
+/// Half a surrogate pair is allowed by JSON's grammar, and a string cut inside an emoji
+/// is written with one: the document is read, its people replaced, the half kept where it stood.
+@Test func aHalfSurrogatePairIsRead() throws {
+    let document = #"{"email":"\ud800robert.mitchell@acme.com","n\udc00ame":"Robert Mitchell","note":"\ud83d\ude00"}"#
+    let output = String(decoding: try Scrubber.scrub(Data(document.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("robert.mitchell") && !output.contains("Robert Mitchell"))
+    #expect(output.contains(#""n\udc00ame":"#) && output.contains(#""note":"\ud83d\ude00""#))
+    #expect(OrderedJSON.render(try OrderedJSON.parse(#"["\ud800","\u00e9\t"]"#)).0 == "[\n  \"\u{FFFD}\",\n  \"é\\t\"\n]\n")
+}
+
 @Test func jsonFixtureKeepsRecordsAndAssociatesPersona() throws {
     let data = try Data(contentsOf: #require(Bundle.module.url(forResource: "francisco", withExtension: "json")))
     let result = try Scrubber.scrub(data, name: "francisco.json")
@@ -71,8 +81,8 @@ func orderedJSONFixtureOutput(_ name: String) throws {
     #expect(!output.contains("hunter2"))
     #expect(!output.contains("alice@example.com"))
     #expect(!output.contains("2128675309"))
-    #expect(output.contains(#""plain": 2"#))
-    #expect(!output.contains(#""plain": 1"#))
+    // Each of two keys written alike keeps its own value, as written.
+    #expect(output.contains(#""plain":2"#) && output.contains(#""plain":1"#))
 }
 
 @Test func jsonRepeatedValuesGetStableStandIns() throws {
@@ -213,9 +223,9 @@ func orderedJSONFixtureOutput(_ name: String) throws {
     """#
     let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
     for original in ["Alberta", "Charleson", "accountholder0", "2025550123", "Cameron", "Jane Smith"] { #expect(!output.contains(original)) }
-    for kept in [#""name": "Everyday Checking""#, #""subtype": "checking""#, #""type": "home""#, #""A1""#] { #expect(output.contains(kept)) }
+    for kept in [#""name":"Everyday Checking""#, #""subtype":"checking""#, #""type":"home""#, #""A1""#] { #expect(output.contains(kept)) }
     // The region moves with the address, still a state code.
-    #expect(!output.contains(#""region": "NY""#) && output.range(of: #""region": "[A-Z]{2}""#, options: .regularExpression) != nil)
+    #expect(!output.contains(#""region":"NY""#) && output.range(of: #""region":"[A-Z]{2}""#, options: .regularExpression) != nil)
 }
 
 @Test(arguments: [
@@ -259,12 +269,12 @@ func bareNameKeyNeedsAPersonRecord(_ input: String, _ replaced: Bool) throws {
     """#
     let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
     for kept in ["11111111-2222-3333-4444-555555555555", "Case_FPF-1761754896062", #""NORTHWIND""#, "https://northwind.io/", #""Government""#, #""USPS""#, #""Utility Records""#,
-                 #""dob": 0.99"#, #""america/new_york""#, #""America/Los_Angeles""#, "Chrome/131.0.0.0"] { #expect(output.contains(kept)) }
+                 #""dob":0.99"#, #""america/new_york""#, #""America/Los_Angeles""#, "Chrome/131.0.0.0"] { #expect(output.contains(kept)) }
     for replaced in ["92301962141", "122199983", "912355201", "111223333", "Jane Doe", "Mertz", "San Francisco", "94105"] { #expect(!output.contains(replaced)) }
     for key in ["accountNumber", "routingNumber", "ein", "entity"] {
-        #expect(output.range(of: #""\#(key)": "\d{9,11}""#, options: .regularExpression) != nil)
+        #expect(output.range(of: #""\#(key)":"\d{9,11}""#, options: .regularExpression) != nil)
     }
-    #expect(output.range(of: #""locality": "[^"]+""#, options: .regularExpression).map { !output[$0].contains("San Francisco") && !output[$0].contains(" Hill") } == true)
+    #expect(output.range(of: #""locality":"[^"]+""#, options: .regularExpression).map { !output[$0].contains("San Francisco") && !output[$0].contains(" Hill") } == true)
 }
 
 @Test func jsonIsWrittenInTimeLinearInItsLengthWhateverItHolds() throws {
@@ -281,4 +291,268 @@ func bareNameKeyNeedsAPersonRecord(_ input: String, _ replaced: Bool) throws {
     let short = try time(4_000), long = try time(32_000)
     // Eight times the numbers take about eight times as long; measured afresh each time, sixty-four.
     #expect(long < short * 16 + .milliseconds(500), "\(short) then \(long)")
+}
+
+// A number written again under a key that names nothing is the same value, and takes the same stand-in.
+@Test func jsonNumberWrittenAgainTakesTheSameStandIn() throws {
+    let input = #"{"phone":2128675309,"copy":2128675309,"items":[2128675309],"count":2128675309,"order":5550001234,"seats":12}"#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    let out = try #require(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+    let phone = try #require(out["phone"] as? Int)
+    #expect(phone != 2128675309)
+    #expect(out["copy"] as? Int == phone)
+    #expect((out["items"] as? [Int])?.first == phone)
+    #expect(out["count"] as? Int == 2128675309)
+    #expect(out["order"] as? Int == 5550001234)
+    #expect(out["seats"] as? Int == 12)
+    #expect(output.contains(#""copy":\#(phone)"#))
+}
+
+// A secret written into a key is replaced there too; a name matched inside a key's word is not.
+@Test func jsonSecretInsideAKeyIsReplaced() throws {
+    let input = #"{"password":"quillharbor","quillharborMetric":1,"middle":"The","lengthOfTheCurrentLease":"24 months"}"#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("quillharbor"))
+    let out = try #require(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+    #expect(out.count == 4)
+    #expect(out.contains { $0.key.hasSuffix("Metric") && $0.value as? Int == 1 })
+    #expect(out["lengthOfTheCurrentLease"] as? String == "24 months")
+}
+
+// A secret written as a decimal is personal in every digit: its fraction is drawn too.
+@Test func jsonDecimalSecretsDrawTheirFraction() throws {
+    let input = #"{"password":0.123456789,"pin":0.98765,"phone":2128675309.0}"#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("123456789") && !output.contains("98765") && !output.contains("2128675309"))
+    let out = try #require(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: NSNumber])
+    #expect(output.range(of: #""password":0\.\d{9},"pin":0\.\d{5},"phone":\d{10}\.0"#, options: .regularExpression) != nil, "\(output)")
+    #expect(out.count == 3)
+}
+
+// A key written twice in one object is one key: both are written as the same stand-in.
+@Test func jsonDuplicatePersonalKeysStayOneKey() throws {
+    let input = #"{"rosalind@example.org":1,"rosalind@example.org":2,"plain":3}"#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("rosalind"))
+    let source = try JSONSource.read(output)
+    guard case .object(let pairs) = source.root else { Issue.record("Expected an object"); return }
+    #expect(pairs.count == 3)
+    #expect(pairs[0].0 == pairs[1].0 && pairs[0].0 != pairs[2].0)
+    #expect(pairs[0].0.contains("@") && !pairs[0].0.hasSuffix("_"))
+}
+
+// A string changed in part keeps every escape outside what changed as written, half a surrogate pair among them.
+@Test func jsonPartialEditKeepsEscapesAsWritten() throws {
+    let slash = String(UnicodeScalar(92))
+    let note = "ok " + slash + "/ " + slash + "ud800 rosalind@example.org " + slash + "t " + slash + "u00e9 rosalind@example.org end"
+    let input = "{\"note\":\"" + note + "\",\"k" + slash + "/ rosalind@example.org\":1}"
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("rosalind"), "\(output)")
+    #expect(output.hasPrefix("{\"note\":\"ok " + slash + "/ " + slash + "ud800 "), "\(output)")
+    #expect(output.contains(" " + slash + "t " + slash + "u00e9 ") && output.contains(" end\""), "\(output)")
+    #expect(output.contains("\"k" + slash + "/ "), "\(output)")
+    let source = try JSONSource.read(output)
+    guard case .object(let pairs) = source.root, case .string(let value) = pairs[0].1 else { Issue.record("Expected an object"); return }
+    let emails = value.split(separator: " ").filter { $0.contains("@") }
+    #expect(emails.count == 2 && emails[0] == emails[1])
+}
+
+// A document opening with a byte order mark keeps it when anything in it is replaced.
+@Test func jsonByteOrderMarkStaysWhenReplaced() throws {
+    let data = Data([0xEF, 0xBB, 0xBF]) + Data(#"{"email":"rosalind@example.org"}"#.utf8)
+    let output = try Scrubber.scrub(data, name: "a.json").output
+    #expect(output.starts(with: [0xEF, 0xBB, 0xBF]))
+    #expect(!String(decoding: output, as: UTF8.self).contains("rosalind"))
+}
+
+/// A script's file name is no one's handle; a handle beside it still is.
+@Test func jsonFileNameIsNoHandle() throws {
+    let source = #"{"name":"tool","bin":"./bin/maria-cli.js","main":"./lib/tool.js","author":"ask jdoe42 or maria.gonzalez"}"#
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(output.contains(#""bin":"./bin/maria-cli.js""#))
+    #expect(output.contains(#""main":"./lib/tool.js""#))
+    #expect(!output.contains("jdoe42") && !output.contains("gonzalez"))
+}
+
+// Two keys spelled apart in their scalars (a precomposed letter, a letter and its accent) stay two keys, each as spelled.
+@Test func jsonKeysSpelledApartStayApart() throws {
+    let input = "{\"password\":\"quillharbor\",\"\u{E9} quillharbor\":1,\"e\u{301} quillharbor\":2}"
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("quillharbor"), "\(output)")
+    let source = try JSONSource.read(output)
+    guard case .object(let pairs) = source.root else { Issue.record("Expected an object"); return }
+    #expect(pairs.count == 3)
+    #expect(pairs[1].0.unicodeScalars.first == "\u{E9}" && pairs[2].0.unicodeScalars.prefix(2).elementsEqual(["e", "\u{301}"]), "\(output)")
+    #expect(!pairs[1].0.unicodeScalars.elementsEqual(pairs[2].0.unicodeScalars))
+}
+
+// A number written again in another spelling of the same value (a point, an exponent) takes the stand-in too, in its own shape.
+@Test func jsonNumberSpelledAgainTakesTheSameStandIn() throws {
+    let input = #"{"phone":2128675309,"copy":2128675309.0,"copy2":2.128675309e9,"copy3":21286753090E-1,"items":[2128675309.00],"body":"{\"again\":2.128675309E+9}","ratio":2128675309.0}"#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+    let out = try #require(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+    #expect((out["ratio"] as? NSNumber)?.doubleValue == 2128675309.0)
+    #expect(!output.replacingOccurrences(of: #""ratio":2128675309.0"#, with: "").contains("128675309"), "\(output)")
+    let phone = try #require(out["phone"] as? NSNumber).doubleValue
+    for key in ["copy", "copy2", "copy3"] { #expect((out[key] as? NSNumber)?.doubleValue == phone, "\(key): \(output)") }
+    #expect(((out["items"] as? [NSNumber])?.first)?.doubleValue == phone)
+    #expect(output.range(of: #""copy":\d{10}\.0,"#, options: .regularExpression) != nil, "\(output)")
+    #expect(output.range(of: #""items":\[\d{10}\.00\]"#, options: .regularExpression) != nil, "\(output)")
+    let body = try #require(out["body"] as? String)
+    let inner = try #require(JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: NSNumber])
+    #expect(inner["again"]?.doubleValue == phone, "\(output)")
+}
+
+// A body written inside a string, changed in part, keeps the string's other escapes as written, half a surrogate pair among them.
+@Test func jsonNestedEditKeepsOuterEscapesAsWritten() throws {
+    let slash = String(UnicodeScalar(92)), quote = slash + "\""
+    let body = "{" + quote + "password" + quote + ":" + quote + slash + slash + "u0071uillharbor" + quote + "," + quote + "note" + quote + ":" + quote + slash + "ud800" + slash + slash + "/ok" + quote + "}"
+    let input = "{\"body\":\"" + body + "\"}"
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("quillharbor") && !output.contains("u0071uillharbor"), "\(output)")
+    #expect(output.hasPrefix("{\"body\":\"{" + quote + "password" + quote + ":" + quote), "\(output)")
+    #expect(output.hasSuffix("," + quote + "note" + quote + ":" + quote + slash + "ud800" + slash + slash + "/ok" + quote + "}\"}"), "\(output)")
+    #expect((try? JSONSource.read(output)) != nil)
+}
+
+/// Under a role's key, a version, a standard's name, a configuration's file name or a release's
+/// tag is no one's handle; a handle is, and a client's handle written as a file's name is too.
+@Test func jsonRoleKeysKeepTechnicalValues() throws {
+    let source = #"{"agent":"curl8.0","author":"RFC4716","reviewer":"config.ini","owner":"release_2026","approver":"name1.2","#
+        + #""assignee":"jdoe42","requester":"maria.lopez","sender":"j_smith","recipient":"m-garcia7","patient":"jdoe.js","customer":"pwhitlock.py"}"#
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+    let out = try #require(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: String])
+    for (key, value) in [("agent", "curl8.0"), ("author", "RFC4716"), ("reviewer", "config.ini"), ("owner", "release_2026"), ("approver", "name1.2")] {
+        #expect(out[key] == value, "\(key): \(output)")
+    }
+    for (key, value) in [("assignee", "jdoe42"), ("requester", "maria.lopez"), ("sender", "j_smith"), ("recipient", "m-garcia7"), ("patient", "jdoe.js"), ("customer", "pwhitlock.py")] {
+        #expect(out[key] != nil && out[key] != value, "\(key): \(output)")
+    }
+}
+
+// A number whose exponent is the most negative a whole number holds is read and kept, not a stop.
+@Test func jsonFarExponentIsKept() throws {
+    let source = #"{"x":1e-9223372036854775808,"y":2e9223372036854775807}"#
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(output == source)
+}
+
+// A number written again in a shape too long to hold its stand-in takes the stand-in as written, never the original.
+@Test func jsonNumberTooLongToReshapeIsStillReplaced() throws {
+    let copy = "2128675309" + String(repeating: "0", count: 401) + "e-401"
+    let source = #"{"phone":2128675309,"copy":"# + copy + "}"
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+    let out = try #require(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: NSNumber])
+    #expect(!output.contains("2128675309"), "\(output)")
+    #expect(out["copy"]?.doubleValue == out["phone"]?.doubleValue, "\(output)")
+}
+
+// A client's handle written as a file's name is theirs under "user" too.
+@Test func jsonUserHandleWrittenAsAFileIsReplaced() throws {
+    let output = String(decoding: try Scrubber.scrub(Data(#"{"user":"jdoe42.js","main":"lib/tool.js"}"#.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("jdoe42"), "\(output)")
+    #expect(output.contains(#""main":"lib/tool.js""#))
+}
+
+// Under a client's key a handle with no digit, written as a file's name, is theirs too.
+@Test func jsonClientHandleWithoutDigitsIsReplaced() throws {
+    let output = String(decoding: try Scrubber.scrub(Data(#"{"user":"jdoe.js","reviewer":"config.ini"}"#.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("jdoe"), "\(output)")
+    #expect(output.contains(#""reviewer":"config.ini""#))
+}
+
+// A number written again with an exponent past any reshaping, its value the same, takes the stand-in.
+@Test func jsonNumberWithAFarExponentStillMatches() throws {
+    let copy = "2128675309" + String(repeating: "0", count: 1 << 20) + "e-" + String(1 << 20)
+    let source = #"{"phone":2128675309,"copy":"# + copy + "}"
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+    #expect(!output.contains("2128675309"), "\(output.prefix(200))")
+    #expect((try? JSONSource.read(output)) != nil)
+}
+
+// A client's handle with spaces around it is replaced, the spaces kept.
+@Test func jsonPaddedClientHandleIsReplaced() throws {
+    let output = String(decoding: try Scrubber.scrub(Data(#"{"user":" jdoe.js ","assignee":"  maria.lopez"}"#.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("jdoe") && !output.contains("maria.lopez"), "\(output)")
+    #expect(output.range(of: #""user":" [^ "]+ ","assignee":"  [^ "]+""#, options: .regularExpression) != nil, "\(output)")
+}
+
+// A number at the far end of the exponent's range, written again with a place after the point, matches its value.
+@Test func jsonNumberAtTheExponentsEndMatchesAnotherSpelling() throws {
+    let source = #"{"password":1e-9223372036854775808,"copy":1.0e-9223372036854775808}"#
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+    #expect(!output.contains("1.0e-"), "\(output)")
+}
+
+// A handle shaped like a domain, with spaces around it, is replaced under a client's key and a role's.
+@Test func jsonPaddedDomainShapedHandleIsReplaced() throws {
+    let output = String(decoding: try Scrubber.scrub(Data(#"{"user":" jdoe.co ","assignee":" maria.co "}"#.utf8), name: "a.json").output, as: UTF8.self)
+    #expect(!output.contains("jdoe.co") && !output.contains("maria.co"), "\(output)")
+}
+
+// Spellings of one number whose exponents reach past a whole number's range once its zeros are counted still match.
+@Test func jsonNumbersAtEitherEndOfTheExponentMatch() throws {
+    for source in [#"{"password":10e9223372036854775807,"copy":100e9223372036854775806}"#, #"{"password":0.1e-9223372036854775808,"copy":0.10e-9223372036854775808}"#] {
+        let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+        #expect(!output.contains(#""copy":100e"#) && !output.contains(#""copy":0.10e"#), "\(output)")
+    }
+}
+
+// A count or a measurement can pass an identifier's checksum by chance; it stays as written.
+@Test(arguments: ["count", "total", "bytes", "duration", "ratio"])
+func jsonMeasurementsAreNoIdentifiers(_ key: String) throws {
+    for number in ["4111111111111111", "173296534"] {
+        let source = "{\"\(key)\":\(number),\"email\":\"quill.harbor@example.org\"}"
+        let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+        #expect(output.hasPrefix("{\"\(key)\":\(number),\"email\":") && !output.contains("quill.harbor"), "\(output)")
+    }
+}
+
+// A negative number is a card's only under a key that names one; a secret's key still takes it.
+@Test func jsonNegativeNumbersNeedAKeyToNameThem() throws {
+    let source = #"{"value":-9223372036854775809,"card_number":4111111111111111,"password":-12345}"#
+    let output = String(decoding: try Scrubber.scrub(Data(source.utf8), name: "a.json", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+    #expect(output.contains("-9223372036854775809") && !output.contains("4111111111111111") && !output.contains("-12345"), "\(output)")
+    _ = try JSONSource.read(output)
+}
+
+/// A bank-account check's response that saved the IBAN as its form lowercased it: replaced as one in
+/// capitals is, its stand-in in small letters and checksum-valid, the same in the note that spaces it out.
+@Test func lowercaseIBANInAResponseIsReplaced() throws {
+    let json = """
+    {
+      "account": {"holder": "Maren Oakhurst", "iban": "gb33bukb20201555555555", "currency": "GBP", "status": "verified"},
+      "note": "customer confirmed gb33 bukb 2020 1555 5555 55 by phone",
+      "checkedAt": "2026-04-11T08:15:00Z"
+    }
+    """
+    let result = try Scrubber.scrub(Data(json.utf8), name: "account-check.json")
+    let output = try #require(String(data: result.output, encoding: .utf8))
+    let object = try #require(try JSONSerialization.jsonObject(with: result.output) as? [String: Any])
+    let iban = try #require((object["account"] as? [String: Any])?["iban"] as? String)
+    #expect(iban != "gb33bukb20201555555555" && iban == iban.lowercased() && Patterns.iban(iban) && iban.count == 22, "\(iban)")
+    #expect(!output.contains("1555555555") && !output.contains("1555 5555 55"), "\(output)")
+    let spaced = stride(from: 0, to: iban.count, by: 4).map { String(iban.dropFirst($0).prefix(4)) }.joined(separator: " ")
+    #expect((object["note"] as? String) == "customer confirmed \(spaced) by phone", "\(output)")
+    #expect(output.contains(#""currency": "GBP", "status": "verified"},"#) && output.contains("2026-04-11T08:15:00Z"))
+}
+
+/// A key is renamed only for what it holds itself: a note's "Garante Moretti", read as a person whose
+/// first name is "Garante", left the key "garante" renamed to that stand-in, and the object unreadable.
+@Test(arguments: [UInt64(1), 2, 3])
+func aKeySpelledLikeANameReadElsewhereStays(_ seed: UInt64) throws {
+    let input = #"{"pratica": "PR-2207", "richiedente": {"nome": "Odalys", "cognome": "Ferriter"}, "garante": {"nome": "Tavish", "cognome": "Moretti", "parentela": "zio"}, "note": "Odalys preferisce la posta. Garante Moretti pensionato."}"#
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "pratica.json", forceFullDetection: false, seed: seed).output, as: UTF8.self)
+    let object = try #require(try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any], "\(output)")
+    #expect(Set(object.keys) == ["pratica", "richiedente", "garante", "note"], "\(output)")
+    #expect(!output.contains("Moretti") && !output.contains("Odalys"), "\(output)")
+}
+
+/// A company's name under a person's name key ("full_name": "Example Distribuidora S.A.") stays as written.
+@Test func aCompanyUnderANameKeyIsNoPerson() throws {
+    let input = #"{"parties": [{"role": "applicant", "full_name": "Marta Quintela", "dob": "1984-02-11"}, {"role": "employer", "full_name": "Example Distribuidora S.A."}, {"role": "guarantor", "name": "Norte Comercial Ltda."}, {"role": "payee", "first_name": "Rui", "last_name": "Valadares"}]}"#
+    let result = try Scrubber.scrub(Data(input.utf8), name: "parties.json", forceFullDetection: false, seed: 3)
+    let output = String(decoding: result.output, as: UTF8.self)
+    #expect(output.contains(#""full_name": "Example Distribuidora S.A.""#) && output.contains(#""name": "Norte Comercial Ltda.""#), "\(output)")
+    for original in ["Marta", "Quintela", "Valadares", "1984-02-11"] { #expect(!output.contains(original), "\(original) in \(output)") }
 }

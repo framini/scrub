@@ -20,16 +20,24 @@ enum KeyedValues {
         var names: [(Span, String)] = []
         var fields: [(String, String)] = []
         var unnamed: [(Range<Int>, String, String)] = []
+        /// Values whose key names a date's part with nothing to say whose date: a birth's, once the record's kind or a name beside them says so.
+        var dated: [(Range<Int>, String, String)] = []
+        /// Values under an expiry's key, a card's or a document's once the record around them says so (see `KeyHints.expiry`).
+        var expiring: [(Range<Int>, String, String)] = []
         /// Values under a plain "id", which are a person's when the object holds their name or email.
         var ids: [Range<Int>] = []
         /// Bare numbers in an array, read when it closes: a point's order is only known then.
         var numbers: [Range<Int>] = []
+        /// Province codes no region table knows ("NA"), read when the object closes: one beside a city or postcode is that address's.
+        var codes: [Range<Int>] = []
     }
     struct Found {
         var spans: [Span] = []
         /// Values under keys that hold timestamps, IDs, codes and settings, and
         /// the keys themselves: none of them is read as a name or a date.
         var structural: [Range<Int>] = []
+        /// The keys alone, inside their quotes.
+        var keys: [Range<Int>] = []
         /// The objects and lists the text nests, each with the one around it
         /// (0 stands for the text outside any), and every value read under a
         /// key with the one it sits in: what a JSON file's records tell.
@@ -55,10 +63,157 @@ enum KeyedValues {
     /// Unquoted words that are literals, not values.
     private static let literals: Set<String> = ["true", "false", "null", "none", "nil", "undefined", "yes", "no", "~"]
 
+    /// A string's inside with its JSON escapes read, and where each decoded unit's escape
+    /// starts and ends in `units`; nil where one is no JSON escape.
+    private static func decoded(_ units: ArraySlice<UInt16>) -> (units: [UInt16], starts: [Int], ends: [Int])? {
+        var out: [UInt16] = [], starts: [Int] = [], ends: [Int] = []
+        var at = units.startIndex
+        while at < units.endIndex {
+            var length = 1, unit = units[at]
+            if unit == backslash {
+                guard at + 1 < units.endIndex else { return nil }
+                length = 2
+                switch units[at + 1] {
+                case doubleQuote, backslash, slash: unit = units[at + 1]
+                case UInt16(UInt8(ascii: "b")): unit = 8
+                case UInt16(UInt8(ascii: "f")): unit = 12
+                case UInt16(UInt8(ascii: "n")): unit = newline
+                case UInt16(UInt8(ascii: "r")): unit = carriageReturn
+                case UInt16(UInt8(ascii: "t")): unit = tab
+                case UInt16(UInt8(ascii: "u")):
+                    guard at + 6 <= units.endIndex, let value = UInt16(String(utf16CodeUnits: Array(units[(at + 2)..<(at + 6)]), count: 4), radix: 16) else { return nil }
+                    (unit, length) = (value, 6)
+                default: return nil
+                }
+            }
+            out.append(unit)
+            starts.append(at - units.startIndex)
+            ends.append(at - units.startIndex + length)
+            at += length
+        }
+        starts.append(units.count)
+        return (out, starts, ends)
+    }
+
     private static func identifier(_ unit: UInt16, first: Bool) -> Bool {
         (65...90).contains(unit) || (97...122).contains(unit) || unit == 95 || unit == 36 || !first && (48...57).contains(unit)
     }
 
+    /// Spans less a part of a pasted object's key: "ledgerlyFees" stays the field's
+    /// name, though "Ledgerly" was read as someone, or the object it names breaks.
+    /// A span that is the whole key (a key that is a person's name) stays, but not
+    /// one that names a field ("password" beside a password that is the same word).
+    /// A key that holds data ("rosalind@example.org_token", "4417_pin") is read as any value.
+    static func outsideKeys(_ spans: [Span], in text: String) -> [Span] {
+        guard !spans.isEmpty, text.contains(":") || text.contains("=") else { return spans }
+        let keys = scan(text).keys
+        guard !keys.isEmpty else { return spans }
+        return spans.filter { span in
+            !keys.contains { key in
+                let name = TextRanges.substring(text, key)
+                return key.overlaps(span.range) && !KeyHints.holdsData(name) && (key != span.range || KeyHints.hint(name) != nil)
+            }
+        }
+    }
+
+    /// A record's dates that are a birth's, by its kind or a person's name beside them (see `KeyHints.birthField`).
+    /// `around`: the object holding this one, whose fields say whose an expiry in parts is ("card": {"last4": …, "expiration": {"month": …}}).
+    private static func births(_ level: Level, around: Level?) -> [Span] {
+        guard !level.dated.isEmpty || !level.expiring.isEmpty else { return [] }
+        let kind = Set(level.fields.filter { ["type", "kind", "object"].contains(KeyHints.words($0.0).joined()) }.flatMap { KeyHints.words($0.1) })
+        let born: [Span] = level.dated.compactMap { range, key, value in
+            guard let born = KeyHints.birthField(key, value: value, siblings: level.fields, kind: kind), KeyHints.fits(born, value) else { return nil }
+            return Span(range: range, entity: "DATE_OF_BIRTH", score: 1)
+        }
+        let expiring: [Span] = level.expiring.compactMap { range, key, value in
+            guard let expiry = KeyHints.expiry(key, siblings: level.keys, parent: level.key, kind: kind), KeyHints.fits(expiry, value) else { return nil }
+            return Span(range: range, entity: "EXPIRY_DATE", score: 1)
+        }
+        // An expiry written in parts: its object's own key names it, the object around it says it is a card's.
+        var parts: [Span] = []
+        if let key = level.key, KeyHints.isExpiryKey(key), let around, KeyHints.expiry(key, siblings: around.keys, parent: around.key, kind: []) != nil {
+            for (range, part, value) in level.dated where ["month", "year", "day", "mm", "yy", "yyyy", "dd"].contains(KeyHints.words(part).joined()) && value.contains(where: \.isNumber) {
+                parts.append(Span(range: range, entity: "EXPIRY_DATE", score: 1))
+            }
+        }
+        return born + expiring + parts
+    }
+    /// Whether a key holds a cookie header's pairs, not one cookie's value ("session_cookie").
+    static func cookieKey(_ key: String?) -> Bool {
+        ["cookie", "cookies", "setcookie", "cookieheader"].contains(KeyHints.words(key).joined())
+    }
+    /// What a set cookie says of itself, never a value to replace: "Path=/; Secure; SameSite=Lax".
+    private static let cookieAttributes: Set<String> = ["path", "domain", "expires", "maxage", "samesite", "secure", "httponly", "priority", "partitioned", "version", "comment"]
+    /// Parts of a cookie's name that say it holds a session or a credential, whatever its value looks like.
+    private static let sessionParts = ["sess", "sid", "token", "auth", "jwt", "csrf", "xsrf", "remember", "login", "secret", "key", "saml", "oauth"]
+    /// The values in a cookie header ("session=7f6e…; uid=u_55120; theme=dark") that are a secret or
+    /// someone's: a session's or a credential's, a person's ID or what its name says it is, or any
+    /// long generated token. Names, separators, settings ("theme=dark") and a set cookie's attributes
+    /// stay. Nil when the text is not written as pairs, so it is read whole.
+    static func cookies(_ text: String) -> [Span]? {
+        let ns = text as NSString
+        var spans: [Span] = [], pairs = 0, start = 0
+        for end in 0...ns.length where end == ns.length || ns.character(at: end) == semicolon {
+            defer { start = end + 1 }
+            let piece = NSRange(location: start, length: end - start)
+            let equal = ns.range(of: "=", range: piece)
+            guard equal.location != NSNotFound else {
+                // A flag ("Secure", "HttpOnly"), or nothing after a last separator.
+                let word = ns.substring(with: piece).trimmingCharacters(in: .whitespaces)
+                if word.isEmpty || cookieAttributes.contains(word.lowercased()) { continue }
+                return nil
+            }
+            let name = ns.substring(with: NSRange(location: start, length: equal.location - start)).trimmingCharacters(in: .whitespaces)
+            var lower = NSMaxRange(equal), upper = end
+            while lower < upper, [space, tab, doubleQuote].contains(ns.character(at: lower)) { lower += 1 }
+            while upper > lower, [space, tab, doubleQuote].contains(ns.character(at: upper - 1)) { upper -= 1 }
+            // A name is one token, and a value never opens with "=": "dGVzdA==" is a bare value, not a pair.
+            guard !name.isEmpty, name.unicodeScalars.allSatisfy({ $0.isASCII && $0.value > 32 && !"\"(),/:<>?@[]{}".unicodeScalars.contains($0) }),
+                  lower == upper || ns.character(at: lower) != equals else { return nil }
+            pairs += 1
+            guard lower < upper else { continue }
+            let value = ns.substring(with: NSRange(location: lower, length: upper - lower))
+            let compact = name.lowercased().filter { $0.isLetter || $0.isNumber }
+            let entity: String?
+            if cookieAttributes.contains(compact) { entity = nil }
+            else if RecordIDs.identifying(key: name, value: value) { entity = "RECORD_ID" }
+            else if let hint = KeyHints.hint(name), hint != "SECRET", KeyHints.fits(name, value) { entity = hint }
+            else if value.count >= 4, sessionParts.contains(where: compact.contains) { entity = "SECRET" }
+            else { entity = generatedToken(value) ? "SECRET" : nil }
+            if let entity { spans.append(Span(range: lower..<upper, entity: entity, score: 1)) }
+        }
+        return pairs > 0 ? spans : nil
+    }
+    /// A value a system made rather than a word or a setting: twelve characters or more of a token's
+    /// alphabet, with a digit ("GA1.2.1144832913.1696338125", "7f6e5d4c3b2a1908").
+    private static func generatedToken(_ value: String) -> Bool {
+        value.count >= 12 && value.contains(where: \.isNumber) && value.contains(where: { $0.isLetter }) || value.count >= 16 && value.allSatisfy(\.isNumber)
+            ? value.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "-_.+/=%~".contains($0)) }) : false
+    }
+    /// The length of the birth date, or the list of them, that opens an unquoted value going on to
+    /// something else ("2004-08-23, Ticket: 05252042103", "2015-06-17 and 1926-08-09 will be kept"),
+    /// or nil when the value is all date. What comes before the first word no date is written with
+    /// must hold a whole date, with its four-digit year: "12 März 1984" is left whole.
+    static func birthDateLength(_ value: String) -> Int? {
+        let ns = value as NSString
+        var end = 0, cut: Int?
+        for word in TextRanges.matches(wordPattern, in: value) {
+            let bare = ns.substring(with: word.range).lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ",.;*"))
+            let dated = bare.isEmpty || bare.allSatisfy({ $0.isNumber || "-/.:+,tz".contains($0) }) && bare.contains(where: \.isNumber)
+                || NameShape.months.contains(bare) || ["and", "or", "&", "of", "am", "pm", "utc", "gmt"].contains(bare)
+                || bare.range(of: #"^\d{1,2}(?:st|nd|rd|th)$"#, options: .regularExpression) != nil
+            if !dated { cut = end; break }
+            end = NSMaxRange(word.range)
+        }
+        guard let cut, cut > 0 else { return nil }
+        var length = cut
+        while length > 0, " \t,.;*".utf16.contains(ns.character(at: length - 1)) { length -= 1 }
+        let date = ns.substring(to: length)
+        guard date.range(of: #"(?<!\d)\d{4}(?!\d)"#, options: .regularExpression) != nil,
+              date.range(of: #"\d+\D+\d+\D+\d+|\p{L}"#, options: .regularExpression) != nil else { return nil }
+        return length
+    }
+    private static let wordPattern = TextPattern(#"\S+"#)
     static func find(_ text: String, isCancelled: () -> Bool = { false }) -> [Span] {
         scan(text, isCancelled: isCancelled).spans
     }
@@ -90,7 +245,16 @@ enum KeyedValues {
                     }
                 }
             }
+            if !level.codes.isEmpty, level.id > 0, level.keys.contains(where: { ["LOCATION", "POSTAL_CODE"].contains(KeyHints.hint($0) ?? "") }) {
+                for range in level.codes { found.spans.append(Span(range: range, entity: "REGION", score: 1)) }
+            }
             for (span, value) in level.names where KeyHints.bareNameIsPerson(value, siblings: level.keys, parent: level.key, inObject: level.id > 0) { found.spans.append(span) }
+            // A name's parts under keys of their own ({"surname": …, "given": …}), or the name written another way ("pinyin"), as in a file.
+            if level.id > 0, case let parts = KeyHints.nameParts(level.fields, parent: level.key), !parts.isEmpty {
+                for field in found.fields where field.level == level.id {
+                    if let part = parts[field.key], let entity = KeyHints.hint(part) { found.spans.append(Span(range: field.range, entity: entity, score: 1)) }
+                }
+            }
             // A person's own object: its "id" is theirs (see `RecordIDs`).
             let named = RecordIDs.isPersonCollection(KeyHints.words(level.key).last) || level.fields.contains(where: { RecordIDs.namesPersonType(key: $0.0, value: $0.1) })
             let beside = level.keys.contains(where: { ["PERSON", "FIRST_NAME", "LAST_NAME", "EMAIL_ADDRESS"].contains(KeyHints.hint($0) ?? "") })
@@ -98,6 +262,8 @@ enum KeyedValues {
             if !level.ids.isEmpty, named || beside, level.id > 0 || level.keys.count >= 3 {
                 for range in level.ids where named || !RecordIDs.isUUID(string(range)) { found.spans.append(Span(range: range, entity: "RECORD_ID", score: 1)) }
             }
+            // A record about a birth ({type: BIRTH, year: 1976}) or a person's search ({name: …, year: 1952}).
+            if level.id > 0 { found.spans += births(level, around: levels.last) }
             // Outside brackets every key in the text is a "sibling"; a form field's name must share its object.
             for (range, key, value) in level.unnamed where level.id > 0 {
                 if let field = KeyHints.namedField(key, siblings: level.fields), let entity = KeyHints.hint(field), KeyHints.fits(field, value) {
@@ -106,6 +272,7 @@ enum KeyedValues {
             }
         }
         var pending: String?
+        var nested: [Range<Int>] = []
         var point: (list: Int, count: Int)?
         var index = 0
         func skipSpace(_ from: Int) -> Int {
@@ -158,8 +325,9 @@ enum KeyedValues {
         func take(_ content: Range<Int>, key explicit: String? = nil, unquoted: Bool = false) {
             let parent = parentKey()
             let own = pending
-            let key: String? = explicit ?? own.map { KeyHints.resolve($0, parent: parent) } ?? (levels.last?.isArray == true ? parent : nil)
+            let listed = levels.count >= 2 && !levels[levels.count - 1].isArray && levels[levels.count - 2].isArray
             let value = string(content)
+            let key: String? = explicit ?? own.map { KeyHints.resolve($0, parent: parent, listed: listed, value: value) } ?? (levels.last?.isArray == true ? parent : nil)
             let trimmed = value.trimmingCharacters(in: .whitespaces)
             pending = nil
             guard !trimmed.isEmpty else { return }
@@ -174,12 +342,31 @@ enum KeyedValues {
                     found.spans.append(Span(range: content, entity: "TIME_ZONE", score: 1))
                 }
             }
-            // Escapes other than an escaped quote ("O\'Sullivan") would shift offsets, so those values are left to detection.
-            if units[content].contains(backslash) {
-                for at in content where units[at] == backslash && !(at + 1 < content.upperBound && (units[at + 1] == doubleQuote || units[at + 1] == singleQuote)) { return }
+            // A value with escapes other than an escaped quote ("O\'Sullivan") is read decoded
+            // ("Ren\u00e9") and replaced whole: a part of it would shift offsets.
+            var decoded: String?
+            if units[content].contains(backslash),
+               content.contains(where: { units[$0] == backslash && !($0 + 1 < content.upperBound && (units[$0 + 1] == doubleQuote || units[$0 + 1] == singleQuote)) }) {
+                guard !unquoted, case .string(let text)? = try? OrderedJSON.parse("\"" + value + "\""), !text.isEmpty else { return }
+                decoded = text.trimmingCharacters(in: .whitespaces)
             }
             if unquoted, !plausible(trimmed, key: key) { return }
+            // A number written with an exponent (1.2e2), or a point anywhere but a coordinate, would lose its grammar to a stand-in written as text.
+            if unquoted, !trimmed.allSatisfy({ $0.isASCII && $0.isNumber }), trimmed.first.map({ $0.isNumber || $0 == "-" }) == true,
+               case .number? = try? OrderedJSON.parse(trimmed),
+               trimmed.lowercased().contains("e") || !["LATITUDE", "LONGITUDE", "COORDINATES"].contains(KeyHints.hint(key) ?? "") { return }
+            // A cookie header's pairs ("Cookie: session=7f6e…; theme=dark"): each value read by its own name.
+            if decoded == nil, cookieKey(own ?? key), let pairs = cookies(string(content)) {
+                found.spans += pairs.map { Span(range: (content.lowerBound + $0.range.lowerBound)..<(content.lowerBound + $0.range.upperBound), entity: $0.entity, score: 1) }
+                return
+            }
             var content = content
+            // An unquoted value ends where its line goes on to another field after a bar ("Email: … | Mobile: …"):
+            // the rest is the next field's, read on its own, and never lost to this one's stand-in.
+            if unquoted, case let bar = (string(content) as NSString).range(of: #"[ \t]+\|[ \t]"#, options: .regularExpression), bar.location != NSNotFound {
+                guard bar.location > 0 else { return }
+                content = content.lowerBound..<(content.lowerBound + bar.location)
+            }
             // An unquoted secret is one token, after its scheme: "Authorization: Bearer 9f8e… rejected".
             if unquoted, KeyHints.hint(key) == "SECRET" {
                 var tokens: [Range<Int>] = []
@@ -194,15 +381,33 @@ enum KeyedValues {
                 let scheme = ["bearer", "basic", "token", "digest", "apikey"].contains(string(first).lowercased())
                 content = scheme && tokens.count > 1 ? tokens[1] : first
             }
-            let taken = string(content)
+            // A birth date written inline ends where the line goes on to another field or a sentence ("DOB: 2004-08-23, Ticket: …").
+            if unquoted, decoded == nil, KeyHints.hint(key) == "DATE_OF_BIRTH", let length = birthDateLength(string(content)) {
+                content = content.lowerBound..<(content.lowerBound + length)
+            }
+            // A phone written inline ends where the line goes on to another field ("Phone: +370 698 76543, email: …").
+            if unquoted, decoded == nil, KeyHints.hint(key) == "PHONE_NUMBER", let rest = string(content).range(of: #"[,;][ \t]+\p{L}"#, options: .regularExpression) {
+                let length = (String(string(content)[..<rest.lowerBound]) as NSString).length
+                if length > 0 { content = content.lowerBound..<(content.lowerBound + length) }
+            }
+            let taken = decoded ?? string(content)
             if var entity = KeyHints.hint(key), KeyHints.fits(key, taken) {
                 // A bare number keeps a bare number's stand-in, or the code around it breaks.
-                if unquoted, trimmed.allSatisfy({ $0.isASCII && $0.isNumber }), !["PHONE_NUMBER", "US_SSN", "ID_NUMBER", "POSTAL_CODE", "DATE_OF_BIRTH", "SECRET", "AGE", "LAST_DIGITS"].contains(entity) { entity = "ID_NUMBER" }
+                if unquoted, trimmed.allSatisfy({ $0.isASCII && $0.isNumber }), !["PHONE_NUMBER", "US_SSN", "ID_NUMBER", "POSTAL_CODE", "DATE_OF_BIRTH", "SECRET", "AGE", "LAST_DIGITS", "ADDRESS"].contains(entity) { entity = "ID_NUMBER" }
                 let span = Span(range: content, entity: entity, score: 1)
                 if KeyHints.isBareName(own) { levels[levels.count - 1].names.append((span, taken)) }
                 else { found.spans.append(span) }
+            } else if decoded != nil {
+                return
+            } else if KeyHints.regionCode(key, taken) {
+                levels[levels.count - 1].codes.append(content)
             } else if let own, KeyHints.fieldValueKeys.contains(KeyHints.words(own).joined()) {
                 levels[levels.count - 1].unnamed.append((content, own, taken))
+                if KeyHints.hint(key) == nil { levels[levels.count - 1].dated.append((content, own, taken)) }
+            } else if let own, KeyHints.hint(key) == nil, KeyHints.isExpiryKey(own) {
+                levels[levels.count - 1].expiring.append((content, own, taken))
+            } else if let own, KeyHints.hint(key) == nil, KeyHints.mayBeBirthPart(own) {
+                levels[levels.count - 1].dated.append((content, own, taken))
             } else if KeyHints.hint(key) == nil, RecordIDs.identifying(key: key, value: taken) {
                 // "customer_id": "cus_4TUvJh" in a pasted body: the person's ID, as in a file.
                 found.spans.append(Span(range: content, entity: "RECORD_ID", score: 1))
@@ -219,7 +424,7 @@ enum KeyedValues {
             if literals.contains(value.lowercased()) || quoted.contains(where: { "(\"'\\`".contains($0) }) || value.hasSuffix(";") { return false }
             guard let entity = KeyHints.hint(key), ["PERSON", "FIRST_NAME", "LAST_NAME", "LOCATION"].contains(entity) else { return true }
             // A name is capitalised; one token with dots, underscores or a dollar sign is an identifier.
-            guard value.first?.isUppercase == true else { return false }
+            guard value.first.map({ $0.isUppercase || !$0.isCased }) == true else { return false }
             return value.contains(" ") || !value.contains(where: { $0 == "." || $0 == "_" || $0 == "$" })
         }
         /// The unquoted value after a key, up to the end of the line (or, inside
@@ -309,9 +514,12 @@ enum KeyedValues {
                 }
                 if let next = separator(after: end + 1) {
                     found.structural.append(content)
+                    found.keys.append(content)
                     startsKey(string(content), at: index, resumingAt: next, colon: units[skipSpace(end + 1)] == colon)
                     continue
                 }
+                // A body sent as a string ("body": "{\"password\": …}") is read inside, after its quotes.
+                if inner < end, units[inner] == openObject || units[inner] == openArray, units[content].contains(backslash) { nested.append(content) }
                 take(content)
                 index = end + 1
                 continue
@@ -319,7 +527,8 @@ enum KeyedValues {
             switch unit {
             case openObject, openArray:
                 let parent = parentKey()
-                let key = pending.map { KeyHints.resolve($0, parent: parent) } ?? (levels.last?.isArray == true ? parent : nil)
+                let listed = levels.count >= 2 && !levels[levels.count - 1].isArray && levels[levels.count - 2].isArray
+                let key = pending.map { KeyHints.resolveContainer($0, parent: parent, listed: listed) } ?? (levels.last?.isArray == true ? parent : nil)
                 found.parents.append(levels.last?.id)
                 levels.append(Level(key: key, isArray: unit == openArray, id: found.parents.count - 1))
                 pending = nil
@@ -374,7 +583,7 @@ enum KeyedValues {
                     while end < units.count, identifier(units[end], first: false) || units[end] == hyphen && end + 1 < units.count && identifier(units[end + 1], first: false) { end += 1 }
                     if let next = separator(after: end) {
                         // A capitalised word before a colon in prose may be a name ("Ticket from Daniel Ferreira: …").
-                        if !inYAML() || !(65...90).contains(unit) { found.structural.append(index..<end) }
+                        if !inYAML() || !(65...90).contains(unit) { found.structural.append(index..<end); found.keys.append(index..<end) }
                         startsKey(string(index..<end), at: index, resumingAt: next, colon: units[skipSpace(end)] == colon)
                         continue
                     }
@@ -391,6 +600,37 @@ enum KeyedValues {
             }
         }
         levels.reversed().forEach(close)
+        for range in nested {
+            // The body read as its string decodes, each unit knowing the escape it was written with, so a body
+            // escaped again inside it (a log's payload holding a response's body) is read as one level is.
+            if let (body, starts, ends) = decoded(units[range]) {
+                let inner = scan(String(utf16CodeUnits: body, count: body.count), isCancelled: isCancelled)
+                func moved(_ r: Range<Int>) -> Range<Int> { (range.lowerBound + starts[r.lowerBound])..<(range.lowerBound + (r.isEmpty ? starts[r.lowerBound] : ends[r.upperBound - 1])) }
+                found.spans += inner.spans.map { Span(range: moved($0.range), entity: $0.entity, score: $0.score) }
+                found.structural += inner.structural.map(moved)
+                found.keys += inner.keys.map(moved)
+                continue
+            }
+            // Escapes JSON has no reading for: each escaped quote becomes a space and a quote, so the body keeps its length and every offset.
+            var body = Array(units[range])
+            var at = 0
+            while at + 1 < body.count {
+                if body[at] == backslash, body[at + 1] == doubleQuote { body[at] = space }
+                at += body[at] == backslash ? 2 : 1
+            }
+            let inner = scan(String(utf16CodeUnits: body, count: body.count), isCancelled: isCancelled)
+            func moved(_ r: Range<Int>) -> Range<Int> { (r.lowerBound + range.lowerBound)..<(r.upperBound + range.lowerBound) }
+            // A value ends before the space its closing quote's backslash became.
+            found.spans += inner.spans.compactMap { span in
+                var end = span.range.upperBound
+                while end > span.range.lowerBound, body[end - 1] == space { end -= 1 }
+                return end > span.range.lowerBound ? Span(range: moved(span.range.lowerBound..<end), entity: span.entity, score: span.score) : nil
+            }
+            found.structural += inner.structural.map(moved)
+            found.keys += inner.keys.map(moved)
+        }
+        // YAML's nested mappings write their fields at the root's level: a search's name and year are read there.
+        for level in levels { found.spans += births(level, around: nil) }
         found.spans.sort { $0.range.lowerBound < $1.range.lowerBound }
         return found
     }

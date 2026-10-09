@@ -1,5 +1,5 @@
 import Foundation
-import ScrubCore
+@testable import ScrubCore
 import Testing
 
 @Test func inputRefusals() {
@@ -16,6 +16,72 @@ func chunkOneRoutesTextLikeInput(_ name: String) throws {
     #expect(result.counts["EMAIL_ADDRESS"] == 1)
 }
 
+/// Pasted JSON Lines are read as JSON, one document a line: every separator stays as
+/// written, every line still parses, and one value written on two lines takes one stand-in.
+@Test func pastedJSONLinesAreReadAsJSON() throws {
+    let input = "{\"email\":\"a@example.org\",\"count\":1}\n{\"email\":\"b@example.org\",\"count\":2}\r\n\n  \n{\"email\":\"a@example.org\",\"count\":3}\n"
+    let result = try Scrubber.scrub(Data(input.utf8), name: "Pasted text", forceFullDetection: false, seed: 7)
+    let output = String(decoding: result.output, as: UTF8.self)
+    #expect(result.format == "jsonl")
+    #expect(!output.contains("a@example.org") && !output.contains("b@example.org"), "\(output)")
+    let separators = output.split(separator: "}", omittingEmptySubsequences: false).dropFirst().map { String($0.prefix { $0 != "{" }) }
+    #expect(separators == ["\n", "\r\n\n  \n", "\n"], "\(output)")
+    let lines = output.split(whereSeparator: { $0.isNewline }).map(String.init).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    let objects = lines.compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+    #expect(objects.count == 3)
+    #expect(objects.map { $0["count"] as? Int } == [1, 2, 3])
+    #expect(objects[0]["email"] as? String == objects[2]["email"] as? String)
+    #expect(objects[0]["email"] as? String != objects[1]["email"] as? String)
+}
+
+@Test(arguments: ["a.jsonl", "a.ndjson"])
+func jsonLinesFilesAreReadAsJSON(_ name: String) throws {
+    let input = "{\"email\":\"a@example.org\",\"count\":1}\n[{\"password\":\"quillharbor\"}]\n"
+    let result = try Scrubber.scrub(Data(input.utf8), name: name, forceFullDetection: false, seed: 7)
+    let output = String(decoding: result.output, as: UTF8.self)
+    #expect(result.format == "jsonl")
+    #expect(!output.contains("a@example.org") && !output.contains("quillharbor") && output.contains("\"count\":1}\n["), "\(output)")
+    #expect(throws: ScrubError.unsupported("invalid_json")) { try Scrubber.scrub(Data("{\"email\":\"a@example.org\"}\nnot json\n".utf8), name: name) }
+}
+
+/// A JSON Lines file may write a string, a number, true, false or null a line: each is read, its line breaks kept.
+@Test(arguments: ["a.jsonl", "a.ndjson"])
+func jsonLinesFilesReadScalarLines(_ name: String) throws {
+    let input = "\"alice@example.org\"\n{\"email\":\"bob@example.org\"}\r\n42\n\ntrue\nnull\n"
+    let result = try Scrubber.scrub(Data(input.utf8), name: name, forceFullDetection: false, seed: 7)
+    let output = String(decoding: result.output, as: UTF8.self)
+    #expect(result.format == "jsonl")
+    #expect(!output.contains("alice@example.org") && !output.contains("bob@example.org"), "\(output)")
+    let lines = output.components(separatedBy: "\n")
+    #expect(lines.count == 7 && lines[1].hasSuffix("}\r") && lines[2...] == ["42", "", "true", "null", ""], "\(output)")
+    let email = try #require(try JSONSerialization.jsonObject(with: Data(lines[0].utf8), options: .fragmentsAllowed) as? String)
+    #expect(email.contains("@"), "\(output)")
+}
+
+/// Pasted lines are JSON Lines only with an object or a list among them: quoted lines alone are text.
+@Test func pastedQuotedLinesStayText() throws {
+    let input = "\"first line\"\n\"write to alice@example.org\"\n"
+    let result = try Scrubber.scrub(Data(input.utf8), name: "Pasted text", forceFullDetection: false, seed: 7)
+    #expect(result.format == "text")
+    #expect(try JSONSource.lines(in: input) == nil)
+}
+
+/// A stray NUL in text is a character like any other; a file that is mostly NULs is no text.
+@Test(arguments: ["\"test\u{0}\"@iana.org reported", "(\u{0})test@example.com", "line one\u{0}\nwrite to test@example.com\n"])
+func textWithAStrayNULIsScrubbed(_ text: String) throws {
+    for name in ["doc.txt", "Pasted text"] {
+        let result = try Scrubber.scrub(Data(text.utf8), name: name, forceFullDetection: false, seed: 7)
+        let output = String(decoding: result.output, as: UTF8.self)
+        #expect(output.contains("\u{0}") && !output.contains("test@example.com"), "\(name): \(output)")
+    }
+}
+
+@Test func mostlyNULFilesAreRefused() {
+    let wide = Data("write to test@example.com".utf16.flatMap { [UInt8($0 & 0xFF), UInt8($0 >> 8)] })
+    #expect(throws: ScrubError.unsupported("binary_file")) { try Scrubber.scrub(wide, name: "a.txt") }
+    #expect(throws: ScrubError.unsupported("binary_file")) { try Scrubber.scrub(Data([0x41, 0, 0, 0, 0x42, 0, 0, 0]), name: "a.txt") }
+}
+
 @Test func digitsKeepShapeAndNeverEqualOriginal() {
     for _ in 0..<200 {
         let job = Job()
@@ -23,4 +89,19 @@ func chunkOneRoutesTextLikeInput(_ name: String) throws {
         #expect(fake.count == 1 && fake != "7" && fake.first != "0")
         #expect(job.digits("7") == fake)
     }
+}
+
+/// Two paragraphs whose commas happen to match are prose, not a table whose first paragraph is a header
+/// left as written: every person in either is replaced.
+@Test(arguments: [UInt64(3), 14])
+func paragraphsWithMatchingCommasAreNoTable(_ seed: UInt64) throws {
+    let text = """
+    Halvard Brennick (client CL-88213, halvard.brennick@example.org, SSN 219-09-9999, born June 3, 1979) is 46 years old. He called about the refund.
+
+    Ysolde Marrick (client CL-77104, ysolde.marrick@example.net, SSN 078-05-1120, born January 9, 1984) is 41 years old. She asked for a statement.
+    """
+    #expect(try Scrubber.classify(Data(text.utf8), name: "Pasted text") == "text")
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: seed)
+    let output = String(decoding: result.output, as: UTF8.self)
+    for word in ["Brennick", "Marrick", "June 3", "January 9", "219-09-9999", "078-05-1120"] { #expect(!output.contains(word), "\(word) left: \(output)") }
 }

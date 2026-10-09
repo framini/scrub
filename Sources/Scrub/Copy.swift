@@ -12,7 +12,7 @@ enum Copy {
     ]
     static let howItWorksFooter = "macOS sandboxes the app with no network access, so nothing can be sent anywhere."
 
-    static let formats = "JSON · XML · CSV · TXT · MD · LOG"
+    static let formats = "JSON · JSONL · XML · CSV · TXT · MD · LOG"
 
     static func label(_ entity: String) -> String {
         switch entity {
@@ -23,7 +23,7 @@ enum Copy {
         case "LOCATION", "REGION", "LATITUDE", "LONGITUDE", "COORDINATES", "TIME_ZONE": "Places"
         case "DATE_OF_BIRTH", "AGE": "Birth dates"
         case "US_SSN": "SSNs"
-        case "CREDIT_CARD": "Cards"
+        case "CREDIT_CARD", "EXPIRY_DATE": "Cards"
         case "IBAN_CODE", "US_BANK_NUMBER": "Bank accounts"
         case "IP_ADDRESS": "IP addresses"
         case "SECRET": "Secrets"
@@ -40,10 +40,11 @@ enum Copy {
         case "PERSON", "FIRST_NAME", "LAST_NAME", "INITIALS": "Name"
         case "EMAIL_ADDRESS": "Email"
         case "PHONE_NUMBER": "Phone"
-        case "ADDRESS", "POSTAL_CODE": "Address"
+        case "ADDRESS", "POSTAL_CODE": "Street or address"
         case "LOCATION", "REGION", "LATITUDE", "LONGITUDE", "COORDINATES", "TIME_ZONE": "Place"
         case "DATE_OF_BIRTH", "AGE": "Birth date"
         case "SECRET": "Secret"
+        case "EXPIRY_DATE": "Expiry date"
         case "USERNAME": "Username"
         case "EMPLOYER": "Employer"
         case "RECORD_ID": "Record ID"
@@ -66,6 +67,8 @@ enum Copy {
         case .unconfirmed: finding.entity == "ADDRESS" ? "Looks like a street or a house, but nothing beside it says it is an address"
             : "Looks like a name, but nothing else in the text agrees"
         case .unclearOwner: "More than one person nearby could own this; it follows the first"
+        case .nameResidue: "Part of a name Scrub replaced elsewhere"
+        case .personIdentifier: "Looks like an identifier in this person's record"
         case nil: finding.suspected ? "Written like a value Scrub replaced, but not surely it" : nil
         }
     }

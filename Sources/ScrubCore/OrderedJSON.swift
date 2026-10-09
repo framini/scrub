@@ -10,7 +10,7 @@ enum JSONValue {
 }
 
 enum OrderedJSON {
-    private static let numberGrammar = TextPattern(#"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$"#)
+    static let numberGrammar = TextPattern(#"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$"#)
     static func parse(_ text: String) throws -> JSONValue {
         var reader = Reader(Array(text.utf8))
         let value = try reader.value()
@@ -34,6 +34,25 @@ enum OrderedJSON {
             }
         }
         return out + "\""
+    }
+    /// `string` as a JSON string token, and `marks` over it moved to where each
+    /// part is written once escaped.
+    static func quoted(_ string: String, marks source: [Mark]) -> (String, [Mark]) {
+        if source.isEmpty { return (quote(string), []) }
+        var output = "\"", length = 1, marks: [Mark] = []
+        func write(_ text: String) { output += text; length += text.utf16.count }
+        func escaped(_ range: Range<Int>) -> String { String(quote(TextRanges.substring(string, range)).dropFirst().dropLast()) }
+        var cursor = 0
+        for mark in source.sorted(by: { $0.range.lowerBound < $1.range.lowerBound }) where mark.range.lowerBound >= cursor {
+            write(escaped(cursor..<mark.range.lowerBound))
+            let start = length
+            write(escaped(mark.range))
+            marks.append(mark.moved(to: start..<length))
+            cursor = mark.range.upperBound
+        }
+        write(escaped(cursor..<(string as NSString).length))
+        write("\"")
+        return (output, marks)
     }
     static func render(_ value: JSONValue, valueMarks: [String: [Mark]] = [:], keyMarks: [String: [Mark]] = [:]) -> (String, [Mark]) {
         var output = ""
@@ -150,9 +169,10 @@ enum OrderedJSON {
             while index < bytes.count {
                 let byte = bytes[index]
                 index += 1
+                if byte < 32 { throw ScrubError.unsupported("invalid_json") }
                 if byte == 34 && !escaped {
-                    let data = Data(bytes[start..<index])
-                    guard let decoded = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) as? String else { throw ScrubError.unsupported("invalid_json") }
+                    let inside = Array(String(decoding: bytes[(start + 1)..<(index - 1)], as: UTF8.self).utf16)
+                    guard let decoded = JSONSource.unescape(inside[...]) else { throw ScrubError.unsupported("invalid_json") }
                     return decoded
                 }
                 if byte == 92 && !escaped { escaped = true } else { escaped = false }

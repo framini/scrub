@@ -9,7 +9,9 @@ public enum CSVFile: FileFormat {
         var text = try TextFile.decode(data)
         let (delimiter, quoteCharacter) = sniffFormat(text)
         let newline = text.contains("\r\n") ? "\r\n" : text.contains("\r") ? "\r" : "\n"
-        var rows = try parse(text, delimiter: delimiter, quoteCharacter: quoteCharacter)
+        // The cells written in quotes, by row and column, which stay quoted as written.
+        var quotedCells: Set<Int> = []
+        var rows = try parse(text, delimiter: delimiter, quoteCharacter: quoteCharacter) { row, column in quotedCells.insert(row << 20 | column) }
         text = ""
         guard !rows.isEmpty else { throw ScrubError.unsupported("empty_file") }
         let width = rows.map(\.count).max() ?? 0
@@ -59,36 +61,109 @@ public enum CSVFile: FileFormat {
         })
         // Whether the columns make a bare "name" a person's, read once for every cell.
         let personsRecord = KeyHints.isPersonsRecord(siblings: keys, parent: nil)
+        // A bare "name" column at least half of whose cells are people's names holds people's names in the rest:
+        // "Venkataraman" under "Name" beside "Тобиас Хальворсен".
+        let peopleColumns = Set(keys.indices.filter { column in
+            guard KeyHints.isBareName(keys[column]) else { return false }
+            let cells = rows.indices.compactMap { column < rows[$0].count ? rows[$0][column] : nil }.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            let people = cells.filter { KeyHints.bareNameIsPerson($0, personsRecord: personsRecord) }.count
+            return people > 0 && people * 2 >= cells.count
+        })
+        // A column of surnames, by its header or by its cells, makes a column beside it under a header Scrub
+        // can't read one of given names when at least half its cells are given names a list holds, and the
+        // two found by their cells alone are a person's name's parts: "Ilze" beside "Bērziņa".
+        let nameColumns: [Int: String] = {
+            func listed(_ column: Int, _ isListed: (String) -> Bool) -> Bool {
+                guard column >= 0, column < keys.count, KeyHints.hint(keys[column]) == nil, !naming.contains(column) else { return false }
+                let cells = rows.prefix(200).compactMap { column < $0.count ? $0[column].trimmingCharacters(in: .whitespaces) : nil }.filter { !$0.isEmpty }
+                let listed = cells.filter { cell in
+                    cell.first?.isUppercase == true && cell.split(separator: " ").count <= 2 && cell.allSatisfy { $0.isLetter || " '’-".contains($0) }
+                        && cell.split(whereSeparator: { $0 == " " || $0 == "-" }).allSatisfy { isListed(String($0)) && !NameLists.isWordlike(String($0)) }
+                }.count
+                return listed > 0 && listed * 2 >= cells.count
+            }
+            var found: [Int: String] = [:]
+            for column in keys.indices {
+                let surnames = KeyHints.hint(keys[column]) == "LAST_NAME", bySurnames = !surnames && listed(column, NameLists.isSurname)
+                guard surnames || bySurnames else { continue }
+                for beside in [column - 1, column + 1] where listed(beside, NameLists.isFirst) {
+                    found[beside] = "first_name"
+                    if bySurnames { found[column] = "last_name" }
+                }
+            }
+            return found
+        }()
+        // A cell holding a body (as JSON, or in base64) is read as a JSON string holding one is,
+        // its values read before the cells' and written again in the body's own form.
+        let collector = JSONDocument.Collector()
+        // A body's records are numbered past the rows', which number their own: each body
+        // joins its row's record, and none takes another row's.
+        collector.nextRecord = rows.count
+        var embedded: [Int: (document: JSONDocument, encoded: Bool, original: String)] = [:]
+        var position = -1
         for row in rows.indices {
             if row.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
+            // A name's parts in columns of their own ("fn", "ln"), read as in a JSON record.
+            let nameParts = KeyHints.nameParts(keys.indices.compactMap { $0 < rows[row].count ? (keys[$0], rows[row][$0]) : nil })
             for column in rows[row].indices {
+                position += 1
                 var key = column < keys.count ? keys[column] : nil
                 // A column naming fields holds field names ("zip", "email"), and a bare
                 // "name" is a person's only as it is in JSON.
-                if naming.contains(column) || KeyHints.isBareName(key) && !KeyHints.bareNameIsPerson(rows[row][column], personsRecord: personsRecord) { key = nil }
+                // Under a list of a person's other names ("aka.0.name") a name is one whatever it is.
+                // A row may run past its header: its extra cells have no column.
+                let underNames = column < parents.count && ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(KeyHints.hint(parents[column].filter { !$0.allSatisfy(\.isNumber) }.joined(separator: "_")) ?? "")
+                let cell = rows[row][column], peopleColumn = peopleColumns.contains(column) && cell.split(separator: " ").count <= 5 && cell.first?.isUppercase == true && cell.allSatisfy { $0.isLetter || " .'’-".contains($0) }
+                var unsure = false
+                if naming.contains(column) { key = nil }
+                else if KeyHints.isBareName(key) && !underNames && !peopleColumn && !KeyHints.bareNameIsPerson(cell, personsRecord: personsRecord) && !KeyHints.spelledByEmail(cell, in: rows[row]) {
+                    key = nil
+                    unsure = KeyHints.writtenAsName(cell, parent: column < parents.count ? parents[column].joined(separator: "_") : nil)
+                }
                 if let fields = owned[column], KeyHints.ownRecord(fields, value: rows[row][column]) { key = "name" }
+                if KeyHints.holdsWholeName(key, value: cell, siblings: keys.compactMap { $0 }) { key = "name" }
+                if KeyHints.hint(key) == nil, column < keys.count, let part = nameParts[keys[column]] { key = part }
+                if KeyHints.hint(key) == nil, let part = nameColumns[column], !naming.contains(column) { key = part }
                 if let siblings = named[column] {
                     let texts = siblings.compactMap { $0 < rows[row].count ? (KeyHints.words(columns[$0]).last!, rows[row][$0]) : nil }
-                    key = KeyHints.namedField("value", siblings: texts) ?? key
+                    // Or by the code its type column writes ("ident_type": "CC"), one no table knows asked about.
+                    if let field = KeyHints.namedField("value", siblings: texts) { key = field }
+                    else if let field = KeyHints.pairedFields(["value"], strings: texts)["value"], KeyHints.hint(key) == nil, !KeyHints.cardLike(cell) {
+                        key = field.isEmpty ? PersonIdentifiers.typedKey : field
+                    }
                 }
                 let header = column < columns.count ? columns[column] : ""
-                leaves.append(DocumentLeaf(rows[row][column], key: key, records: [row], objectPath: header.contains(".") ? String(header[..<header.lastIndex(of: ".")!]).lowercased() : ""))
+                switch collector.embed(rows[row][column], key: key, records: [row], keys: header.isEmpty ? [] : [header]) {
+                case .document(let document, let encoded): embedded[position] = (document, encoded, rows[row][column])
+                case .opaque: leaves.append(JSONDocument.opaque(rows[row][column], records: [row]))
+                case .none:
+                    var leaf = DocumentLeaf(rows[row][column], key: key, records: [row], objectPath: header.contains(".") ? String(header[..<header.lastIndex(of: ".")!]).lowercased() : "")
+                    leaf.unsureName = unsure && key == nil
+                    leaf.reading = .line(key: header, siblings: Array(columns.prefix(15)))
+                    leaves.append(leaf)
+                }
             }
         }
+        // The bodies' values come first, where their documents look them up; the cells' after.
+        let documents = embedded.isEmpty ? [] : collector.leaves, bodies = documents.count
+        if bodies > 0 { leaves = documents + leaves }
         var headerIDs: [Int] = []
         if hasHeader {
             for column in columns.indices {
                 headerIDs.append(leaves.count)
-                leaves.append(DocumentLeaf(columns[column], fieldName: true))
+                var header = DocumentLeaf(columns[column], fieldName: true)
+                header.isKey = true
+                leaves.append(header)
             }
         }
         // A heading's own long digits ("order_48213907") are drawn first, as in
         // a JSON key, so a cell writing the same number is replaced alike.
-        let drawn = hasHeader ? JSONFile.drawDigits(columns, job: job) : [:]
+        let drawn = JSONFile.drawDigits((hasHeader ? columns : []) + collector.names, job: job)
         progress(.finding, 0, leaves.count)
         var values = try DocumentPipeline.run(leaves, job: job, forceFullDetection: forceFullDetection, progress: progress)
         if !drawn.isEmpty {
             for index in headerIDs { values[index] = JSONFile.rewritingOwnText(values[index]) { JSONFile.replaceDigits($0, drawn: drawn) } }
+            for body in embedded.values { body.document.writeKeyDigits(&values, drawn: drawn) }
         }
         let records = leaves.map(\.lastRecord)
         let found = leaves.count
@@ -102,15 +177,22 @@ public enum CSVFile: FileFormat {
             var rows = widths.map { [String](repeating: "", count: $0) }, columns = headings
             var marks: [TableMark] = []
             let unresolved = values.flatMap(\.unresolved)
-            var valueIndex = 0
+            var valueIndex = bodies, position = -1
             for row in rows.indices {
                 if row.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
                 for column in rows[row].indices {
-                    rows[row][column] = values[valueIndex].text
-                    if row < previewRows {
-                        marks += values[valueIndex].marks.map { TableMark(row: row, column: column, range: $0.range, entity: $0.entity, byHand: $0.byHand) }
+                    position += 1
+                    let (text, placed): (String, [Mark])
+                    if let body = embedded[position] {
+                        (text, placed) = JSONDocument.written(body.document, encoded: body.encoded, values) ?? (body.original, [])
+                    } else {
+                        (text, placed) = (values[valueIndex].text, values[valueIndex].marks)
+                        valueIndex += 1
                     }
-                    valueIndex += 1
+                    rows[row][column] = text
+                    if row < previewRows {
+                        marks += placed.map { TableMark(row: row, column: column, range: $0.range, entity: $0.entity, byHand: $0.byHand) }
+                    }
                 }
             }
             for (column, index) in headerIDs.enumerated() {
@@ -147,23 +229,24 @@ public enum CSVFile: FileFormat {
             }
             var output = Data()
             output.reserveCapacity(data.count + data.count / 4)
-            func append(_ row: [String]) {
+            func append(_ row: [String], at line: Int) {
                 for column in row.indices {
                     if column > 0 { output.append(contentsOf: String(delimiter).utf8) }
-                    output.append(contentsOf: quote(row[column], delimiter: delimiter, quoteCharacter: quoteCharacter).utf8)
+                    output.append(contentsOf: quote(row[column], delimiter: delimiter, quoteCharacter: quoteCharacter, always: quotedCells.contains(line << 20 | column)).utf8)
                 }
                 output.append(contentsOf: newline.utf8)
             }
-            if hasHeader { append(columns) }
+            if hasHeader { append(columns, at: 0) }
             for (index, row) in rows.enumerated() {
                 if index.isMultiple(of: 1024) { try Scrubber.checkCancellation() }
-                append(row)
+                append(row, at: index + (hasHeader ? 1 : 0))
             }
             return ScrubResult(format: "csv", output: output, preview: .table(columns: previewColumns, rows: Array(rows.prefix(previewRows)), rowCount: rows.count, marks: marks), counts: counts, unresolved: unresolved, neutralized: neutralized)
         }
         progress(.checking, 0, 1)
         var result = try render(values, counts: job.counts)
-        result.review = Review(values: values, counts: job.counts, records: records, people: job.personLinks(), render: render)
+        // A body's numbers stay numbers through every edit, as a .json file's do.
+        result.review = Review(values: values, counts: job.counts, records: records, people: job.personLinks(), numeric: Set(documents.indices.filter { documents[$0].numericEntity != nil }), render: render)
         progress(.checking, 1, 1)
         return result
     }
@@ -193,7 +276,7 @@ public enum CSVFile: FileFormat {
         }
         return best
     }
-    static func parse(_ text: String, delimiter: Character, quoteCharacter: Character = "\"", incompleteFinalRecord: Bool = false, onQuotedField: (() -> Void)? = nil) throws -> [[String]] {
+    static func parse(_ text: String, delimiter: Character, quoteCharacter: Character = "\"", incompleteFinalRecord: Bool = false, onQuotedField: ((_ row: Int, _ column: Int) -> Void)? = nil) throws -> [[String]] {
         var rows: [[String]] = []
         var row: [String] = []
         var field = ""
@@ -210,7 +293,7 @@ public enum CSVFile: FileFormat {
                     if index + 1 < chars.count && chars[index + 1] == quote { field.unicodeScalars.append(char); index += 1 }
                     else { quoted = false }
                 } else { field.unicodeScalars.append(char) }
-            } else if char == quote && field.isEmpty { quoted = true; onQuotedField?() }
+            } else if char == quote && field.isEmpty { quoted = true; onQuotedField?(rows.count, row.count) }
             else if char == separator { row.append(field); field = "" }
             else if char == "\n" || char == "\r" {
                 row.append(field); field = ""
@@ -253,8 +336,9 @@ public enum CSVFile: FileFormat {
         }
         return nil
     }
-    private static func quote(_ cell: String, delimiter: Character, quoteCharacter: Character) -> String {
-        guard cell.contains(delimiter) || cell.contains(quoteCharacter) || cell.contains("\r") || cell.contains("\n") else { return cell }
+    /// `always`: the cell was written in quotes it didn't need, and keeps them.
+    private static func quote(_ cell: String, delimiter: Character, quoteCharacter: Character, always: Bool = false) -> String {
+        guard always || cell.contains(delimiter) || cell.contains(quoteCharacter) || cell.contains("\r") || cell.contains("\n") else { return cell }
         let quote = String(quoteCharacter)
         return quote + cell.replacingOccurrences(of: quote, with: quote + quote) + quote
     }

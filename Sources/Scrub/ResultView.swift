@@ -35,7 +35,8 @@ struct ResultView: View {
         .background(Color.snow, in: .rect(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.rule))
         .sheet(isPresented: Binding(get: { model.reviewing }, set: { if !$0 { model.cancelReview() } })) {
-            ReviewView(findings: finished.result.uncertain.map(finished.result.revised), choices: finished.choices, onDone: { model.finishReview($0) }, onCancel: { model.cancelReview() })
+            ReviewView(findings: finished.result.uncertain.map(finished.result.revised), choices: finished.choices, onDone: { model.finishReview($0) }, onCancel: { model.cancelReview() },
+                       onKind: { finding, kind in model.changeKind(of: [finding.id], to: kind) })
                 .preferredColorScheme(.light)
         }
         .sheet(item: Binding(get: { model.placing }, set: { model.placing = $0 })) { finding in

@@ -15,6 +15,59 @@ import Testing
     } else { Issue.record("Expected table preview") }
 }
 
+/// A cell holding a body in base64 or as JSON is read inside, as a JSON string's is: each row's
+/// body written again in its own form, one stand-in for one value, the row's other cells kept.
+@Test(arguments: ["Pasted text", "a.csv"])
+func csvCellsHoldingBodiesAreScrubbedInside(_ name: String) throws {
+    let encoded = "eyJwYXNzd29yZCI6InF1aWxsaGFyYm9yIn0="
+    let input = "id,payload,note\n1,\(encoded),\"{\"\"email\"\":\"\"a@example.org\"\",\"\"status\"\":\"\"ok\"\"}\"\n2,\(encoded),\"{\"\"email\"\":\"\"a@example.org\"\",\"\"status\"\":\"\"ok\"\"}\"\n"
+    let result = try Scrubber.scrub(Data(input.utf8), name: name, forceFullDetection: false, seed: 7)
+    let output = String(decoding: result.output, as: UTF8.self)
+    #expect(result.format == "csv")
+    let rows = try CSVFile.parse(output, delimiter: ",")
+    #expect(rows.count == 3 && rows.allSatisfy { $0.count == 3 }, "\(output)")
+    guard rows.count == 3, rows.allSatisfy({ $0.count == 3 }) else { return }
+    #expect(rows[1][0] == "1" && rows[2][0] == "2")
+    #expect(rows[1][1] != encoded && rows[1][1] == rows[2][1], "\(output)")
+    let decoded = try #require(Data(base64Encoded: rows[1][1]).flatMap { String(data: $0, encoding: .utf8) })
+    #expect(decoded.hasPrefix(#"{"password":""#) && !decoded.contains("quillharbor"), "\(decoded)")
+    let note = try #require(try JSONSerialization.jsonObject(with: Data(rows[1][2].utf8)) as? [String: String])
+    #expect(note["status"] == "ok" && note["email"] != "a@example.org" && rows[1][2] == rows[2][2], "\(output)")
+    if case .table(_, _, _, let marks) = result.preview {
+        #expect(marks.contains { $0.row == 0 && $0.column == 1 } && marks.contains { $0.row == 1 && $0.column == 2 })
+    } else { Issue.record("Expected table preview") }
+    // Kept as written in the review, a value goes back into the bodies it came from, and only there.
+    let email = try #require(result.findings.first { $0.original == "a@example.org" })
+    let (choices, kept) = result.keeping([email], choices: result.choices, marks: result.marks)
+    let after = try CSVFile.parse(String(decoding: try result.applying(choices, marks: kept).output, as: UTF8.self), delimiter: ",")
+    #expect(after.count == 3 && after[1][2] == #"{"email":"a@example.org","status":"ok"}"# && after[2][2] == after[1][2] && after[1][1] == rows[1][1], "\(after)")
+}
+
+/// The reported case: two rows, one column of bodies in base64.
+@Test func csvCellsInBase64AreScrubbed() throws {
+    let input = "id,payload\n1,eyJwYXNzd29yZCI6InF1aWxsaGFyYm9yIn0=\n2,eyJwYXNzd29yZCI6InF1aWxsaGFyYm9yIn0=\n"
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "Pasted text", forceFullDetection: false, seed: 7).output, as: UTF8.self)
+    let rows = try CSVFile.parse(output, delimiter: ",")
+    #expect(rows.count == 3 && rows[1][1] == rows[2][1] && !output.contains("eyJwYXNzd29yZCI6InF1aWxsaGFyYm9yIn0="), "\(output)")
+}
+
+/// A body in a row is that row's: its email follows the row's own person, never another row's.
+@Test(arguments: [7, 11, 23] as [UInt64])
+func csvCellBodiesFollowTheirOwnRow(_ seed: UInt64) throws {
+    let input = "first_name,last_name,body\nAlice,Smith,\"{\"\"email\"\":\"\"first@example.org\"\"}\"\nBob,Jones,\"{\"\"email\"\":\"\"second@example.org\"\"}\"\n"
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "a.csv", forceFullDetection: false, seed: seed).output, as: UTF8.self)
+    let rows = try CSVFile.parse(output, delimiter: ",")
+    #expect(rows.count == 3 && rows.allSatisfy { $0.count == 3 }, "\(output)")
+    guard rows.count == 3, rows.allSatisfy({ $0.count == 3 }) else { return }
+    let emails = try rows.dropFirst().map { row in
+        try #require((try JSONSerialization.jsonObject(with: Data(row[2].utf8)) as? [String: String])?["email"]).lowercased()
+    }
+    #expect(emails[0] != emails[1], "\(output)")
+    for (row, email) in zip(rows.dropFirst(), emails) {
+        #expect(email.contains(row[1].lowercased()), "\(output)")
+    }
+}
+
 @Test(arguments: ["\n=1+1", " =1+1", "\t=1+1", "＝1+1", "＠SUM(A1)", "＋cmd|x", "－cmd|x", "\r@SUM(A1)"])
 func csvNeutralizesFormula(_ cell: String) {
     #expect(CSVFile.neutralize(cell) == "'" + cell)
@@ -147,4 +200,91 @@ func csvReadsAWideHeaderInOnePass(_ shape: String) throws {
     // Read once per column, four times the columns take about four times as long;
     // once per pair of columns, sixteen. A ratio holds on a busy machine where a time would not.
     #expect(wide < narrow * 8 + .seconds(2), "\(shape): \(narrow) then \(wide)")
+}
+
+/// A support export's client column with Spanish names written with their accents, each alone in its
+/// cell and again surname first: the first name and the surname are both the person's, never a place.
+@Test func accentedNamesInAClientColumnAreReplacedWhole() throws {
+    let csv = """
+    id_caso,cliente,correo,mensaje
+    ES-14,Lucía Gómez,lucia.g@example.es,"Sin novedad"
+    ES-15,Rocío Fernández,rfernandez@example.es,"Pide la devolución"
+    ES-16,"Gómez, Lucía",lucia.g@example.es,"Documento caducado"
+    """
+    let result = try Scrubber.scrub(Data(csv.utf8), name: "casos.csv")
+    let output = try #require(String(data: result.output, encoding: .utf8))
+    for original in ["Lucía", "Gómez", "Rocío", "Fernández", "lucia.g", "rfernandez"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    let rows = output.split(separator: "\n").map(String.init)
+    #expect(rows[0] == "id_caso,cliente,correo,mensaje" && rows[1].hasSuffix(#","Sin novedad""#) && rows[3].hasSuffix(#","Documento caducado""#))
+    // One person in both spellings: the surname-first cell is the same stand-in turned around.
+    let name = rows[1].split(separator: ",")[1].split(separator: " ")
+    #expect(name.count == 2 && rows[3].contains("\"\(name[1]), \(name[0])\""), "\(output)")
+    #expect(!result.review!.findings.contains { $0.entity == "LOCATION" }, "\(result.review!.findings.map(\.original))")
+}
+
+/// A column's header is renamed only for what it holds itself, never because a cell reads a name spelled alike ("Garante Moretti").
+@Test(arguments: 1...3)
+func csvHeaderSpelledLikeANameReadElsewhereStays(_ run: Int) throws {
+    let input = "pratica,nome,cognome,garante,note\nPR-2207,Odalys,Ferriter,Tavish Moretti,\"Garante Moretti pensionato; Odalys preferisce la posta.\"\n"
+    let output = String(decoding: try Scrubber.scrub(Data(input.utf8), name: "pratiche.csv").output, as: UTF8.self)
+    #expect(output.hasPrefix("pratica,nome,cognome,garante,note\n"), "\(output)")
+    #expect(!output.contains("Moretti") && !output.contains("Odalys"), "\(output)")
+}
+
+/// A cell ending in a company's legal form, in a column of people's names, is a company: it stays as
+/// written, never a person's stand-in, and one named after a person takes a company's stand-in instead.
+@Test func aCompanyInAColumnOfNamesIsNoPerson() throws {
+    let csv = """
+    id,titular,ciudad,saldo
+    1,Marta Quintela,Porto,120.00
+    2,Example Distribuidora S.A.,Lisboa,88.10
+    3,Rui Valadares,Braga,15.75
+    4,Norte Comercial Ltda.,Faro,40.00
+    5,Marta Quintela Unipessoal Lda.,Porto,9.99
+    """
+    for seed: UInt64 in 1...3 {
+        let result = try Scrubber.scrub(Data(csv.utf8), name: "titulares.csv", forceFullDetection: false, seed: seed)
+        let output = String(decoding: result.output, as: UTF8.self)
+        let rows = output.split(separator: "\n").map(String.init)
+        #expect(rows[2].hasPrefix("2,Example Distribuidora S.A.,") && rows[4].hasPrefix("4,Norte Comercial Ltda.,"), "\(output)")
+        for original in ["Marta", "Quintela", "Rui", "Valadares"] { #expect(!output.contains(original), "\(original) in \(output)") }
+        #expect(rows[5].contains(" Lda.,"), "\(output)")
+        #expect(!result.findings.contains { $0.entity == "PERSON" && $0.original.hasSuffix(".") }, "\(result.findings.map { "\($0.entity) \($0.original)" })")
+    }
+}
+
+/// A register keyed in a language of the Baltic states, the Balkans or eastern Europe, in Latin or Cyrillic
+/// letters, is read whole: given names, surnames, birth dates, addresses, phones and personal codes.
+@Test(arguments: 1...2)
+func aRegisterKeyedInAnotherLanguageIsReadWhole(_ seed: Int) throws {
+    let registers: [(String, String, [String])] = [
+        ("klienti.csv", "id;vārds;uzvārds;dzimšanas_datums;adrese;tālrunis;personas_kods\n1;Ilze;Bērziņa;1984-05-12;Brīvības iela 118-7, Rīga, LV-1001;+371 2955 0123;120584-11234\n2;Jānis;Kalniņš;1979-11-02;Lāčplēša iela 44, Rīga, LV-1011;+371 2611 0456;021179-10457\n",
+         ["Ilze", "Bērziņa", "Jānis", "Kalniņš", "1984-05-12", "Brīvības", "Lāčplēša", "2955 0123", "120584-11234"]),
+        ("klientai.csv", "nr,vardas,pavardė,gimimo_data,adresas,telefonas,el_pastas\n4,Rūta,Petrauskienė,1990-02-17,\"Gedimino pr. 9-12, Vilnius\",+370 612 34567,ruta.p@example.com\n",
+         ["Rūta", "Petrauskienė", "1990-02-17", "Gedimino", "612 34567", "ruta.p@"]),
+        ("kliendid.csv", "eesnimi;perekonnanimi;sünniaeg;aadress;linn;isikukood\nKadri;Tamm;1985-01-02;Pärnu mnt 12-4;Tallinn;48501020010\n",
+         ["Kadri", "Tamm", "1985-01-02", "Pärnu mnt", "48501020010"]),
+        ("klienti-bg.csv", "ид,име,фамилия,дата на раждане,адрес,телефон\n1,Петя,Иванова,1975-01-02,\"ул. Шипка 12, София 1504\",+359 88 123 4567\n",
+         ["Петя", "Иванова", "1975-01-02", "Шипка", "123 4567"]),
+        ("klijenti.csv", "ime,prezime,JMBG,adresa,mesto\nMilica,Jovanović,0101990715003,Knez Mihailova 21,Beograd\n",
+         ["Milica", "Jovanović", "0101990715003", "Mihailova"]),
+    ]
+    for (name, csv, originals) in registers {
+        let result = try Scrubber.scrub(Data(csv.utf8), name: name, forceFullDetection: false, seed: UInt64(seed))
+        let output = String(decoding: result.output, as: UTF8.self)
+        #expect(output.hasPrefix(String(csv.prefix { $0 != "\n" }) + "\n"), "\(output)")
+        for original in originals { #expect(!output.contains(original), "\(original) in \(output)") }
+    }
+}
+
+/// A column beside one of surnames whose cells are given names a list holds is one of given names,
+/// whatever its header; two such columns found by their cells alone are a name's parts.
+@Test func givenNamesBesideSurnamesAreReadAsNames() throws {
+    let csv = "rid,kol_a,kol_b,status,city\n7,Margaret,Holloway,open,Leeds\n8,Daniel,Fischer,closed,Bath\n9,Sophie,Brennan,open,York\n"
+    let result = try Scrubber.scrub(Data(csv.utf8), name: "export.csv", forceFullDetection: false, seed: 3)
+    let output = String(decoding: result.output, as: UTF8.self)
+    for original in ["Margaret", "Holloway", "Daniel", "Fischer", "Sophie", "Brennan"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    #expect(result.findings.filter { $0.entity == "FIRST_NAME" }.count == 3 && result.findings.filter { $0.entity == "LAST_NAME" }.count == 3, "\(result.findings.map { "\($0.entity) \($0.original)" })")
+    let rows = output.split(separator: "\n").map { $0.split(separator: ",", omittingEmptySubsequences: false) }
+    #expect(rows[0].joined(separator: ",") == "rid,kol_a,kol_b,status,city" && rows[1][3] == "open" && rows[2][3] == "closed", "\(output)")
 }

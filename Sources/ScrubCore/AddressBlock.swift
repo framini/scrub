@@ -91,7 +91,7 @@ struct AddressBlock {
 
     // MARK: Pieces
 
-    private static let unitWords = #"flat|apt|apartment|appt|apto|suite|ste|unit|floor|fl|level|lvl|room|rm|bldg|block|blk|shop|lot|plot|pmb|top|wohnung|bâtiment|bat|piso|escalier|étage|etage|bureau|sala|bloco|int|depto|kat|lgh|house no|no"#
+    private static let unitWords = #"flat|apt|apartment|appt|app|apto|bât|suite|ste|unit|floor|fl|level|lvl|room|rm|bldg|block|blk|shop|lot|plot|pmb|top|wohnung|bâtiment|bat|piso|escalier|étage|etage|bureau|sala|bloco|int|depto|kat|lgh|house no|no"#
     private static let boxWords = #"p\.?\s?o\.?\s?box|post office box|gpo box|locked bag|private bag|postfach|postbus|postboks|b\.?p\.?|cs|apartado(?: de correos)?|casella postale|box|c\.?p\.?|caixa postal"#
     private static let unit = TextPattern(#"(?i)^\s*(?:(?:"# + unitWords + #")(?![\p{L}])\.?\s*[#n°º.]*\s*[\p{L}\d][\p{L}\d./-]{0,7}|#\s?\d[\d-]*|\d{1,2}(?:st|nd|rd|th|e|er|ème|\.)?\s+(?:floor|étage|piso|og|stock|andar|etg|etasje|kerros)|(?:ground|first|second|third|fourth|fifth|top|lower|upper)\s+floor|rez-de-chaussée|bajo|r/c|\d{1,2}\s?[º°ª]\s*(?:[\p{L}]{1,5}\.?)?|\d{1,2}\.\s?(?:th|tv|mf|sal)\.?|\d{1,2}[rª]\s+\d{1,2}[ªa]|(?:"# + boxWords + #")\s*\d[\d ]*(?:\s+(?:stn|station)\s+\p{L}+)?)\s*$"#)
     static func isUnit(_ piece: String) -> Bool { !TextRanges.matches(unit, in: piece).isEmpty }
@@ -312,7 +312,9 @@ struct AddressBlock {
             return Locality(postal: postal, city: nil, region: side)
         } else if let last = side.split(separator: " ").last.map(String.init), side.contains(" "),
                   Places.region(last) != nil && last == last.uppercased() || Places.regionAbroad(last) != nil
-                    || last.count >= 2 && last.count <= 4 && last == last.uppercased() && last.allSatisfy(\.isLetter) && side.dropLast(last.count) != side.dropLast(last.count).uppercased() {
+                    || last.count >= 2 && last.count <= 4 && last == last.uppercased() && last.allSatisfy(\.isLetter) && side.dropLast(last.count) != side.dropLast(last.count).uppercased()
+                    // In capitals, a province's code after a city Scrub knows: "TORINO TO".
+                    || last.count == 2 && last == last.uppercased() && last.allSatisfy(\.isLetter) && knownCountry(city: String(side.dropLast(last.count)).trimmingCharacters(in: edges)) != nil {
             region = last
             side = String(side.dropLast(last.count)).trimmingCharacters(in: edges)
         }
@@ -349,8 +351,10 @@ struct AddressBlock {
     static func knownCountry(city: String) -> String? {
         // "Praha 2" is in Praha, "København K" is København K.
         let lower = city.lowercased()
-        let found = Set(Places.all.filter { $0.city.lowercased() == lower }.map(\.country)
-                        + Places.abroad.filter { $0.city.lowercased() == lower || lower.hasPrefix($0.city.lowercased() + " ") || $0.city.lowercased().hasPrefix(lower + " ") }.map(\.country))
+        // A city named whole outranks one it only begins: "Porto" is Porto, not Porto Alegre.
+        let exact = Set(Places.all.filter { $0.city.lowercased() == lower }.map(\.country) + Places.abroad.filter { $0.city.lowercased() == lower }.map(\.country))
+        if !exact.isEmpty { return exact.count == 1 ? exact.first : nil }
+        let found = Set(Places.abroad.filter { lower.hasPrefix($0.city.lowercased() + " ") || $0.city.lowercased().hasPrefix(lower + " ") }.map(\.country))
         return found.count == 1 ? found.first : nil
     }
 
@@ -366,12 +370,6 @@ struct AddressBlock {
             if upper.range(of: #"^\d{2}-\d{3}$"#, options: .regularExpression) != nil { return "PL" }
             if upper.range(of: #"^[AC-FHKNPRTV-Y]\d[\dW] ?[0-9AC-FHKNPRTV-Y]{4}$"#, options: .regularExpression) != nil { return "IE" }
         }
-        for locality in localities {
-            // "VIC 3065", "WA 6050" (Western Australia, by its postcode), "TX 78701".
-            if let region = locality.region, let postal = locality.postal, let country = Places.country(postal: postal), Places.region(region, in: country)?.country == country { return country }
-            if let region = locality.region.flatMap(Places.regionAbroad) { return region }
-            if let city = locality.city, let country = knownCountry(city: city) { return country }
-        }
         let words = " " + (streets + units).joined(separator: " ").lowercased() + " "
         let hints: [(String, String)] = [("straße", "DE"), ("strasse", "CH"), ("str. ", "DE"), ("gasse", "AT"), (" rue ", "FR"), (" allée ", "FR"), (" chemin ", "FR"),
                                          (" quai ", "FR"), (" impasse ", "FR"), (" boulevard ", "FR"), (" avenue de ", "FR"), (" bis ", "FR"), (" cedex", "FR"), (" via ", "IT"), (" piazza ", "IT"), (" viale ", "IT"), (" corso ", "IT"), (" strada ", "IT"), (" contrada ", "IT"), (" vicolo ", "IT"), (" largo ", "IT"), (" calle ", "ES"), (" avda", "ES"), (" c/", "ES"), (" avenida ", "ES"),
@@ -381,6 +379,14 @@ struct AddressBlock {
                                          ("vej ", "DK"), ("veien ", "NO"), (" gate ", "NO"), ("katu ", "FI"), ("straat ", "NL"), ("gracht ", "NL"), ("laan ", "NL"), ("weg ", "DE"),
                                          (" postfach ", "DE"), (" postbus ", "NL"), (" postboks ", "NO"), (" apartado ", "ES"), (" casella postale ", "IT"),
                                          (" caixa postal ", "BR"), (" bp ", "FR"), (" b.p. ", "FR")]
-        return hints.first { words.contains($0.0) }?.1
+        let streetCountry = hints.first { words.contains($0.0) }?.1
+        for locality in localities {
+            // "VIC 3065", "WA 6050" (Western Australia, by its postcode), "TX 78701".
+            if let region = locality.region, let postal = locality.postal, let country = Places.country(postal: postal), Places.region(region, in: country)?.country == country { return country }
+            // A province's two letters on a "Viale" are Italian ("41500 Padova (BA)"), not a Brazilian state's.
+            if let region = locality.region.flatMap(Places.regionAbroad), streetCountry == nil || streetCountry == region { return region }
+            if let city = locality.city, let country = knownCountry(city: city) { return country }
+        }
+        return streetCountry
     }
 }

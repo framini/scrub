@@ -142,9 +142,12 @@ func knownFirstNameAloneOnASignOffIsReplaced(_ input: String) throws {
 
 @Test func numericPhoneKeepsNotationAndSharesItsStandIn() throws {
     let (output, _) = try run(#"{"phone":2128675309.0,"mobile":2.128675309e9,"cell":2128675309}"#, name: "a.json")
-    let lines = output.split(separator: "\n").map { $0.split(separator: ":").last?.trimmingCharacters(in: CharacterSet(charactersIn: " ,")) ?? "" }
-    let phone = try #require(lines.first { $0.hasSuffix(".0") }), mobile = try #require(lines.first { $0.hasSuffix("e9") })
-    let cell = try #require(lines.first { !$0.isEmpty && $0.allSatisfy(\.isNumber) })
+    // Each number as written, in the document's own spelling.
+    func written(_ key: String) throws -> String {
+        let range = try #require(output.range(of: "\"\(key)\":[^,}]+", options: .regularExpression))
+        return String(output[range].dropFirst(key.count + 3))
+    }
+    let (phone, mobile, cell) = try (written("phone"), written("mobile"), written("cell"))
     #expect(cell != "2128675309" && cell.count == 10)
     #expect(phone == cell + ".0")
     #expect(mobile == String(cell.prefix(1)) + "." + String(cell.dropFirst()) + "e9")

@@ -123,3 +123,305 @@ func streetAddressesInFreeText(_ address: String) throws {
     #expect(text.range(of: #""latitude": -?\d{1,2}\.\d{7}, "longitude": -?\d{1,3}\.\d{4}, "metroCode": 819"#, options: .regularExpression) != nil, "\(text)")
     #expect(text.contains("(PEM)"))
 }
+
+/// A log line quoting a request whose body is itself a string of JSON: the person inside it,
+/// two levels of escapes deep and their surname written with a `\u` escape, is read as one level is.
+@Test(arguments: ["service.log", "Pasted text"])
+func doublyEscapedBodyInALogLineIsReadInside(_ name: String) throws {
+    let log = #"""
+    2026-03-02 09:41:07,552 [pool-3] ERROR CheckClient - upstream 422 payload="{\"body\": \"{\\\"applicant\\\": {\\\"givenName\\\": \\\"Annelise\\\", \\\"surname\\\": \\\"Kj\\\\u00e6rgaard\\\", \\\"phone\\\": \\\"+45 55 50 01 42\\\"}}\"}" trace=7c1e0d9a44b24f0f9e3a
+    2026-03-02 09:41:07,560 [pool-3] WARN  CheckClient - retry body="{\"body\": \"{\\\"surname\\\": \\\"Kj\\\\u00e6rgaard\\\"}\"}"
+    2026-03-02 09:41:07,561 [pool-3] INFO  CheckClient - queued for manual review
+    """#
+    let result = try Scrubber.scrub(Data(log.utf8), name: name)
+    let output = try #require(String(data: result.output, encoding: .utf8))
+    for original in ["Annelise", #"Kj\\\\u00e6rgaard"#, "rgaard", "55 50 01 42"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    #expect(output.contains("trace=7c1e0d9a44b24f0f9e3a") && output.hasSuffix("INFO  CheckClient - queued for manual review"))
+    // Each body still reads as the string of JSON it was, two levels down.
+    for line in output.split(separator: "\n").prefix(2) {
+        let quoted = try #require(line.range(of: #""\{(?:[^"\\]|\\.)*\}""#, options: .regularExpression))
+        let outer = try #require(try JSONSerialization.jsonObject(with: Data(line[quoted].utf8), options: .fragmentsAllowed) as? String)
+        let body = try #require(try JSONSerialization.jsonObject(with: Data(outer.utf8)) as? [String: String])["body"]
+        #expect(try JSONSerialization.jsonObject(with: Data(try #require(body).utf8)) is [String: Any])
+    }
+}
+
+/// A German customer's letter: its salutation, its nouns after an article and the request around the
+/// applicant's name stay word for word; only the name, the birth date after "geb." and the tax ID go.
+@Test func aGermanLetterKeepsItsWordsAndLosesItsPerson() throws {
+    let letter = """
+    Betreff: Prüfung meines Kontos
+
+    Sehr geehrte Damen und Herren,
+
+    ich habe eine Frage zu meinem Konto. Bitte prüfen Sie den Antrag von Frau Wiebke Austermann, geb. 17.03.1984, wohnhaft in Bielefeld. Meine Steuer-ID ist 47136280512.
+
+    Mit freundlichen Grüßen
+    Wiebke Austermann
+    """
+    let (output, _) = try scrubText(letter)
+    for original in ["Wiebke", "Austermann", "17.03.1984", "47136280512"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    for kept in ["Betreff: Prüfung meines Kontos\n\nSehr geehrte Damen und Herren,\n\nich habe eine Frage zu meinem Konto. Bitte prüfen Sie den Antrag von Frau ",
+                 ", geb. ", ", wohnhaft in ", ". Meine Steuer-ID ist ", "\n\nMit freundlichen Grüßen\n"] {
+        #expect(output.contains(kept), "\(kept) not in \(output)")
+    }
+    // The stand-in takes the name's place and nothing around it: two words after "Frau", as the sign-off writes them.
+    let after = try #require(output.components(separatedBy: "Antrag von Frau ").last?.components(separatedBy: ", geb.").first)
+    #expect(after.split(separator: " ").count == 2 && output.hasSuffix("\n" + after), "\(output)")
+}
+
+/// A double-barrelled surname after a hyphenated given name, and the same person signing with hyphenated
+/// initials: no half of the surname and no initial stays, and the surname takes one stand-in in both places.
+@Test(arguments: ["Hello, my name is Karl-Heinz Brettschneider-Oldenhove and I can't log in to my account.\nRegards,\nK.-H. Brettschneider-Oldenhove",
+                  "mein Name ist Karl-Heinz Brettschneider-Oldenhove, geboren am 3. Juni 1958 in Kassel. Ich komme nicht in mein Konto.\n\nMit freundlichen Grüßen\nK.-H. Brettschneider-Oldenhove"])
+func aDoubleBarrelledNameAndItsInitialsGoWhole(_ message: String) throws {
+    let (output, _) = try scrubText(message)
+    for original in ["Karl", "Heinz", "Brettschneider", "Oldenhove", "K.-H."] { #expect(!output.contains(original), "\(original) in \(output)") }
+    let lines = output.split(separator: "\n")
+    let signature = try #require(lines.last).split(separator: " ")
+    #expect(signature.count == 2 && signature[0].wholeMatch(of: /\p{Lu}\.-\p{Lu}\./) != nil, "\(output)")
+    #expect(lines[0].contains(" " + signature[1] + " ") || lines[0].contains(" " + signature[1] + ","), "\(output)")
+}
+
+/// A case note naming an applicant in full, then by two initials and the first word of a double surname,
+/// and a colleague by an initial: each initialled form is the same person's stand-in, its first initial theirs.
+@Test func initialsFollowTheFullNamesStandIn() throws {
+    let note = """
+    Applicant Tomás Ignacio Arreola Benítez called about the refund; reviewer Anneliese Wohlgemuth took the call.
+    Signed: T. I. Arreola. Approved: A. Wohlgemuth.
+    """
+    for seed: UInt64 in 0..<4 {
+    let output = String(decoding: try Scrubber.scrub(Data(note.utf8), name: "notes.txt", forceFullDetection: false, seed: seed).output, as: UTF8.self)
+    for original in ["Tomás", "Arreola", "Benítez", "Anneliese", "Wohlgemuth"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    let lines = output.split(separator: "\n").map(String.init)
+    let applicant = try #require(lines[0].components(separatedBy: "Applicant ").last?.components(separatedBy: " called").first).split(separator: " ")
+    let reviewer = try #require(lines[0].components(separatedBy: "reviewer ").last?.components(separatedBy: " took").first).split(separator: " ")
+    let signed = try #require(lines[1].components(separatedBy: "Signed: ").last?.components(separatedBy: ". Approved").first).split(separator: " ")
+    let approved = try #require(lines[1].components(separatedBy: "Approved: ").last?.dropLast()).split(separator: " ")
+    #expect(signed.count == 3 && signed[0] == "\(applicant[0].prefix(1))." && applicant.contains(signed[2]), "\(output)")
+    #expect(approved.count == 2 && approved[0] == "\(reviewer[0].prefix(1))." && approved[1] == reviewer.last!, "\(output)")
+    }
+}
+
+/// An audit log's line keeps every key and path around a person's email: the address after "target=user/"
+/// or "subject=customers/" is replaced alone, never with the key's path read into its local part.
+@Test(arguments: [UInt64(1), 2, 3])
+func anAuditLogKeepsTheKeysAroundAnEmail(_ seed: UInt64) throws {
+    let log = """
+    2026-03-02T10:14:22Z actor=admin.ops target=user/48213 action=update field=surname old="Halvorsen" new="Brekke"
+    2026-03-02T10:14:23Z actor=admin.ops target=user/ingrid.halvorsen@example.no action=view
+    2026-03-02T10:14:24Z actor=k.marsh@example.org target=user/ingrid.halvorsen@example.no action=update field=email old="ingrid.halvorsen@example.no" new="ingrid.brekke@example.no"
+    2026-03-02T10:14:25Z actor=admin.ops subject=customers/eu/teo.lisboa@example.net action=export
+    """
+    let result = try Scrubber.scrub(Data(log.utf8), name: "Pasted text", forceFullDetection: false, seed: seed)
+    let output = String(decoding: result.output, as: UTF8.self)
+    func keys(_ line: Substring) -> [String] { line.matches(of: /([a-z_]+)=/).map { String($0.1) } }
+    let before = log.split(separator: "\n"), after = output.split(separator: "\n")
+    #expect(before.count == after.count, "\(output)")
+    for (original, made) in zip(before, after) { #expect(keys(original) == keys(made), "\(original)\n→ \(made)") }
+    #expect(after[1].contains(" target=user/") && after[2].contains(" target=user/") && after[3].contains(" subject=customers/eu/"), "\(output)")
+    for original in ["ingrid.halvorsen", "teo.lisboa", "ingrid.brekke"] { #expect(!output.contains(original), "\(original) in \(output)") }
+}
+
+/// A log's pair whose key names a person holds one, written "Surname, Given" or "Given Surname", quoted or
+/// not; a record's key written as a namespace and a reference ("key=cust:CU-55120") keeps its prefix and
+/// shape, the same stand-in wherever it is written, and is never read as a secret.
+@Test(arguments: 1...3)
+func aLogPairUnderAPersonsKeyHoldsTheirName(_ seed: Int) throws {
+    let log = """
+    2026-03-14T09:12:44.118Z INFO  [consumer-3] c.e.payments.SettlementListener - processed offset=88123 partition=4 key=cust:CU-55120 subject="Oyelaran, Babatunde" amount=125.40 currency=EUR status=OK
+    2026-03-14T09:12:45.002Z WARN  [consumer-3] c.e.payments.SettlementListener - retry customer=Ingrid Halvorsen payer='Marta Kowalczyk' beneficiary=Tomasz Nowicki account_holder="Dlamini, Sipho" cache=cust:CU-55120
+    2026-03-14T09:12:46.310Z INFO  [consumer-3] c.e.payments.SettlementListener - committed offset=88124 cust_name="Halvorsen, Ingrid" topic=settlements.v2 subject="Monthly Statement"
+
+    """
+    let result = try Scrubber.scrub(Data(log.utf8), name: "consumer.log", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    for original in ["Oyelaran", "Babatunde", "Ingrid", "Halvorsen", "Marta", "Kowalczyk", "Tomasz", "Nowicki", "Dlamini", "Sipho", "55120"] {
+        #expect(!output.contains(original), "\(original) in \(output)")
+    }
+    let lines = output.split(separator: "\n").map(String.init)
+    #expect(lines.count == 3 && lines[2].hasSuffix(#"topic=settlements.v2 subject="Monthly Statement""#), "\(output)")
+    // "Surname, Given" keeps its order and its comma; the record's key keeps its prefix, the same in both lines.
+    let subject = try #require(lines[0].range(of: #"subject="[^"]+""#, options: .regularExpression)).lowerBound
+    #expect(lines[0][subject...].range(of: #"^subject="\p{Lu}[\p{L}'-]+, \p{Lu}[\p{L}'-]+" amount=125\.40"#, options: .regularExpression) != nil, "\(output)")
+    let key = try #require(lines[0].range(of: #"key=cust:CU-\d{5} "#, options: .regularExpression))
+    #expect(lines[1].hasSuffix("cache=" + lines[0][key].dropFirst(4).dropLast()), "\(output)")
+    #expect(!result.findings.contains { $0.entity == "SECRET" }, "\(result.findings.map { "\($0.entity) \($0.original)" })")
+    #expect(result.unresolved.isEmpty, "\(result.unresolved.map { "\($0.entity) \($0.original ?? "")" })")
+}
+
+/// A company's name ending in a legal form ("Cía. Ltda.", "S.A.C.", "e Hijos", "& Co.") is no person's, and the
+/// place right after its form is its seat, kept with it ("d.o.o. Beograd"); the people beside them are replaced.
+@Test(arguments: 1...3)
+func aCompanysFormAndSeatStayAsWritten(_ seed: Int) throws {
+    let text = """
+    Factura emitida por Example Envíos Cía. Ltda. a nombre de Laura Méndez.
+    Proveedor: Transportes Andinos S.A.C., contacto Pedro Quispe.
+    Distribuidor: Example Ferretería e Hijos, sucursal norte.
+    Isporučilac: Primer Trgovina d.o.o. Beograd, kontakt Marko Petrović.
+    Supplier: Northwind Foods & Co., contact Grace Holt.
+
+    """
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    for kept in ["Example Envíos Cía. Ltda.", "Transportes Andinos S.A.C.", "Example Ferretería e Hijos", "Primer Trgovina d.o.o. Beograd,", "Northwind Foods & Co."] {
+        #expect(output.contains(kept), "\(kept) in \(output)")
+    }
+    for original in ["Laura", "Méndez", "Pedro", "Quispe", "Marko", "Petrović", "Grace", "Holt"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    #expect(!result.findings.contains { $0.original.contains("Envíos") || $0.original == "Beograd" }, "\(result.findings.map { "\($0.entity) \($0.original)" })")
+    #expect(!(result.unresolved.contains { ($0.original ?? "").contains("Envíos") }))
+}
+
+/// An address ends before a phone's label in any language and before a clause a joining word opens: the label,
+/// the clause and the phone's country code stay as written, and the relative the clause names is replaced.
+@Test(arguments: 1...3)
+func anAddressEndsBeforeALabelOrAClause(_ seed: Int) throws {
+    let text = """
+    Vivo en Calle Mayor 12, 3º B, 28013 Madrid con mi hija Lucía desde 2019.
+    Adresas: Gedimino pr. 9-12, LT-01103 Vilnius Telefonas +370 612 34567
+    Adrese: Brīvības iela 118-7, Rīga Tālrunis +371 2955 0123
+
+    """
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    let lines = output.split(separator: "\n").map(String.init)
+    #expect(lines.count == 3, "\(output)")
+    #expect(lines[0].range(of: #" con mi hija \p{Lu}\p{Ll}+ desde 2019\.$"#, options: .regularExpression) != nil, "\(output)")
+    #expect(lines[1].range(of: #" Telefonas \+370 \d{3} \d{5}$"#, options: .regularExpression) != nil, "\(output)")
+    #expect(lines[2].range(of: #" Tālrunis \+371 \d{4} \d{4}$"#, options: .regularExpression) != nil, "\(output)")
+    for original in ["Mayor 12", "28013", "Lucía", "Gedimino", "01103", "612 34567", "Brīvības", "2955 0123"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    #expect(!result.findings.contains { $0.entity == "ADDRESS" && ($0.original.hasSuffix(" con mi hija Lucía") || $0.original.hasSuffix("Telefonas") || $0.original.hasSuffix("Tālrunis")) },
+            "\(result.findings.map { "\($0.entity) \($0.original)" })")
+}
+
+/// The word between a name and a parent's or husband's ("s/o", "binti", "bin", "a/l", "bt.") stays as written,
+/// and both names around it are replaced.
+@Test(arguments: 1...3)
+func aLineageWordStaysBetweenTwoNames(_ seed: Int) throws {
+    let text = "Father's name: Ahmed s/o Rashid. Guardian: Siti binti Abdullah. Next of kin: Ali bin Hassan, Kumar a/l Rajan and Nurul bt. Aziz.\n"
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    let name = #"\p{Lu}[\p{L}'-]+"#
+    let shape = "^Father's name: \(name) s/o \(name)\\. Guardian: \(name) binti \(name)\\. Next of kin: \(name) bin \(name), \(name) a/l \(name) and \(name) bt\\. \(name)\\.$"
+    #expect(output.trimmingCharacters(in: .newlines).range(of: shape, options: .regularExpression) != nil, "\(output)")
+    for original in ["Ahmed", "Rashid", "Siti", "Abdullah", "Ali ", "Hassan", "Kumar", "Rajan", "Nurul", "Aziz"] { #expect(!output.contains(original), "\(original) in \(output)") }
+}
+
+/// A log's pair under a person's key holds one whole name, a surname's particles too ("de", "van der", "da"):
+/// quoted or not, written "Surname, Given" or "Given Surname", no word of it stays beside a stand-in.
+@Test(arguments: 1...3)
+func aLogPairsNameIsReplacedWholeWithItsParticles(_ seed: Int) throws {
+    let log = """
+    2026-05-02T08:01:12.410Z INFO  [payout-2] c.e.payouts.Dispatcher - sent beneficiary="Hendrik de Boer" amount=10.00 currency=EUR status=OK
+    2026-05-02T08:01:13.022Z INFO  [payout-2] c.e.payouts.Dispatcher - sent payer=Joost van der Linde amount=12.00 holder="de Vries, Annelies" status=OK
+    2026-05-02T08:01:14.530Z WARN  [payout-2] c.e.payouts.Dispatcher - retry customer='Aurelio di Stefano' account_holder="Ferreira da Costa, Mariana" status=RETRY
+    2026-05-02T08:01:15.004Z INFO  [payout-2] c.e.payouts.Dispatcher - sent beneficiary=Liesbeth von Arnim amount=3.50 status=OK
+
+    """
+    let result = try Scrubber.scrub(Data(log.utf8), name: "payouts.log", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    for original in ["Hendrik", "Boer", "Joost", "Linde", "Vries", "Annelies", "Aurelio", "Stefano", "Ferreira", "Costa", "Mariana", "Liesbeth", "Arnim"] {
+        #expect(!output.contains(original), "\(original) in \(output)")
+    }
+    let lines = output.split(separator: "\n").map(String.init)
+    #expect(lines.count == 4, "\(output)")
+    for (line, tail) in zip(lines, [" amount=10.00 currency=EUR status=OK", " amount=12.00 holder=", " account_holder=", " amount=3.50 status=OK"]) {
+        #expect(line.contains(tail), "\(tail): \(output)")
+    }
+    // "Surname, Given" keeps its comma and order.
+    #expect(lines[1].range(of: #"holder="[^",]+, [^",]+" status=OK$"#, options: .regularExpression) != nil, "\(output)")
+    #expect(lines[2].range(of: #"account_holder="[^",]+, [^",]+" status=RETRY$"#, options: .regularExpression) != nil, "\(output)")
+}
+
+/// Where a log's pair under a person's key had a part of its name replaced, no word of it stays beside the stand-in,
+/// even one no reader took for a name ("Lopes" of holder="Ana Paula ao Lopes"); the pair's joining words stay.
+@Test(arguments: 1...3)
+func noPartOfAPersonStaysInsideALogPairsReplacedName(_ seed: Int) throws {
+    let log = """
+    2026-05-02T08:01:13.120Z INFO  [payout-2] c.e.payouts.Dispatcher - queued payer="Ana Paula" amount=4.20 status=PENDING
+    2026-05-02T08:01:14.530Z INFO  [payout-2] c.e.payouts.Dispatcher - sent holder="Ana Paula ao Lopes" amount=4.20 status=OK
+    2026-05-02T08:01:15.004Z INFO  [payout-2] c.e.payouts.Dispatcher - sent amount=4.20 status=OK note="settled"
+
+    """
+    let result = try Scrubber.scrub(Data(log.utf8), name: "payouts.log", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    for original in ["Ana", "Paula", "Lopes"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    #expect(output.contains(" ao ") && output.contains(#"" amount=4.20 status=OK"#) && output.contains(#"note="settled""#), "\(output)")
+}
+
+/// A phone after its label in Lithuanian, after an address that ends with a full stop, keeps its country's code:
+/// it is read as a phone, never as an identifier whose digits all change, and it ends before the next field on its line.
+@Test(arguments: 1...3)
+func aPhoneAfterItsLabelKeepsItsCountrysCode(_ seed: Int) throws {
+    let text = """
+    Kliento duomenys
+    Adresas: Gedimino pr. 9-12, LT-01103 Vilnius. Telefonas: +370 612 34567
+    Mobilusis: +370 698 76543, el. paštas: jonas.petraitis@example.com
+    Tālrunis: +371 2955 0123
+
+    """
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    for kept in ["Telefonas: +370 ", "Mobilusis: +370 ", "Tālrunis: +371 "] { #expect(output.contains(kept), "\(kept) in \(output)") }
+    for gone in ["612 34567", "698 76543", "2955 0123", "Gedimino", "jonas.petraitis"] { #expect(!output.contains(gone), "\(gone) in \(output)") }
+    for number in ["+370 612 34567", "+370 698 76543", "+371 2955 0123"] {
+        let finding = try #require(result.findings.first { $0.original == number }, "\(result.findings.map { "\($0.entity) \($0.original)" })")
+        #expect(finding.entity == "PHONE_NUMBER", "\(number) read as \(finding.entity)")
+    }
+}
+
+/// A country named in another language, with an article elided before it ("vers l'Algérie", "d'Espagne",
+/// "dall'Italia"), is kept as every country is: never replaced as a city.
+@Test(arguments: 1...3)
+func aCountryInAnotherLanguageStays(_ seed: Int) throws {
+    let text = """
+    Bonjour, je m'appelle Claire Dubois. Je pars vers l'Algérie le 12 mars, puis d'Espagne vers l'Allemagne.
+    Hola, soy Tomás Villalba y me mudo de Alemania a Lituania en abril.
+    Ich heiße Wiebke Strothmann und ziehe im Mai nach Litauen.
+    Mi chiamo Giulia Ferraro e torno dall'Italia a giugno.
+
+    """
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    for kept in ["vers l'Algérie", "d'Espagne vers l'Allemagne", "de Alemania a Lituania", "nach Litauen", "dall'Italia"] { #expect(output.contains(kept), "\(kept) in \(output)") }
+    #expect(!result.findings.contains { $0.entity == "LOCATION" && ["Algérie", "Espagne", "Allemagne", "Alemania", "Lituania", "Litauen", "Italia"].contains(where: $0.original.contains) },
+            "\(result.findings.map { "\($0.entity) \($0.original)" })")
+}
+
+/// An address whose sentence ends before a phone's label ("Kaunas. Telefonas +370 …") ends there in every pass:
+/// the label stays, and the phone keeps its country's code.
+@Test(arguments: 1...3)
+func anAddressEndsBeforeAPhonesLabelAfterItsSentence(_ seed: Int) throws {
+    let text = """
+    Naujas adresas: Laisvės al. 14-3, LT-44240 Kaunas. Telefonas +370 655 50 112.
+    Adresas: Savanorių pr. 61-4, LT-03144 Vilnius, Mobilusis +370 612 50 199.
+    Uusi osoite: Hämeenkatu 21 B 9, 33200 Tampere. Puhelin +358 40 555 0147.
+
+    """
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    let lines = output.split(separator: "\n").map(String.init)
+    #expect(lines.count == 3, "\(output)")
+    #expect(lines[0].range(of: #"\. Telefonas \+370 \d{3} \d{2} \d{3}\.$"#, options: .regularExpression) != nil, "\(output)")
+    #expect(lines[1].range(of: #", Mobilusis \+370 \d{3} \d{2} \d{3}\.$"#, options: .regularExpression) != nil, "\(output)")
+    #expect(lines[2].range(of: #"\. Puhelin \+358 \d{2} \d{3} \d{4}\.$"#, options: .regularExpression) != nil, "\(output)")
+    for original in ["Laisvės", "44240", "655 50 112", "Savanorių", "03144", "612 50 199", "Hämeenkatu", "33200", "555 0147"] { #expect(!output.contains(original), "\(original) in \(output)") }
+    #expect(!result.findings.contains { $0.entity == "ADDRESS" && ["Telefonas", "Mobilusis", "Puhelin", "+3"].contains(where: $0.original.contains) },
+            "\(result.findings.map { "\($0.entity) \($0.original)" })")
+}
+
+/// A country, or its code, before a document's kind ("a UAE residence permit", "her German passport") says who
+/// issued it: it stays as written, while the person and their address are replaced.
+@Test(arguments: 1...3)
+func aCountryBeforeADocumentStays(_ seed: Int) throws {
+    let text = """
+    Customer Karim Nasser (DOB 1984-12-05) uploaded a UAE residence permit and a utility bill for Flat 802, Harbour View, Dubai.
+    Customer Ilse Vandermeer sent her German passport and a UK driving licence; the US visa page was blurred.
+
+    """
+    let result = try Scrubber.scrub(Data(text.utf8), name: "Pasted text", forceFullDetection: false, seed: UInt64(seed))
+    let output = String(decoding: result.output, as: UTF8.self)
+    for kept in [" a UAE residence permit ", " her German passport ", " a UK driving licence;", " the US visa page "] { #expect(output.contains(kept), "\(kept) in \(output)") }
+    for gone in ["Karim", "Nasser", "1984-12-05", "Ilse", "Vandermeer"] { #expect(!output.contains(gone), "\(gone) in \(output)") }
+    #expect(!result.findings.contains { ["UAE", "UK", "US", "German"].contains($0.original) }, "\(result.findings.map { "\($0.entity) \($0.original)" })")
+}

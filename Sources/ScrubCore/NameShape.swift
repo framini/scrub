@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 /// What a person's name can and cannot be made of, whichever detector found
 /// it. A name holds no role ("Ambassador", "Judge Advocate"), no word that
@@ -65,6 +66,13 @@ enum NameShape {
         return Span(range: rest.range.lowerBound..<span.range.upperBound, entity: span.entity, score: span.score)
     }
 
+    /// Words a reader takes in with the name after them that are none of it: a speaker
+    /// introducing themself ("I'm Bartholomew Ng") and a time's half of the day ("4:12 PM Jasper Thornquist").
+    private static let openers: Set<String> = ["i'm", "i’m", "im", "i've", "i’ve", "i'd", "i’d", "i'll", "i’ll", "here", "there", "that", "who", "what"]
+    private static func opener(_ word: Word) -> Bool {
+        openers.contains(word.bare) && word.text.contains(where: { $0 == "'" || $0 == "’" }) || ["AM", "PM"].contains(word.text)
+    }
+
     static func isRole(_ word: String) -> Bool {
         let bare = word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".'’"))
         // "Private Ellery", "Major Quist": a rank that is also a word counts only with its capital.
@@ -79,9 +87,20 @@ enum NameShape {
         guard span.entity == "PERSON" else { return span }
         var parts = words(span.range, in: text)
         guard !parts.isEmpty else { return span }
+        // "Rosalind    MRN#": a gap of a form's columns ends a name, and a label in capitals after it is none.
+        if let gap = parts.indices.dropFirst().first(where: { index in
+            let between = TextRanges.substring(text, parts[index - 1].range.upperBound..<parts[index].range.lowerBound)
+            return between.contains("\t") || between.contains("  ") || between.contains(where: \.isNewline)
+        }) { parts.removeSubrange(gap...) }
         // "Wing Commander Rodgers": a rank before a name is no part of it, nor a role after one.
         if let role = parts.lastIndex(where: { isRole($0.text) }), role < parts.count - 1, parts[(role + 1)...].contains(where: { !isRole($0.text) && !joining.contains($0.bare) }) {
             parts.removeFirst(role + 1)
+        }
+        // "Antrag von Frau Petra Schönberger": a form of address in another language opens the name after it,
+        // and what came before it is the sentence's; nothing after it is no one.
+        if let address = parts.lastIndex(where: { addresses.contains($0.bare) && $0.text.first?.isUppercase == true }), address > 0 || parts.count == 1 {
+            guard address + 1 < parts.count else { return nil }
+            parts.removeFirst(address + 1)
         }
         // A rank goes before a name, so one after a first name or a word no
         // list calls ordinary is a surname: "Evan Ensign", "Germini Major".
@@ -96,7 +115,15 @@ enum NameShape {
             trailingRole = trailingRole || isRole(last.text)
             parts.removeLast()
         }
-        while let first = parts.first, isRole(first.text) || joining.contains(first.bare) || commands(first, in: text) { parts.removeFirst() }
+        // "Spoke with Pieter van der Berg": an ordinary word, then one in lowercase that is no surname's
+        // particle, open no name; the name is what follows them.
+        if let cut = parts.lastIndex(where: { $0.text.first?.isLowercase == true && !JoinedNames.particles.contains($0.bare) }), cut + 1 < parts.count,
+           parts[cut + 1].text.first?.isUppercase == true, parts[..<cut].contains(where: { NameLists.isOrdinary($0.bare) && !NameLists.isName($0.bare) }) {
+            parts.removeFirst(cut + 1)
+        }
+        while let first = parts.first, isRole(first.text) || joining.contains(first.bare) || commands(first, in: text) || parts.count > 1 && opener(first) { parts.removeFirst() }
+        // "at 4:12 PM Jasper Thornquist": the time's half of the day and its zone go with the time.
+        while parts.count > 1, clock.contains(parts[0].bare), afterTime(parts[0].range.lowerBound, in: text) { parts.removeFirst() }
         // "Customer Tomasz O'Sullivan": the word for whose record it is goes; "Customer Service" was never anyone.
         if let first = parts.first, parties.contains(first.bare), first.text.first?.isUppercase == true {
             let rest = parts.dropFirst().filter { !joining.contains($0.bare) }
@@ -119,9 +146,51 @@ enum NameShape {
         return Span(range: range, entity: span.entity, score: span.score)
     }
 
+    /// The words a clock time writes after its digits: its half of the day and its zone.
+    private static let clock: Set<String> = ["am", "pm", "utc", "gmt", "est", "edt", "cst", "cdt", "mst", "mdt", "pst", "pdt", "bst", "cet", "cest", "ist"]
+    /// Whether `start` follows a clock time ("4:12", "16:05", "9"), across spaces and the clock's words before it.
+    private static func afterTime(_ start: Int, in text: String) -> Bool {
+        let before = (text as NSString).substring(to: start)
+        return before.range(of: #"\d(?:[ \t]*(?i:a\.?m\.?|p\.?m\.?|utc|gmt|[a-z]{1,2}[sd]t|bst|cet|cest|ist))*[ \t]*$"#, options: .regularExpression) != nil
+    }
+
     /// A month or weekday written as part of a date: "June 22", "22 June",
     /// "June. 8", "Tuesday, June 12", "in May and June". A person called June
     /// is followed by what she did.
+    /// Whether `range` opens a sentence, a small word follows it, and the line it is on
+    /// reads as written in a language other than English.
+    /// A greeting's word or a closing's before its comma or mark counts too ("Hoi, ik ben …", "Fijne dag!").
+    static func opensForeignSentence(_ range: Range<Int>, in text: String) -> Bool {
+        let ns = text as NSString
+        var before = range.lowerBound
+        while before > 0, ns.character(at: before - 1) == 32 || ns.character(at: before - 1) == 9 { before -= 1 }
+        guard before == 0 || [10, 13, 46, 33, 63, 58].contains(ns.character(at: before - 1)) else { return false }
+        let after = ns.substring(with: NSRange(location: range.upperBound, length: min(8, ns.length - range.upperBound)))
+        let small = after.first == " " && after.dropFirst().first?.isLowercase == true
+        let marked = after.first.map { ",!".contains($0) } == true && (after.dropFirst().first.map { $0 == " " || $0.isNewline } ?? true)
+        guard small || marked else { return false }
+        return foreignLine(range, in: text)
+    }
+    /// A person read in words written in small letters on a line in another language ("justificante de
+    /// domicilio", "in bianco e nero", "kein Treffer"): that language's words, though a list holds one as a
+    /// surname. Only a given name ("aqui é o thiago"), every word a name with one given, or a cue makes it someone.
+    static func smallForeignWords(_ span: Span, in text: String) -> Bool {
+        guard ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(span.entity) else { return false }
+        let parts = words(span.range, in: text)
+        guard !parts.isEmpty, parts.allSatisfy({ $0.text.first?.isLowercase == true }) else { return false }
+        if parts.count == 1 ? NameLists.isFirst(parts[0].bare) : parts.allSatisfy({ NameLists.isName($0.bare) }) && parts.contains(where: { NameLists.isFirst($0.bare) }) { return false }
+        return !NameCues.strong(span.range, in: text, opening: false) && foreignLine(span.range, in: text)
+    }
+    /// Whether the line holding `range` reads as written in a language other than English.
+    static func foreignLine(_ range: Range<Int>, in text: String) -> Bool {
+        let ns = text as NSString
+        let line = ns.substring(with: ns.lineRange(for: NSRange(location: range.lowerBound, length: 0)))
+        guard line.split(separator: " ").count >= 3 else { return false }
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(String(line.prefix(400)))
+        guard let (language, confidence) = recognizer.languageHypotheses(withMaximum: 1).first else { return false }
+        return language != .english && confidence >= 0.6
+    }
     private static func isDate(_ parts: [Word], in text: String) -> Bool {
         guard parts.allSatisfy({ months.contains($0.bare) || weekdays.contains($0.bare) || $0.bare == "and" }) else { return false }
         let ns = text as NSString
@@ -140,9 +209,25 @@ enum NameShape {
     /// that is no word, and with nothing around it that marks a name. The
     /// model reads shape and context, not vocabulary, so a capitalised word
     /// before a number or at a line's start looks to it like a name.
+    /// How German, Dutch, French, Spanish and Italian address a person before their name: no part of it.
+    static let addresses: Set<String> = ["frau", "herr", "herrn", "fräulein", "mevrouw", "meneer", "madame", "mademoiselle", "monsieur", "mme", "mlle",
+                                         "señora", "señor", "señorita", "signora", "signor", "signorina"]
+    /// A German article or determiner, after which a capitalised word is the noun it goes with ("eine Frage"),
+    /// and the salutation's "geehrte" before the "Damen und Herren" it greets.
+    private static let determiners: Set<String> = ["ein", "eine", "einen", "einem", "einer", "eines", "der", "die", "das", "dem", "des", "kein", "keine", "keinen",
+                                                   "mein", "meine", "meinen", "meinem", "meiner", "meines", "ihre", "ihren", "ihrem", "ihrer", "ihres", "unsere", "unseren", "unserem", "unserer",
+                                                   "seine", "seinen", "seinem", "seiner", "seines", "geehrte", "geehrten", "liebe"]
+
     static func ordinaryGuess(_ span: Span, in text: String) -> Bool {
         guard span.entity == "PERSON" else { return false }
         let parts = words(span.range, in: text)
+        if parts.count == 1, !NameLists.isFirst(parts[0].bare), !NameCues.strong(span.range, in: text), determiners.contains(parts[0].bare)
+            || Context.words(before: span.range.lowerBound, in: text, limit: 1).first.map({ determiners.contains($0.lowercased()) }) == true { return true }
+        // A word opening a sentence in another language ("Zorg ervoor dat u …", "Hierzu zählen …") is
+        // that language's word: only the lists, or a cue, make it someone there.
+        if !parts.isEmpty, parts.allSatisfy({ !NameLists.isFirst($0.bare) && !NameLists.isSurname($0.bare) }), !NameCues.strong(span.range, in: text),
+           opensForeignSentence(span.range, in: text) { return true }
+        if smallForeignWords(span, in: text) { return true }
         guard !parts.isEmpty, parts.allSatisfy({ NameLists.isOrdinary($0.bare) || joining.contains($0.bare) || isRole($0.text) }),
               !parts.contains(where: { NameLists.isName($0.bare) }) else { return false }
         if NameCues.strong(span.range, in: text) { return false }
@@ -153,6 +238,93 @@ enum NameShape {
         // so is a surname listed before a first name ("; Hunter, Larry").
         return !(NameLists.isFirst(parts[0].bare) && NameCues.position(span.range, in: text) || NameCues.listedLastFirst(span.range, in: text))
     }
+
+    /// The words written beside a name at `range` that are more of the same name: a capitalised word
+    /// one space or a hyphen away ("Fontes" beside "Leal", "Søren" before "Kierkegaard-Holm"), past a particle
+    /// ("de Boer"), and, in a link's or a handle's slug (`slug`), a word of small letters joined by a hyphen or an
+    /// underscore ("ingrid-fjeld"). `sure`: no word of the text's language, a part of someone `known` holds, or
+    /// a given name after a Vietnamese middle name; otherwise a listed name or a word of another language that
+    /// may be one, to ask about. The search stops at anything else, a title, a suffix or a number.
+    static func adjacentParts(_ range: Range<Int>, in text: String, known: Set<String>, slug: Bool = false, document: NLLanguage? = nil) -> [(range: Range<Int>, sure: Bool)] {
+        let ns = text as NSString
+        func isWordUnit(_ at: Int) -> Bool {
+            guard at >= 0, at < ns.length else { return false }
+            let unit = ns.character(at: at)
+            if unit == 39 || unit == 0x2019 { return true }
+            if (0xD800...0xDFFF).contains(unit) { return true }
+            return Unicode.Scalar(unit).map { CharacterSet.letters.contains($0) || CharacterSet.nonBaseCharacters.contains($0) } ?? false
+        }
+        func isDigitUnit(_ at: Int) -> Bool { at >= 0 && at < ns.length && (48...57).contains(ns.character(at: at)) }
+        let language = NameEvidence.language(around: range, in: text, document: document) ?? .english
+        let joiners: Set<UInt16> = slug ? [45, 95, 0x2010, 0x2011] : [32, 45, 0x2010, 0x2011]
+        var found: [(range: Range<Int>, sure: Bool)] = []
+        // "Ko Aroha Ngata tōku ingoa": the particle opening a Māori introduction is no part of the name.
+        let introduced = NameEvidence.introducedAfter(range, in: text)
+        func classify(_ word: String, after previous: String?, opening: Bool) -> Bool? {
+            let lower = word.lowercased()
+            guard word.count >= 2, !introduced || lower != "ko", !People.isTitle(word), !People.isSuffix(word), !NameEvidence.titles.contains(lower), NameEvidence.greetingLength([lower]) == 0 else { return nil }
+            // "I'm", "We'll", "Garcia's": a contraction or a possessive is the sentence's, no part of a name.
+            if let mark = word.firstIndex(where: { $0 == "'" || $0 == "’" }), word[word.index(after: mark)...].count <= 2 || lower == "i" { return nil }
+            if word.first?.isUppercase != true && !(slug && word.count >= 3) { return nil }
+            if known.contains(lower) { return true }
+            if Self.vietnameseMiddles.contains(lower) && word.first?.isUppercase == true || previous.map({ Self.vietnameseMiddles.contains($0.lowercased()) }) == true { return true }
+            let listed = NameLists.isFirst(lower) || NameLists.isSurname(lower)
+            if NameEvidence.isLowercaseWord(word, in: language) || NameLists.isOrdinary(lower) {
+                if opening && !listed { return nil }
+                if listed { return false }
+                return language != .english && !NameLists.isOrdinary(lower) && !NameLists.isWordlike(lower) ? false : nil
+            }
+            return opening && !listed && NameLists.isWord(word) ? nil : true
+        }
+        func opensSentence(_ start: Int) -> Bool {
+            var at = start
+            while at > 0, [32, 9].contains(ns.character(at: at - 1)) { at -= 1 }
+            return at == 0 || [46, 33, 63, 58, 10, 13, 34, 0x201C, 40, 62].contains(ns.character(at: at - 1))
+        }
+        // Forward.
+        var at = range.upperBound, previous: String? = ns.substring(with: NSRange(location: range.lowerBound, length: range.count)).split(separator: " ").last.map(String.init)
+        for _ in 0..<4 {
+            guard at < ns.length, joiners.contains(ns.character(at: at)), at + 1 < ns.length, isWordUnit(at + 1), !(at + 2 < ns.length && ns.character(at: at) == 32 && ns.character(at: at + 1) == 32) else { break }
+            var end = at + 1
+            while isWordUnit(end) { end += 1 }
+            guard !isDigitUnit(end) else { break }
+            let word = ns.substring(with: NSRange(location: at + 1, length: end - at - 1))
+            if !slug, ns.character(at: at) == 32, JoinedNames.particles.contains(word), end < ns.length, ns.character(at: end) == 32, end + 1 < ns.length,
+               ns.substring(with: NSRange(location: end + 1, length: 1)).first?.isUppercase == true {
+                at = end
+                previous = word
+                continue
+            }
+            guard let sure = classify(word, after: previous, opening: false) else { break }
+            found.append(((at + 1)..<end, sure))
+            if !sure { break }
+            at = end
+            previous = word
+        }
+        // Backward.
+        at = range.lowerBound
+        for _ in 0..<4 {
+            guard at >= 2, joiners.contains(ns.character(at: at - 1)), isWordUnit(at - 2) else { break }
+            var start = at - 1
+            while isWordUnit(start - 1) { start -= 1 }
+            guard !isDigitUnit(start - 1) else { break }
+            let word = ns.substring(with: NSRange(location: start, length: at - 1 - start))
+            if !slug, ns.character(at: at - 1) == 32, JoinedNames.particles.contains(word) {
+                at = start
+                continue
+            }
+            // A verb opening an instruction ("Call Maria Gonzalez on …") says a name follows; it is none of it.
+            if !slug, Self.commands.contains(word.lowercased()) { break }
+            guard let sure = classify(word, after: nil, opening: !slug && opensSentence(start)) else { break }
+            found.append((start..<(at - 1), sure))
+            if !sure { break }
+            at = start
+        }
+        return found
+    }
+    /// The middle names Vietnamese writes between a family name and a given name ("Trịnh Văn Khoa", "Lương Thị Hạnh").
+    static let vietnameseMiddles: Set<String> = ["văn", "thị", "van", "thi"]
+
 }
 
 /// Where a word stands as a name: after a title or "named", in a greeting
@@ -194,6 +366,8 @@ enum NameCues {
         guard at > 0, let mark = Unicode.Scalar(ns.character(at: at - 1)), !".!?:;\"“(\n\r-–—•*>".unicodeScalars.contains(mark) else { return false }
         let previous = Context.words(before: range.lowerBound, in: text, limit: 1, pattern: letters).first
         let next = Context.words(after: range.upperBound, in: text, limit: 1, pattern: letters).first
+        // A name learned elsewhere must not turn "a Rod" or "an Amber" into that person.
+        if previous.map({ ["a", "an"].contains($0.lowercased()) }) == true { return false }
         return previous?.first?.isLowercase == true || next?.first?.isLowercase == true
     }
 
@@ -236,26 +410,28 @@ enum NameCues {
         return at == 0 || [10, 13, 59, 58].contains(ns.character(at: at - 1))
     }
 
-    static func strong(_ range: Range<Int>, in text: String) -> Bool {
+    /// `opening`: whether a word alone before a comma at a line's start counts ("Ama, …"); in another
+    /// language that is as often its greeting ("oi, aqui é o …", "Hoi, ik ben …").
+    static func strong(_ range: Range<Int>, in text: String, opening: Bool = true) -> Bool {
         let ns = text as NSString
         let words = Context.before(range, in: text, limit: 1)
-        // A title or a rank before the word: "Ms Rose", "Sergeant Gamble".
-        if !words.isDisjoint(with: before) || words.contains(where: { NameShape.isRole($0) && $0 != "agent" }) { return true }
+        // A title or a rank before the word: "Ms Rose", "Sergeant Gamble", "Herrn Wolf", "Señora Rosales".
+        if !words.isDisjoint(with: before) || !words.isDisjoint(with: NameShape.addresses) || words.contains(where: { NameShape.isRole($0) && $0 != "agent" }) { return true }
         // An initial before the word: "J. Green".
         let start = max(0, range.lowerBound - 4)
         if TextRanges.matches(initialBefore, in: ns.substring(with: NSRange(location: start, length: range.lowerBound - start))).count > 0 { return true }
         if let next = Context.words(after: range.upperBound, in: text, limit: 1, pattern: letters).first?.lowercased(), reporting.contains(next) { return true }
-        return greeted(range, ns) || signs(range, ns)
+        return greeted(range, ns, opening: opening) || signs(range, ns)
     }
 
     /// "Hi Ama," or "Ama," opening a line, or "Dear Ama Okafor:".
-    static func greeted(_ range: Range<Int>, _ ns: NSString) -> Bool {
+    static func greeted(_ range: Range<Int>, _ ns: NSString, opening: Bool = true) -> Bool {
         let line = ns.lineRange(for: NSRange(location: range.lowerBound, length: 0))
         let head = ns.substring(with: NSRange(location: line.location, length: range.lowerBound - line.location))
         let tailEnd = NSMaxRange(line)
         let tail = ns.substring(with: NSRange(location: range.upperBound, length: max(0, tailEnd - range.upperBound)))
         guard !TextRanges.matches(afterGreeting, in: tail).isEmpty else { return false }
-        if head.trimmingCharacters(in: CharacterSet(charactersIn: " \t>")).isEmpty { return tail.trimmingCharacters(in: .whitespacesAndNewlines).first.map { ",:!".contains($0) } == true }
+        if head.trimmingCharacters(in: CharacterSet(charactersIn: " \t>")).isEmpty { return opening && tail.trimmingCharacters(in: .whitespacesAndNewlines).first.map { ",:!".contains($0) } == true }
         return !TextRanges.matches(greeting, in: head).isEmpty
     }
 

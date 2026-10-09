@@ -168,6 +168,8 @@ enum URLs {
             // "/@odalysferriter" and "/~odalys" are someone's handle wherever they sit, the first segment too.
             let bare = value.hasPrefix("~") || value.hasPrefix("@")
             guard let key = component.key ?? (bare ? "" : nil) else { return nil }
+            // An avatar's address is the hash of its owner's email ("/avatar/3b7e0c19…").
+            if ["avatar", "avatars"].contains(key), KeyHints.isDigest(value) { return "RECORD_ID" }
             guard bare || collections.contains(key) else { return RecordIDs.prefixed(value) && RecordIDs.isPersonCollection(key) ? "RECORD_ID" : nil }
             if value.allSatisfy(\.isNumber) { return value.count >= 3 ? "RECORD_ID" : nil }
             if RecordIDs.prefixed(value) { return "RECORD_ID" }
@@ -175,6 +177,8 @@ enum URLs {
             // Nor is a word for a part of the site ("/authors/id/T/TOMC"), and a
             // two-letter handle is too likely a word to replace wherever it is written.
             if pages.contains(value.lowercased()) || value.count < 3 && !bare || isFileName(value) { return nil }
+            // An ordinary word in small letters is what the site does there ("/accounts/verify", "/customers/lookup"), not who.
+            if !bare, value.allSatisfy({ $0.isLetter && $0.isLowercase }), NameLists.isOrdinary(value), !NameLists.isFirst(value), !NameLists.isSurname(value) { return nil }
             return TextRanges.matches(handle, in: value).isEmpty ? nil : "USERNAME"
         }
     }
@@ -200,6 +204,12 @@ enum URLs {
         var start = range.lowerBound - 1
         while start > 0, let scalar = Unicode.Scalar(ns.character(at: start - 1)), keyCharacters.contains(scalar) { start -= 1 }
         guard start > 0, [63, 38, 59, 35].contains(ns.character(at: start - 1)) else { return nil }
+        // After a ";" only in a link's query: a connection string's pairs end at theirs, an "&" inside a password ("Password=Tr0ub4dor&3x!").
+        if ns.character(at: start - 1) == 59 {
+            var at = start - 1
+            while at > 0, let scalar = Unicode.Scalar(ns.character(at: at - 1)), !CharacterSet.whitespacesAndNewlines.contains(scalar), ![63, 35].contains(ns.character(at: at - 1)) { at -= 1 }
+            guard at > 0, [63, 35].contains(ns.character(at: at - 1)) else { return nil }
+        }
         for index in range where [38, 35].contains(ns.character(at: index)) { return index > range.lowerBound ? index : nil }
         return nil
     }

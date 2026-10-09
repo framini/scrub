@@ -8,8 +8,11 @@ enum NameTagger {
     private static let letterWord = TextPattern(#"\p{L}[\p{L}'’-]*"#)
     private static let loneLine = TextPattern(#"(?m)^[ \t]*(\p{Lu}\p{Ll}+)[ \t]*\r?$"#)
     static let organisationWords: Set<String> = ["foundation", "inc", "llc", "ltd", "corp", "company", "group", "university", "bank", "institute", "hospital", "team", "teams", "ops", "bot", "desk", "helpdesk", "office", "region", "network", "report", "folder", "notes", "billing", "support", "platform", "data", "sales", "admin", "service", "services", "department", "dept", "engineering", "finance", "marketing", "security", "alerts", "notifications", "infra", "squad", "committee", "board", "council", "staff", "center", "centre", "labs", "systems", "solutions", "partners", "government", "administration", "agency", "bureau", "records", "utility", "telco", "carrier", "credit", "education", "probate", "usps", "holdings", "consulting", "associates", "llp", "plc", "gmbh", "industries", "enterprises"]
+    /// What a firm says it does, after the name it trades under ("Fernhill Robotics", "Halberd Capital"):
+    /// an organisation's word only written with its capital, as "shipping" or "capital" in a sentence is not.
+    static let tradeWords: Set<String> = ["robotics", "capital", "analytics", "logistics", "supply", "supplies", "bakery", "healthcare", "software", "technologies", "ventures", "pharmaceuticals", "insurance", "realty", "freight", "manufacturing", "investments", "advisors", "advisory", "studios", "aerospace", "biosciences", "therapeutics", "outfitters", "brewing", "brewery", "motors", "airlines", "shipping", "trading", "traders", "wholesale", "telecom", "telecoms", "retail", "utilities", "energy", "foods", "pharmacy", "payments", "lending", "mortgage", "mortgages", "media", "health"]
     static func namesOrganisation(_ text: String) -> Bool {
-        text.split(whereSeparator: { !$0.isLetter }).contains { organisationWords.contains($0.lowercased()) }
+        text.split(whereSeparator: { !$0.isLetter }).contains { organisationWords.contains($0.lowercased()) || $0.first?.isUppercase == true && tradeWords.contains($0.lowercased()) }
     }
     /// Whether the words at `range` name an organisation: they hold an
     /// organisation word, the next word is one ("Okafor Logistics"), or the
@@ -17,9 +20,10 @@ enum NameTagger {
     static func partOfOrganisation(_ range: Range<Int>, in text: String) -> Bool {
         // Only the next few words matter; the rest of a long text would make each check cost its length.
         let following = TextRanges.substring(text, range.upperBound..<min((text as NSString).length, range.upperBound + 120))
-        let nextWord = TextRanges.matches(leadingWord, in: following).first.map {
-            TextRanges.substring(following, $0.range.location..<NSMaxRange($0.range)).trimmingCharacters(in: .whitespaces).lowercased()
+        let written = TextRanges.matches(leadingWord, in: following).first.map {
+            TextRanges.substring(following, $0.range.location..<NSMaxRange($0.range)).trimmingCharacters(in: .whitespaces)
         }
+        let nextWord = written.map { $0.first?.isUppercase == true && tradeWords.contains($0.lowercased()) ? "company" : $0.lowercased() }
         // The run stops at the line's end; "L.L.C." and "Inc." read as "llc" and "inc".
         let line = following.prefix { !$0.isNewline }
         let run = line.split(whereSeparator: \.isWhitespace).prefix(4).prefix { word in
@@ -29,7 +33,7 @@ enum NameTagger {
         // "Ms Lind, Home Office" is a person and her employer.
         let suffixed = line.range(of: #"^(?:[ \t]+[IVX]{1,3}|[ \t]+[A-Z])?,[ \t]*(?i:l\.?l\.?c|inc|ltd|corp|co|plc|gmbh|l\.?l\.?p|l\.?p|limited|incorporated)\b"#, options: .regularExpression) != nil
         return namesOrganisation(TextRanges.substring(text, range)) || nextWord.map({ organisationWords.contains($0) }) == true || suffixed
-            || run.contains(where: { organisationWords.contains($0.lowercased().filter(\.isLetter)) })
+            || run.contains(where: { organisationWords.contains($0.lowercased().filter(\.isLetter)) || $0.first?.isUppercase == true && tradeWords.contains($0.lowercased().filter(\.isLetter)) })
     }
     /// Person and place names in `text`. What the tagger reads as an
     /// organisation goes into `organisations`, so a guess made elsewhere
@@ -47,11 +51,41 @@ enum NameTagger {
             if index.isMultiple(of: 64) && isCancelled() { return spans }
             let range = match.range.location..<NSMaxRange(match.range)
             if Names.firstFolded.contains(TextRanges.substring(text, range)), cued(range, in: text) {
+                // A name opening a handle ("maria.gonzalez", "maria_g") is the whole handle's,
+                // so the rest of it goes too; one in a file's name ("maria-cli.js") is no one's.
+                if let handle = handle(around: range, in: text) {
+                    if let span = handle { spans.append(span) }
+                    continue
+                }
                 spans.append(Span(range: range, entity: "PERSON", score: 0.85))
             }
         }
         spans.append(contentsOf: signOffs(in: text))
         return spans
+    }
+    /// The handle a name is joined into by a dot, an underscore or a dash, as a span (a person's
+    /// where only names are joined), or nil inside where it names a file; nil (no handle) where
+    /// the name stands alone or in an email.
+    private static func handle(around range: Range<Int>, in text: String) -> Span?? {
+        let ns = text as NSString
+        func joins(_ unit: unichar) -> Bool { unit < 128 && (CharacterSet.alphanumerics.contains(Unicode.Scalar(unit)!) || unit == 46 || unit == 95 || unit == 45) }
+        var start = range.lowerBound, end = range.upperBound
+        while start > 0, joins(ns.character(at: start - 1)) { start -= 1 }
+        while end < ns.length, joins(ns.character(at: end)) { end += 1 }
+        // A sentence's full stop or a dash closing it is no part of the handle.
+        while end > range.upperBound, [46, 45].contains(ns.character(at: end - 1)) { end -= 1 }
+        while start < range.lowerBound, [46, 45].contains(ns.character(at: start)) { start += 1 }
+        guard start < range.lowerBound || end > range.upperBound else { return nil }
+        if start > 0, [64, 47].contains(ns.character(at: start - 1)) || end < ns.length && ns.character(at: end) == 64 { return nil }
+        let token = ns.substring(with: NSRange(location: start, length: end - start))
+        if let dot = token.lastIndex(of: "."), ContextStage.fileExtensions.contains(token[token.index(after: dot)...].lowercased()) { return .some(nil) }
+        // Names joined by a dash are one person's ("maria-jose").
+        let parts = token.split(separator: "-")
+        if !token.contains(where: { $0 == "." || $0 == "_" || $0.isNumber }), parts.count > 1,
+           parts.allSatisfy({ Names.firstFolded.contains($0.lowercased()) || Names.lastFolded.contains($0.lowercased()) }) {
+            return .some(Span(range: start..<end, entity: "PERSON", score: 0.85))
+        }
+        return .some(Span(range: start..<end, entity: "USERNAME", score: 0.85))
     }
     // A known first name alone on the line after "Thanks," signs the message.
     // The model has no sentence to read it in, so it never tags it.
@@ -71,10 +105,13 @@ enum NameTagger {
     private static let strongBefore: Set<String> = ["named", "called", "mr", "mrs", "ms", "dr", "contact", "owner", "customer", "patient", "employee"]
     private static let informalBefore: Set<String> = ["its", "it's", "im", "i'm", "with", "w", "spoke", "ask", "tell", "cc"]
     private static let reporting: Set<String> = ["said", "asked", "wrote", "emailed", "phoned", "called", "replied"]
+    private static let articles: Set<String> = ["a", "an", "the", "this", "that", "these", "those", "our", "your", "my", "its", "their", "every", "each", "some", "any", "no"]
     private static func cued(_ range: Range<Int>, in text: String) -> Bool {
         let value = TextRanges.substring(text, range).lowercased()
         let next = Context.words(after: range.upperBound, in: text, limit: 1, pattern: asciiWord).first?.lowercased()
         let before = Context.before(range, in: text, limit: 3)
+        // "saw an amber alert", "the will power": after an article a word is a thing, whatever cue stands further back.
+        if let previous = Context.words(before: range.lowerBound, in: text, limit: 1, pattern: asciiWord).first?.lowercased(), articles.contains(previous) { return false }
         if !before.isDisjoint(with: strongBefore) || next.map({ reporting.contains($0) }) == true { return true }
         if Names.ambiguousFirst.contains(value) { return false }
         if next == "from" && value == TextRanges.substring(text, range) { return true }
@@ -96,7 +133,7 @@ enum NameTagger {
             let upper = input.utf16.distance(from: input.utf16.startIndex, to: range.upperBound.samePosition(in: input.utf16) ?? input.utf16.endIndex)
             var mapped = lower..<upper
             if partOfOrganisation(mapped, in: original) { return true }
-            if tag == .personalName { mapped = trimmedToWrittenCapitals(mapped, in: original) }
+            if tag == .personalName { mapped = syllableJoined(trimmedToWrittenCapitals(mapped, in: original), in: original) }
             // A name is a word of its own. The tagger splits "Qz7m9rx5l1ba2ms6" at
             // its digits and can call "Qz" a name; that is the head of a token.
             if glued(mapped, in: original) { return true }
@@ -107,12 +144,25 @@ enum NameTagger {
                     let known = Names.firstFolded.contains(value.lowercased()) || Names.lastFolded.contains(value.lowercased())
                     let cue = cued(mapped, in: original)
                     if (!known && !cue) || (Names.ambiguousFirst.contains(value.lowercased()) && !cue) || (value == value.uppercased() && value.count >= 2 && !known) { return true }
+                    // "done, called her": a word in small letters no list of names holds is the word, whatever cue stands beside it.
+                    if !known, value == value.lowercased(), NameLists.isWord(value) { return true }
+                } else {
+                    // "Possible SYN flooding": a word and an acronym, neither a name anyone is known by, are no person.
+                    let words = tokens.map { (value as NSString).substring(with: $0.range) }
+                    func known(_ word: String) -> Bool { Names.firstFolded.contains(word.lowercased()) || Names.lastFolded.contains(word.lowercased()) }
+                    if !words.contains(where: known), words.contains(where: { $0.count >= 2 && $0 == $0.uppercased() }),
+                       words.contains(where: { $0 != $0.uppercased() && NameLists.isOrdinary($0.lowercased()) }) { return true }
                 }
             }
             if variant {
                 guard tag == .personalName else { return true }
                 let tokens = TextRanges.matches(asciiWord, in: TextRanges.substring(original, mapped)).map { TextRanges.substring(original, (mapped.lowerBound + $0.range.location)..<(mapped.lowerBound + NSMaxRange($0.range))).lowercased() }
-                let knownFullName = tokens.count >= 2 && tokens.first.map { Names.firstFolded.contains($0) } == true
+                // A known first name before a word that is no name ("amber alert", "will power") is no full name.
+                // A first name that is also a word counts before a surname that is none ("scott schneider"); a title is no word here.
+                let named = tokens.filter { !People.isTitle($0) }
+                let surnamed = named.last.map { NameLists.isSurname($0) && !NameLists.isOrdinary($0) && !NameLists.isWordlike($0) } == true
+                let knownFullName = tokens.count >= 2 && named.first.map { Names.firstFolded.contains($0) && (!NameLists.isWordlike($0) || surnamed) } == true
+                    && !named.contains { NameLists.isOrdinary($0) && !NameLists.isFirst($0) && !NameLists.isSurname($0) }
                 guard knownFullName || cued(mapped, in: original) else { return true }
             }
             let found = TextRanges.substring(original, mapped)
@@ -122,10 +172,36 @@ enum NameTagger {
             let isCity = tag == .personalName && Names.citiesFolded.contains(found.lowercased())
             // A country ("Canada", "United States") is where millions live; it names no one.
             if tag == .placeName, let country = Places.country(found), country != "other" { return true }
+            // An ordinary word opening a sentence ("Hi, I'm…", read as Hawaii) is the word, unless it is a city's or a person's name too.
+            if tag == .placeName, !found.contains(" "), opensSentence(mapped, in: original), NameLists.isWord(found.lowercased()) && !NameLists.isName(found) || found.count <= 2,
+               !Names.citiesFolded.contains(found.lowercased()) { return true }
             result.append(Span(range: mapped, entity: tag == .personalName && !isCity ? "PERSON" : "LOCATION", score: tag == .personalName && !isCity ? 0.85 : 0.6))
             return true
         }
         return result
+    }
+    /// A name read up to a hyphen between the syllables of a given name ("Kim Ji" of "Kim Ji-woo") reaches the end of it.
+    static func syllableJoined(_ range: Range<Int>, in text: String) -> Range<Int> {
+        let ns = text as NSString
+        func letter(_ index: Int) -> Bool { index < ns.length && Unicode.Scalar(ns.character(at: index)).map(CharacterSet.letters.contains) == true }
+        var start = range.upperBound
+        while start > range.lowerBound, letter(start - 1) { start -= 1 }
+        guard (1...4).contains(range.upperBound - start), range.upperBound < ns.length, ns.character(at: range.upperBound) == 0x2D else { return range }
+        var end = range.upperBound + 1
+        while letter(end) { end += 1 }
+        return (2...5).contains(end - range.upperBound - 1) && ns.character(at: end - 1) != 0x2D && !(end < ns.length && ns.character(at: end) == 0x2D) ? range.lowerBound..<end : range
+    }
+    /// Whether `range` opens its line or a sentence: only space, quotes or a
+    /// list's marks since the last full stop, question or exclamation mark.
+    static func opensSentence(_ range: Range<Int>, in text: String) -> Bool {
+        let ns = text as NSString
+        var at = range.lowerBound - 1
+        while at >= 0, let scalar = Unicode.Scalar(ns.character(at: at)) {
+            if CharacterSet.newlines.contains(scalar) || ".!?".unicodeScalars.contains(scalar) { return true }
+            guard CharacterSet.whitespaces.contains(scalar) || "\"'“‘>*-•".unicodeScalars.contains(scalar) else { return false }
+            at -= 1
+        }
+        return true
     }
     /// Whether a letter or digit runs straight into either end of `range`.
     static func glued(_ range: Range<Int>, in text: String) -> Bool {

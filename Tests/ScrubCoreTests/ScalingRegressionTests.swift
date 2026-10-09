@@ -293,3 +293,182 @@ private func expectPrompt(_ measure: () async throws -> (stopped: Duration, refe
     print("plain text debug: 4000=\(half), 8000=\(full)")
     #expect(full < half * 3)
 }
+
+/// `fastest`, measured again up to three times until `holds` does: a machine busy with other
+/// tests can slow one run of a pair, but a cost that grows faster than it should fails every time.
+private func settled(_ a: () throws -> Void, _ b: () throws -> Void, until holds: (Duration, Duration) -> Bool) rethrows -> (Duration, Duration) {
+    var times = try fastest(a, b)
+    for _ in 0..<2 where !holds(times.0, times.1) { times = try fastest(a, b) }
+    return times
+}
+
+/// The fastest of two runs of each, alternated: other suites run in
+/// parallel, and their load changes between two timings.
+private func fastest(_ a: () throws -> Void, _ b: () throws -> Void) rethrows -> (Duration, Duration) {
+    var first = Duration.seconds(3600), second = Duration.seconds(3600)
+    for _ in 0..<2 {
+        var start = ContinuousClock.now
+        try a()
+        first = min(first, start.duration(to: .now))
+        start = .now
+        try b()
+        second = min(second, start.duration(to: .now))
+    }
+    return (first, second)
+}
+
+/// A customer export: an ID, a name, an email, a phone and a city on every row.
+private func customerCSV(_ count: Int) -> Data {
+    let firsts = ["Odalys", "Teodoro", "Marisol", "Kwabena", "Ingrid", "Tobiah", "Saoirse", "Leocadia"]
+    let lasts = ["Ferriter", "Quillan", "Abernathy", "Oduya", "Brackenridge", "Thornquist", "Castellanos", "Venkataraman"]
+    let cities = ["Albany", "Tacoma", "Dayton", "Fresno", "Provo"]
+    let rows = (0..<count).map { index -> String in
+        let first = firsts[index % firsts.count], last = lasts[index / firsts.count % lasts.count]
+        return "C-\(10_000 + index),\(first),\(last),\(first.lowercased()).\(last.lowercased())\(index)@example.com,(212) 555-01\(String(format: "%02d", index % 100)),\(cities[index % cities.count]),2024-\(String(format: "%02d", index % 12 + 1))-\(String(format: "%02d", index % 28 + 1)),\(index * 7 % 1000).\(index % 100)"
+    }
+    return Data(("customer_id,first_name,last_name,email,phone,city,signup_date,ltv\n" + rows.joined(separator: "\n") + "\n").utf8)
+}
+
+/// A service's log: a time, a level, a user's email, an address and a status on every line.
+private func serviceLog(_ count: Int) -> Data {
+    let lines = (0..<count).map { index in
+        #"{"ts": "2026-10-01T\#(String(format: "%02d:%02d:%02d", 12 + index / 3600 % 12, index / 60 % 60, index % 60))Z", "level": "\#(index % 50 == 0 ? "warn" : "info")", "user_email": "user\#(index % 300)@example.com", "ip": "198.51.100.\#(index % 250)", "status": \#(index % 50 == 0 ? 503 : 200), "latency_ms": \#(index % 500)}"#
+    }
+    return Data((lines.joined(separator: "\n") + "\n").utf8)
+}
+
+/// A table and a log four times as long take about four times as long, not sixteen.
+@Test func customerExportAndServiceLogScaleLinearly() throws {
+    for (name, make) in [("customers.csv", customerCSV), ("service.jsonl", serviceLog)] {
+        let small = make(400), large = make(1_600)
+        let (short, long) = try settled({ _ = try Scrubber.scrub(small, name: name, forceFullDetection: false, seed: 3) },
+                                        { _ = try Scrubber.scrub(large, name: name, forceFullDetection: false, seed: 3) }, until: { $1 < $0 * 6 })
+        print("\(name) debug: 400=\(short), 1600=\(long)")
+        #expect(long < short * 6, "\(name): 400 rows \(short), 1600 rows \(long)")
+    }
+}
+
+/// A value its key names (`"phone": "(212) 555-0142"`) is checked against the kinds the key
+/// names, not read for every kind there is.
+@Test func aKeyedValueIsReadOnlyForTheKindsItsKeyNames() {
+    let values = (0..<300).map { "(212) 555-\(String(format: "%04d", $0 * 37 % 10_000))" }
+    let words: Set<String> = ["phone"]
+    let (named, read) = settled({ for value in values { _ = Recognizers.named(value, by: words) } },
+                                { for value in values { _ = Recognizers.find(value, ns: value as NSString, units: Array(value.utf16), contextWords: words, isCancelled: { false }) } }, until: { $0 * 3 < $1 })
+    print("keyed value debug: named=\(named), every kind=\(read)")
+    #expect(named * 3 < read)
+}
+
+/// A column of values no kind passes (a log's times) is given up once nine in ten can no longer pass one.
+@Test func aColumnNoKindHoldsIsGivenUpEarly() {
+    let times = (0..<3_000).map { "2026-10-01T\(String(format: "%02d:%02d:%02d", $0 / 3600, $0 / 60 % 60, $0 % 60))Z" }
+    let (column, every) = settled({ #expect(Fields.column(times) == nil) }, { for time in times { _ = Recognizers.candidates(time) } }, until: { $0 * 3 < $1 })
+    print("column debug: column=\(column), every value=\(every)")
+    #expect(column * 3 < every)
+}
+
+/// A document's records repeat their values ("level": "info"): one read once costs little where it is written again.
+@Test func repeatedValuesAreReadOnce() throws {
+    let lines = { (repeated: Bool) in
+        Data((0..<600).map { index -> String in
+            let tag = repeated ? "" : "-\(index)"
+            return #"{"service": "checkout-api-eu-west-1-blue-canary\#(tag)", "path": "/api/v2/orders/search?status=open&sort=created_at&page=12\#(tag)", "build": "2026.10.01-rc3+arm64.release.9f8e7d\#(tag)", "route": "orders.search.v2.primary.read-replica\#(tag)", "trace": "svc=checkout;zone=eu-west-1b;pool=blue;tier=standard\#(tag)"}"#
+        }.joined(separator: "\n").utf8)
+    }
+    let same = lines(true), distinct = lines(false)
+    let (repeated, unique) = try settled({ _ = try Scrubber.scrub(same, name: "service.jsonl", forceFullDetection: false, seed: 3) },
+                                         { _ = try Scrubber.scrub(distinct, name: "service.jsonl", forceFullDetection: false, seed: 3) }, until: { $0 * 9 < $1 * 5 })
+    print("repeated values debug: repeated=\(repeated), distinct=\(unique)")
+    // Read once, about half as long; read every time, about two thirds.
+    #expect(repeated * 9 < unique * 5)
+}
+
+/// A support log's notes, a person named on every line: each name's place in the text, as a reader found it.
+private func namedNotes(_ count: Int) -> (text: String, spans: [Span]) {
+    let firsts = ["Odalys", "Teodoro", "Marisol", "Kwabena", "Ingrid", "Tobiah", "Saoirse", "Leocadia"]
+    let lasts = ["Ferriter", "Quillan", "Abernathy", "Oduya", "Brackenridge", "Thornquist", "Castellanos", "Venkataraman"]
+    var text = "", spans: [Span] = []
+    for index in 0..<count {
+        let name = "\(firsts[index % firsts.count]) \(lasts[index / firsts.count % lasts.count])"
+        let start = (text as NSString).length
+        spans.append(Span(range: start..<(start + (name as NSString).length), entity: "PERSON", score: 0.9))
+        text += "\(name) asked for a refund on order \(index * 37 + 1000); she will call back after \(index % 12 + 1) pm.\n"
+    }
+    return (text, spans)
+}
+
+/// A text naming four times as many people takes about four times as long to join their names' pieces
+/// and to read the pronouns after each, not sixteen: each name is weighed against its neighbours, not every other name.
+@Test func manyPeopleInOneTextScaleLinearly() {
+    let small = namedNotes(1_000), large = namedNotes(4_000)
+    let (joinedShort, joinedLong) = settled({ for _ in 0..<5 { _ = JoinedNames.joined(small.spans, [], in: small.text) } },
+                                            { for _ in 0..<5 { _ = JoinedNames.joined(large.spans, [], in: large.text) } }, until: { $1 < $0 * 6 })
+    print("joined names debug: 1000=\(joinedShort), 4000=\(joinedLong)")
+    #expect(joinedLong < joinedShort * 6)
+    let (observedShort, observedLong) = settled({ Job(seed: 3).observeSpans([(small.text, small.spans)]) },
+                                                { Job(seed: 3).observeSpans([(large.text, large.spans)]) }, until: { $1 < $0 * 6 })
+    print("observed names debug: 1000=\(observedShort), 4000=\(observedLong)")
+    #expect(observedLong < observedShort * 6)
+}
+
+@Test func enclosingRangesMatchLinearReference() {
+    var seed: UInt64 = 0x5eed_2b17
+    var differing: [String] = []
+    func next() -> Int { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Int(seed >> 33) }
+    for _ in 0..<500 {
+        let ranges = (0..<(next() % 40)).map { _ in
+            let start = next() % 60
+            return start..<(start + next() % 12)
+        }
+        let enclosing = JoinedNames.Enclosing(ranges)
+        for start in 0..<64 {
+            for end in start..<(start + 14) {
+                let range = start..<end
+                let linear = ranges.contains { $0 != range && $0.lowerBound <= range.lowerBound && range.upperBound <= $0.upperBound }
+                if enclosing.holds(range) != linear { differing.append("\(range) in \(ranges)") }
+            }
+        }
+    }
+    #expect(differing.isEmpty, "\(differing.prefix(3))")
+}
+
+/// A chat four times as long, its speakers mentioned with "@" on every line, takes about four times as long
+/// to find who speaks, not sixteen: each mention is looked up among the speakers found, not compared with each.
+@Test func chatMentionsScaleLinearly() {
+    let speakers = ["ingrid", "tomasz", "deepa", "yaw", "odalys", "kwabena", "saoirse", "teodoro"]
+    func chat(_ count: Int) -> String {
+        (0..<count).map { "[\(String(format: "%02d:%02d", 9 + $0 / 60 % 10, $0 % 60))] \(speakers[$0 % speakers.count]): @\(speakers[($0 * 5 + 3) % speakers.count]) can you look at build \($0)?" }.joined(separator: "\n")
+    }
+    let small = chat(1_000), large = chat(4_000)
+    #expect(ListedNames.spoken(in: small).sure.count == 2_000)
+    let (short, long) = settled({ for _ in 0..<8 { _ = ListedNames.spoken(in: small) } }, { for _ in 0..<8 { _ = ListedNames.spoken(in: large) } }, until: { $1 < $0 * 6 })
+    print("chat mentions debug: 1000=\(short), 4000=\(long)")
+    #expect(long < short * 6)
+}
+
+/// A support log four times as long, each ticket from someone whose email spells their name and who is
+/// named again at a sentence's end, takes about four times as long to find those names, not sixteen:
+/// each name the emails spell is read once where it is written, and the full stop after it on its own.
+@Test func namesSpelledByEmailsScaleLinearly() {
+    let firsts = ["Odalys", "Teodoro", "Marisol", "Kwabena", "Ingrid", "Tobiah", "Saoirse", "Leocadia"]
+    let syllables = ["bran", "dol", "vik", "ster", "mor", "quil", "tren", "fal", "wick", "hal", "gon", "rith"]
+    func log(_ count: Int) -> (text: String, spans: [Span]) {
+        var text = "", spans: [Span] = []
+        for index in 0..<count {
+            let first = firsts[index % firsts.count]
+            let last = (syllables[index / firsts.count % syllables.count] + syllables[index / 96 % syllables.count] + ["", "son", "ley", "ard"][index / 1_152 % 4]).capitalized
+            let email = "\(first.lowercased()).\(last.lowercased())@example.com"
+            let line = "ticket \(40_000 + index) from \(first) \(last) <\(email)>: card declined, spoke with \(first) \(last).\n"
+            let start = (text as NSString).length + (line.components(separatedBy: "<")[0] as NSString).length + 1
+            spans.append(Span(range: start..<(start + (email as NSString).length), entity: "EMAIL_ADDRESS", score: 1))
+            text += line
+        }
+        return (text, spans)
+    }
+    let small = log(1_000), large = log(4_000)
+    #expect(Detector.spelledByEmail(small.spans, in: small.text).count == 1_000)
+    let (short, long) = settled({ for _ in 0..<3 { _ = Detector.spelledByEmail(small.spans, in: small.text) } },
+                                { for _ in 0..<3 { _ = Detector.spelledByEmail(large.spans, in: large.text) } }, until: { $1 < $0 * 6 })
+    print("spelled names debug: 1000=\(short), 4000=\(long)")
+    #expect(long < short * 6)
+}

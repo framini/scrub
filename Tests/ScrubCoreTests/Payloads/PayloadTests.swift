@@ -4,7 +4,8 @@ import Testing
 
 /// Realistic API payloads, each rendered every way it reaches the app, judged
 /// field by field against what the generator knows each value to be.
-/// SCRUB_PROPERTY_CASES sets how many payloads; SCRUB_PROPERTY_SEED replays a run.
+/// SCRUB_PROPERTY_CASES sets how many payloads; SCRUB_PROPERTY_SEED replays a run;
+/// SCRUB_PAYLOAD_SHAPE keeps one shape.
 @Suite(.serialized)
 struct PayloadProperties {
 
@@ -14,13 +15,15 @@ struct PayloadProperties {
         var documents = 0
     }
 
-    static func run(_ name: String, renderings: [Rendering]) -> Outcome {
+    static func run(_ name: String, renderings: [Rendering], shapes: [String] = PayloadGen.shapes) -> Outcome {
         let run = PropertyRun(name)
         defer { run.finish() }
         var outcome = Outcome()
         for index in 0..<run.count {
             var payloads = PayloadGen(seed: run.seed(index))
-            let shape = PayloadGen.shapes[index % PayloadGen.shapes.count]
+            let shape = shapes[index % shapes.count]
+            // SCRUB_PAYLOAD_SHAPE=identity runs one shape alone.
+            if let only = ProcessInfo.processInfo.environment["SCRUB_PAYLOAD_SHAPE"], only != shape { continue }
             let payload = payloads.payload(shape)
             for rendering in renderings {
                 guard let rendered = Render.render(payload, as: rendering, gen: &payloads.gen) else { continue }
@@ -63,6 +66,23 @@ struct PayloadProperties {
     /// example input per finding group.
     @Test func realisticPayloads() {
         let outcome = Self.run("payloads", renderings: Rendering.allCases)
+        let report = Self.report(outcome)
+        print(report)
+        if let path = ProcessInfo.processInfo.environment["SCRUB_PAYLOAD_REPORT"], path.hasPrefix("/") {
+            let examples = outcome.examples.sorted { $0.key < $1.key }.map { "### \($0.key)\n\($0.value)" }.joined(separator: "\n\n")
+            try? (report + "\n\n" + examples).write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        let hard = outcome.findings.filter { $0.problem != "softChanged" }
+        let example = hard.first.flatMap { outcome.examples[$0.group] } ?? ""
+        #expect(hard.isEmpty, "baseSeed=\(PropertyRun.baseSeed)\n\(report)\n\nFIRST EXAMPLE:\n\(example)")
+    }
+}
+
+extension PayloadProperties {
+    /// Identity-check responses (see `kycSSN`), pasted and opened the ways
+    /// the JSON reaches the app, held to the same judge.
+    @Test func identityCheckPayloads() {
+        let outcome = Self.run("kyc", renderings: [.json, .jsonMinified, .pastedJSON, .curl, .logLine], shapes: PayloadGen.kycShapes)
         let report = Self.report(outcome)
         print(report)
         if let path = ProcessInfo.processInfo.environment["SCRUB_PAYLOAD_REPORT"], path.hasPrefix("/") {

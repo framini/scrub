@@ -28,13 +28,16 @@ enum Correction {
     }
     /// `held` marks places left as written (people the detectors doubted);
     /// they come back where they stand in the output, without any a replacement covers.
-    static func run(_ initial: String, marks initialMarks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, gate: LeakGate, passes: Int = 3, base: [Span]? = nil, held: inout [Mark]) throws -> (String, [Mark], [Mark]) {
+    /// `sparing`: kinds a value's own key says it never holds (a secret's bytes in a status or an amount), left where they stand.
+    static func run(_ initial: String, marks initialMarks: [Mark], job: Job, matcher: OriginalMatcher, gazetteer: GazetteerMatcher, gate: LeakGate, passes: Int = 3, base: [Span]? = nil, held: inout [Mark], sparing: Set<String> = []) throws -> (String, [Mark], [Mark]) {
         var output = initial
         var marks = initialMarks
         for pass in 0..<passes {
             try Scrubber.checkCancellation()
             let found = visibleLeftovers(in: output, marks: marks, job: job, matcher: matcher, gazetteer: gazetteer, gate: gate, base: pass == 0 ? base : nil)
-            let spans = Detector.resolve(found.spans)
+            let spans = Job.outsideTimeZones(KeyedValues.outsideKeys(Detector.resolve(found.spans), in: output), in: output).filter { !sparing.contains($0.entity) }
+                // A private network's address after a machine's key ("node=10.0.4.17") is a machine's, here as when first read.
+                .filter { !($0.entity == "IP_ADDRESS" && DocumentPipeline.machineAddress($0.range, in: output)) }
             if spans.isEmpty { return (output, marks, unresolved(found.suspects, in: output)) }
             var fakes = Array(repeating: "", count: spans.count)
             var sources = [String?](repeating: nil, count: spans.count)
@@ -152,8 +155,32 @@ enum Correction {
         // So is a person made of ordinary words that the tagger reads only now:
         // "Later" opening a sentence after a stand-in "Quinn Ramos" is no one,
         // and the first pass, reading the original, said so.
-        found.spans.append(contentsOf: detected.filter { $0.entity != "LOCATION" && !ours($0.range, $0.entity) && !readOffStandIns($0, in: output) })
+        let fresh = detected.filter { $0.entity != "LOCATION" && !ours($0.range, $0.entity) && !readOffStandIns($0, in: output) }
+        // A given name alone that people of two surnames share ("Tobias" beside Tobias Wren and Tobias Hale)
+        // is either of them, or someone else: asked about, never a third stand-in.
+        for span in fresh {
+            if span.entity == "PERSON", job.sharedFirsts.contains(TextRanges.substring(output, span.range)) {
+                found.suspects.append(Span(range: span.range, entity: "PERSON", score: LeakGate.suspectConfidence))
+            } else { found.spans.append(span) }
+        }
         found.spans = Links.outside(found.spans, in: output)
+        // Once any part of a name is replaced, no other part of it written beside it stays as written:
+        // it is replaced as more of that name, or asked about where it may be a word.
+        let named = ordered.filter { ["PERSON", "FIRST_NAME", "LAST_NAME"].contains($0.entity) && $0.original != nil }
+        if !named.isEmpty {
+            let known = Set(named.flatMap { $0.original!.split { !$0.isLetter }.map { $0.lowercased() } }.filter { $0.count >= 2 })
+            var taken = IndexSet()
+            for span in found.spans { taken.insert(integersIn: span.range) }
+            for mark in named {
+                let written = TextRanges.substring(output, mark.range)
+                let slug = written == written.lowercased() && !written.contains(" ")
+                for part in NameShape.adjacentParts(mark.range, in: output, known: known, slug: slug) where !ours(part.range, "PERSON") && !taken.intersects(integersIn: part.range) {
+                    taken.insert(integersIn: part.range)
+                    if part.sure { found.spans.append(Span(range: part.range, entity: "PERSON", score: 1)) }
+                    else { found.suspects.append(Span(range: part.range, entity: "PERSON", score: LeakGate.suspectConfidence)) }
+                }
+            }
+        }
         // The leak gate: variants of values already replaced, which no detector
         // reads, and numbers that check themselves left as written. A pass fixes
         // a bounded number of variants, in proportion to the text; the rest are suspects.
@@ -166,7 +193,7 @@ enum Correction {
         let parts = linked.isEmpty ? [] : URLs.components(in: output)
         for leak in gated.leaks where !ours(leak.range, "PERSON") {
             if Links.named.contains(leak.entity), linked.contains(where: { $0.overlaps(leak.range) }) {
-                if let part = parts.first(where: { $0.range == leak.range }) {
+                if let part = parts.first(where: { $0.range == leak.range }) ?? parts.first(where: { $0.part == .path && $0.range.contains(leak.range.lowerBound) && $0.range.upperBound >= leak.range.upperBound && Self.slugWord(leak.range, of: $0.range, in: output) }) {
                     found.spans.append(Span(range: leak.range, entity: leak.entity, score: 1.1, url: part.part))
                     found.leaks[leak.range] = leak
                 } else {
@@ -181,6 +208,16 @@ enum Correction {
         return found
     }
 
+    /// Whether `range` is a whole word of a path segment written as a slug, its
+    /// words joined by hyphens or underscores ("odalys-ferriter", "ashdowns-garden"
+    /// with its possessive "s"): replacing it leaves the link a link.
+    static func slugWord(_ range: Range<Int>, of segment: Range<Int>, in text: String) -> Bool {
+        let ns = text as NSString
+        let joiners: Set<unichar> = [45, 95, 43]
+        func edge(_ at: Int) -> Bool { at < segment.lowerBound || at >= segment.upperBound || joiners.contains(ns.character(at: at)) }
+        let closes = edge(range.upperBound) || ns.character(at: range.upperBound) == 115 && edge(range.upperBound + 1)
+        return edge(range.lowerBound - 1) && closes && (range != segment)
+    }
     /// A guess about a person, below the surety of a found original, made of
     /// ordinary words that are no one's first name or surname ("Later"). A
     /// name that is also a word ("Olive", "Randy") is still caught.
@@ -210,15 +247,21 @@ struct OriginalMatcher {
     static func spreads(_ original: String, entity: String = "") -> Bool {
         // A region code ("WA", "IN", "OR") is a word everywhere else, and
         // initials, ages, coordinates and time zones only mean something where they were found.
-        if ["REGION", "INITIALS", "AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE", "COORDINATES", "TIME_ZONE"].contains(entity) { return false }
+        if ["REGION", "INITIALS", "AGE", "LAST_DIGITS", "LATITUDE", "LONGITUDE", "COORDINATES", "TIME_ZONE", "EXPIRY_DATE"].contains(entity) { return false }
+        if entity == "SECRET", KeyHints.isCommonValue(original) { return false }
+        // A masked number ("*********7731") is as specific as its mask and digits together.
+        if original.filter({ "*•●Xx#".contains($0) }).count >= 3, original.filter(\.isNumber).count >= 4 { return true }
         let significant = original.filter { $0.isLetter || $0.isNumber }
+        // A birth date with a year of two digits ("7/3/84") is a day, month and year, however few its digits.
+        if entity == "DATE_OF_BIRTH", original.filter({ "/-.".contains($0) }).count == 2, significant.count >= 4 { return true }
         return significant.count >= (significant.allSatisfy(\.isNumber) ? 5 : 2)
     }
     mutating func add(_ replacements: ArraySlice<Replacement>) {
         let originals = replacements.filter { Self.spreads($0.original, entity: $0.entity) }
         guard !originals.isEmpty else { return }
-        let literals = originals.map(\.original)
-        let labels = originals.map(\.entity)
+        let spelled = originals.filter { $0.entity == "DATE_OF_BIRTH" }.flatMap { BirthSpellings.of($0.original) }
+        let literals = originals.map(\.original) + spelled
+        let labels = originals.map(\.entity) + spelled.map { _ in "DATE_OF_BIRTH" }
         supplements.append((Matcher(literals, isCancelled: { Task.isCancelled }), labels))
     }
     private static func entries(_ job: Job) -> ([String], [String]) {
@@ -241,6 +284,9 @@ struct OriginalMatcher {
         for replacement in job.replacements {
             add(SensitiveOriginal(original: replacement.original, entity: replacement.entity))
         }
+        // A birth date is the person's in any spelling: "1984-03-07" written again as "March 7, 1984" or "07MAR1984".
+        let births = literals.indices.filter { labels[$0] == "DATE_OF_BIRTH" }.map { literals[$0] }
+        for birth in births { for spelling in BirthSpellings.of(birth) { add(SensitiveOriginal(original: spelling, entity: "DATE_OF_BIRTH")) } }
         return (literals, labels)
     }
     func spans(in text: String) -> [Span] {
@@ -258,6 +304,47 @@ struct OriginalMatcher {
             guard GazetteerMatcher.ordinaryWord(word) else { return true }
             return NameLists.isUnlistedWord(word) ? NameCues.namedWord(span.range, in: text) : NameCues.position(span.range, in: text)
         }
+    }
+}
+
+/// The ways one birth date is written: in numbers with its day or its month first, a year of four or two
+/// digits, padded or not; year first; and with its month's name, in full or short ("March 7, 1984",
+/// "7 Mar 1984", "07-Mar-1984", "07MAR1984"). A date that reads either way round ("03/07/1984") is spelled
+/// both ways: the other reading, written elsewhere, is the same eight digits of the same person.
+enum BirthSpellings {
+    private static let months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+    static func of(_ original: String) -> [String] {
+        let trimmed = original.trimmingCharacters(in: .whitespaces)
+        var readings: [(year: Int, month: Int, day: Int)] = []
+        if let parts = StandIns.dateParts(trimmed), let month = parts.month, let day = parts.day { readings = [(parts.year, month, day)] }
+        else if let either = StandIns.eitherWay(trimmed) { readings = [(either.year, either.first, either.second), (either.year, either.second, either.first)] }
+        var spellings: [String] = []
+        for (year, month, day) in readings where (1...12).contains(month) && (1...31).contains(day) {
+            let yy = String(format: "%02d", year % 100), mm = String(format: "%02d", month), dd = String(format: "%02d", day)
+            let full = months[month - 1], short = String(full.prefix(3))
+            let ordinal = String(day) + ((11...13).contains(day % 100) ? "th" : [1: "st", 2: "nd", 3: "rd"][day % 10] ?? "th")
+            for separator in ["/", "-", "."] {
+                spellings += ["\(year)\(separator)\(mm)\(separator)\(dd)", "\(year)\(separator)\(month)\(separator)\(day)"]
+                for y in [String(year), yy] {
+                    spellings += ["\(mm)\(separator)\(dd)\(separator)\(y)", "\(month)\(separator)\(day)\(separator)\(y)",
+                                  "\(dd)\(separator)\(mm)\(separator)\(y)", "\(day)\(separator)\(month)\(separator)\(y)"]
+                }
+            }
+            spellings += ["\(year)\(mm)\(dd)", "\(dd)\(mm)\(year)", "\(mm)\(dd)\(year)"]
+            for name in [full, short, short + "."] {
+                for d in [String(day), dd, ordinal] {
+                    spellings += ["\(name) \(d), \(year)", "\(name) \(d) \(year)", "\(d) \(name) \(year)", "\(d) \(name), \(year)"]
+                }
+                spellings += ["\(ordinal) of \(name) \(year)", "\(ordinal) of \(name), \(year)"]
+            }
+            for y in [String(year), yy] {
+                spellings += ["\(dd)-\(short)-\(y)", "\(day)-\(short)-\(y)", "\(dd)\(short)\(y)", "\(dd) \(short) \(y)"]
+            }
+            spellings += ["\(year)-\(short)-\(dd)"]
+        }
+        let folded = trimmed.lowercased()
+        var seen: Set<String> = []
+        return spellings.filter { $0.lowercased() != folded && seen.insert($0.lowercased()).inserted }
     }
 }
 

@@ -126,7 +126,8 @@ struct Acceptance {
             #expect(read.last4 == String(read.ssn.suffix(4)) && read.ssn != person.ssn, "\(label) \(read.last4) does not end \(read.ssn)")
             let year = Int(read.dob.prefix(4)) ?? Int(read.dob.suffix(4)) ?? 0
             #expect(year != 0 && [Self.now - year - 1, Self.now - year].contains(Int(read.age) ?? -1), "\(label) age \(read.age) beside \(read.dob)")
-            let surname = read.name.split(separator: " ").last.map { $0.lowercased() } ?? "?"
+            // An address writes a surname's letters only ("O'Brien" is obrien).
+            let surname = read.name.split(separator: " ").last.map { $0.lowercased().filter(\.isLetter) } ?? "?"
             #expect(read.email.lowercased().contains(surname), "\(label) \(read.email) does not follow \(read.name)")
             #expect(read.id.hasPrefix("cus_") && read.id.count == person.id.count && read.id != person.id, "\(label) record ID \(read.id)")
         }

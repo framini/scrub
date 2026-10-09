@@ -168,22 +168,25 @@ func theSameScrubAndMarksWriteTheSameBytes(_ shape: HandoverShape) throws {
 }
 
 @Test func aMarkedNameTakesTheStandInItsPartsAlreadyHave() throws {
-    // Scrub read "Varrick" in the log and replaced it, but not the team's full name.
-    let input = #"{"sprint":"Harrowgate","owner_team":"Ysolde Varrick","chat":"yvarrick","log":"VARRICK, Y. signed off; Varrick's notes attached"}"#
+    // A first name no word could be is taken in with the surname found beside it ("Ysolde Varrick").
+    let whole = try Scrubber.scrub(Data(#"{"sprint":"Harrowgate","owner_team":"Ysolde Varrick","log":"Varrick's notes attached"}"#.utf8), name: "sprint.json", forceFullDetection: false, seed: 5)
+    #expect(!text(whole).contains("Ysolde") && whole.findings.contains { $0.original == "Ysolde Varrick" }, "\(text(whole))")
+    // One that is also a word ("Sorrel") is not: Scrub read "Varrick" in the log and replaced it, but not the team's full name.
+    let input = #"{"sprint":"Harrowgate","owner_team":"Sorrel Varrick","chat":"svarrick","log":"VARRICK, S. signed off; Varrick's notes attached"}"#
     let result = try Scrubber.scrub(Data(input.utf8), name: "sprint.json", forceFullDetection: false, seed: 5)
     let surname = try #require(result.findings.first { $0.original == "Varrick" }, "\(text(result))")
     // Selected with the surname's stand-in beside it, the first name is what to mark.
     guard case .text(let preview, let shown, _) = result.preview else { Issue.record("not a text preview"); return }
-    let team = (preview as NSString).range(of: "Ysolde " + surname.standIn)
-    #expect(result.pick(in: preview, marks: shown, range: team.location..<NSMaxRange(team)).missed == ["Ysolde"])
+    let team = (preview as NSString).range(of: "Sorrel " + surname.standIn)
+    #expect(result.pick(in: preview, marks: shown, range: team.location..<NSMaxRange(team)).missed == ["Sorrel"])
     var marks = Marks()
-    marks.add("Ysolde", as: "PERSON")
+    marks.add("Sorrel", as: "PERSON")
     let marked = try result.applying(result.choices, marks: marks)
-    #expect(!text(marked).lowercased().contains("ysolde"), "\(text(marked))")
+    #expect(!text(marked).lowercased().contains("sorrel"), "\(text(marked))")
     // A handle built from the name is a variant of it too.
     var full = Marks()
-    full.add("yvarrick", as: "USERNAME")
-    #expect(!text(try result.applying(result.choices, marks: full)).contains("yvarrick"))
+    full.add("svarrick", as: "USERNAME")
+    #expect(!text(try result.applying(result.choices, marks: full)).contains("svarrick"))
     #expect(text(marked).contains(surname.standIn))
 }
 

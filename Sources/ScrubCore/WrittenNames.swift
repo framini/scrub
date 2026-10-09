@@ -3,8 +3,8 @@ import Foundation
 /// Names written where no sentence surrounds them, so a tagger reads them
 /// poorly: the people a mail header lists ("To: Okafor, Ama; Lind, Per"), mail
 /// addresses that start with a name ("Ama Okafor/HOU/CVN@CVN"), the sender
-/// above a timestamp, and a title before initials or a surname ("Ms E. Okafor",
-/// "Dr Lind").
+/// above a timestamp, a chat's speaker after one, and a title before initials
+/// or a surname ("Ms E. Okafor", "Dr Lind").
 enum WrittenNames {
     struct Found {
         var spans: [Span] = []
@@ -17,12 +17,16 @@ enum WrittenNames {
     private static let officePath = TextPattern(#"(?<![\p{L}\p{N}/@.])(\p{Lu}[\p{L}'’.-]*(?:(?:[ \t]+|[ \t]*\r?\n[ \t]*)\p{Lu}[\p{L}'’.-]*){1,3})(/[\p{L}\p{N}&. -]{1,40}(?:/[\p{L}\p{N}&. -]{1,40}){0,3}@[\p{L}\p{N}.-]+)"#)
     private static let listLabel = TextPattern(#"^[ \t>]*(?i:to|cc|bcc|from)[ \t]*:$"#)
     private static let header = TextPattern(#"(?m)^[ \t>]*(from|to|cc|bcc|sent by|reply-to|sender|sent|date)[ \t]*:[ \t]*(\S[^\r\n]*)$"#, options: [.caseInsensitive])
+    /// A chat's speaker, after the time a line was sent: "[09:02] Cassius Wren: morning!".
+    private static let speaker = TextPattern(#"(?m)^[ \t]*[\[(]?\d{1,2}:\d{2}(?::\d{2})?(?:[ \t]?[AaPp]\.?[Mm]\.?)?[\])]?[ \t]+(\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*){1,3})[ \t]*:"#)
     /// The sender written above the time they sent it.
     private static let sender = TextPattern(#"(?m)^[ \t]*(\p{Lu}[\p{L}'’.-]*(?:[ \t]+\p{Lu}[\p{L}'’.-]*){1,3})[ \t]*\r?\n[ \t]*\d{1,2}/\d{1,2}/\d{2,4}[ \t]+\d{1,2}:\d{2}"#)
     /// A title, then initials and a surname or a full name. A surname in
     /// capitals is one only after initials ("Ms E. STRADLING").
     /// An apostrophe joins a name only before a capital ("O’Brien"), never a possessive "’s".
-    private static let titled = TextPattern(#"(?<![\p{L}\p{N}])(?:Mr|Mrs|Ms|Miss|Mx|Dr|Prof|Sir|Dame|Corporal|Sergeant|Lieutenant|Captain|Colonel|Constable|Detective|Inspector|Superintendent|Trooper|Sheriff|Sgt|Cpl|Lt|Capt|Col|Pte|Pvt|Insp|Supt)\.?[ \t]+(?:(?:\p{Lu}\.[ \t]?){1,3}[ \t]*(?:\p{Lu}\p{Ll}+|\p{Lu}{2,}(?:-\p{Lu}{2,})?)|\p{Lu}\p{Ll}+)(?:['’]\p{Lu}\p{Ll}+)?(?:-\p{Lu}\p{Ll}+)?(?:[ \t]+(?:\p{Lu}\.[ \t]?)*\p{Lu}\p{Ll}+(?:['’]\p{Lu}\p{Ll}+)?(?:-\p{Lu}\p{Ll}+)?){0,3}(?![\p{L}\p{N}])"#)
+    /// A given name of syllables after a family name keeps its small second one ("Mr. Kim Min-jun").
+    /// Several titles may stand before one name ("Dr. Prof. Harrach"); none of them is the name.
+    private static let titled = TextPattern(#"(?<![\p{L}\p{N}])(?:(?:Mr|Mrs|Ms|Miss|Mx|Dr|Prof|Sir|Dame|Corporal|Sergeant|Lieutenant|Captain|Colonel|Constable|Detective|Inspector|Superintendent|Trooper|Sheriff|Sgt|Cpl|Lt|Capt|Col|Pte|Pvt|Insp|Supt)\.?[ \t]+)+(?:(?:\p{Lu}\.[ \t]?){1,3}[ \t]*(?:\p{Lu}\p{Ll}+|\p{Lu}{2,}(?:-\p{Lu}{2,})?)|\p{Lu}\p{Ll}+)(?:['’]\p{Lu}\p{Ll}+)?(?:-\p{Lu}\p{Ll}+)?(?:[ \t]+(?:\p{Lu}\.[ \t]?)*\p{Lu}\p{Ll}+(?:['’]\p{Lu}\p{Ll}+)?(?:-\p{Lu}\p{Ll}+|(?<=[ \t]\p{Lu}\p{Ll}{1,3})-\p{Ll}{2,4})?){0,3}(?![\p{L}\p{N}])"#)
     /// A name's own place or business ("Dr Lind’s Surgery") is named after someone, not someone.
     private static let possessiveName = TextPattern(#"^['’]s[ \t]+\p{Lu}"#)
     /// "Okafor, Ama", "Okafor, Ama N.", "Bowen Jr., Raymond", "Leite, Francisco Pinto".
@@ -76,8 +80,39 @@ enum WrittenNames {
                 }
             }
         }
+        if text.contains("=") {
+            for match in TextRanges.matches(logPair, in: text, isCancelled: isCancelled) {
+                let value = [2, 3, 4].map { match.range(at: $0) }.first { $0.location != NSNotFound }!
+                // A surname's particles ("de", "van der") are part of the whole name, read without them.
+                let written = ns.substring(with: value), bare = withoutParticles(written)
+                guard personKey(ns.substring(with: match.range(at: 1))), isName(bare),
+                      case let words = bare.split(whereSeparator: { !$0.isLetter && $0 != "'" && $0 != "’" && $0 != "-" }).map(String.init),
+                      words.contains(where: { NameLists.isFirst($0) || NameLists.isSurname($0) || !NameLists.isWord($0) }),
+                      !words.contains(where: { NameLists.isOrdinary($0) && !NameLists.isFirst($0) && !NameLists.isSurname($0) }) else { continue }
+                found.spans.append(Span(range: range(value), entity: "PERSON", score: 0.95))
+            }
+        }
+        for match in TextRanges.matches(lineage, in: text, isCancelled: isCancelled) {
+            let sides = [match.range(at: 1), match.range(at: 3)]
+            let words = sides.flatMap { ns.substring(with: $0).split(separator: " ").map(String.init) }
+            guard words.contains(where: { NameLists.isFirst($0) || NameLists.isSurname($0) }), !words.contains(where: { NameLists.isOrdinary($0) && !NameLists.isFirst($0) && !NameLists.isSurname($0) }) else { continue }
+            found.spans += sides.map { Span(range: range($0), entity: "PERSON", score: 0.95) }
+        }
+        for match in TextRanges.matches(kin, in: text, isCancelled: isCancelled) {
+            let name = ns.substring(with: match.range(at: 1))
+            guard NameLists.isFirst(name), !NameLists.isWordlike(name), !NameLists.isOrdinary(name) else { continue }
+            found.spans.append(Span(range: range(match.range(at: 1)), entity: "PERSON", score: 0.9))
+        }
         for match in TextRanges.matches(sender, in: text, isCancelled: isCancelled) where isName(ns.substring(with: match.range(at: 1))) {
             found.spans.append(Span(range: range(match.range(at: 1)), entity: "PERSON", score: 0.95))
+        }
+        if text.contains(":") {
+            // A speaker named with ordinary words ("[09:02] Support Bot:") is no one.
+            for match in TextRanges.matches(speaker, in: text, isCancelled: isCancelled) where isName(ns.substring(with: match.range(at: 1))) {
+                let words = ns.substring(with: match.range(at: 1)).split(whereSeparator: { !$0.isLetter }).map(String.init)
+                guard words.allSatisfy({ NameLists.isFirst($0) || NameLists.isSurname($0) || !NameLists.isWord($0) }) else { continue }
+                found.spans.append(Span(range: range(match.range(at: 1)), entity: "PERSON", score: 0.95))
+            }
         }
         for match in TextRanges.matches(titled, in: text, isCancelled: isCancelled) {
             guard let name = titledName(ns, match.range) else { continue }
@@ -129,6 +164,48 @@ enum WrittenNames {
     /// Two to four capitalised words, or "Last, First": no organisation, no
     /// word that names a role, a day or a group, no word all in capitals
     /// beyond initials ("TK Abernathy", not "CORVANE NORTH AMERICA").
+    /// A name, the word that says whose child or wife its bearer is, and the parent's or husband's name: "Ahmed s/o Rashid",
+    /// "Siti binti Abdullah", "Kumar a/l Rajan". The word stays as written between the two names.
+    static let lineageWords = #"(?:[sdw]/o|a/[lp]|binti|bint|bin|ibn|bt\.)"#
+    private static let lineage = TextPattern(#"(?<![\p{L}\p{N}])(\p{Lu}[\p{L}'’-]+(?:[ \t]+\p{Lu}[\p{L}'’-]+)?)[ \t]+("# + lineageWords + #")[ \t]+(\p{Lu}[\p{L}'’-]+(?:[ \t]+\p{Lu}[\p{L}'’-]+)?)(?![\p{L}\p{N}])"#)
+    /// A relative named after the word for them, in the languages a note is written in: "con mi hija Lucía", "my son Mateo", "avec ma fille Chloé".
+    private static let kin = TextPattern(#"(?i:\b(?:mi|mis|su|sus|tu|my|his|her|our|their|ma|mon|sa|son|minha|meu|mia|mio|meine?|seine?|ihre?)[ \t]+(?:hija|hijo|hijas|hijos|esposa|esposo|madre|padre|hermana|hermano|nieta|nieto|daughter|son|wife|husband|mother|father|sister|brother|fille|fils|femme|mari|m[èe]re|p[èe]re|s[œo]eur|fr[èe]re|filha|filho|figlia|figlio|moglie|marito|tochter|sohn|frau|mann|schwester|bruder))[ \t]+(\p{Lu}\p{Ll}+)(?![\p{L}\p{N}])"#)
+    /// A log's pair whose key names a person (subject="Oyelaran, Babatunde", "payer='Marta Kowalczyk'",
+    /// "customer=Ingrid Halvorsen amount=…"): the value quoted, or capitalised words up to the next pair or the line's end.
+    private static let logPair = TextPattern(#"(?m)(?<![\p{L}\p{N}_.\-])(\p{L}[\p{L}\p{N}_.\-]{1,40})=(?:"([^"\r\n]{2,60})"|'([^'\r\n]{2,60})'|(\p{Lu}[\p{L}'’.\-]*(?:,?[ \t]+(?:"# + logParticles + #"[ \t]+){0,2}\p{Lu}[\p{L}'’.\-]*){1,3}|\p{Lu}[\p{L}'’\-]*,\p{Lu}[\p{L}'’\-]*)(?=[ \t]*(?:$|[\r\n,;|\]}]|\p{L}[\p{L}\p{N}_.\-]*=)))"#)
+    private static let logParticles = #"(?:van|von|der|den|de|del|della|di|da|du|dos|das|la|le|ten|ter|bin|ibn|binti|al|el|y|e)"#
+    private static let particleWords = TextPattern(#"(?<![\p{L}\p{N}'’-])"# + logParticles + #"[ \t]+"#)
+    /// A name with its surname's particles in small letters dropped: "Hendrik de Boer" read as "Hendrik Boer".
+    private static func withoutParticles(_ value: String) -> String {
+        let ns = value as NSString
+        let cuts = TextRanges.matches(particleWords, in: value).map(\.range).reversed()
+        guard !cuts.isEmpty else { return value }
+        let kept = NSMutableString(string: ns)
+        for cut in cuts { kept.deleteCharacters(in: cut) }
+        return kept as String
+    }
+    /// Where a log's pair under a person's key holds its value (customer="…", payer=Marta Kowalczyk), whatever it is written as:
+    /// a part of a person found there is that person's, never a word of the log.
+    static func loggedPersonValues(in text: String) -> [Range<Int>] {
+        guard text.contains("=") else { return [] }
+        let ns = text as NSString
+        return TextRanges.matches(logPair, in: text).compactMap { match in
+            guard personKey(ns.substring(with: match.range(at: 1))), let value = [2, 3, 4].map({ match.range(at: $0) }).first(where: { $0.location != NSNotFound }) else { return nil }
+            return value.location..<NSMaxRange(value)
+        }
+    }
+    /// The people a log's key names, whatever it calls their name ("cust_name", "account_holder", "Kontoinhaber").
+    private static let loggedPeople: Set<String> = ["subject", "customer", "cust", "client", "holder", "accountholder", "cardholder", "payer", "payee", "beneficiary", "applicant",
+                                                    "user", "member", "debtor", "creditor", "remitter", "insured", "policyholder", "patient", "owner", "sender", "recipient", "guarantor",
+                                                    "titular", "cliente", "pagador", "beneficiario", "solicitante", "ordenante", "kunde", "inhaber", "kontoinhaber", "zahler", "empfanger", "antragsteller",
+                                                    "titulaire", "beneficiaire", "demandeur", "payeur", "klant", "begunstigde", "aanvrager", "intestatario", "richiedente", "klient", "wnioskodawca", "platnik"]
+    private static func personKey(_ key: String) -> Bool {
+        if ["PERSON", "FIRST_NAME", "LAST_NAME"].contains(KeyHints.hint(key) ?? "") { return true }
+        var words = KeyHints.words(KeyHints.plain(key))
+        if words.count >= 2, ["name", "fullname", "nm"].contains(words.last!) { words.removeLast() }
+        if words.count >= 2, ["full"].contains(words.last!) { words.removeLast() }
+        return (1...2).contains(words.count) && (loggedPeople.contains(words.joined()) || words.count == 2 && loggedPeople.contains(words[1]) && !KeyHints.isNotPeople(words[0]))
+    }
     private static func isName(_ value: String) -> Bool {
         let single = value.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         guard !TextRanges.matches(lastFirst, in: single).isEmpty || !TextRanges.matches(firstLast, in: single).isEmpty else { return false }

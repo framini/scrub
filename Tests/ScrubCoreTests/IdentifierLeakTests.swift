@@ -234,6 +234,63 @@ struct IdentifierLeakTests {
         let output = String(decoding: try Scrubber.scrub(Data(plain.joined(separator: "\n").utf8), name: "a.txt", forceFullDetection: false, seed: 1).output, as: UTF8.self)
         for link in plain { #expect(output.contains(link), "\(link) changed: \(output)") }
     }
+
+    /// A device-intelligence lookup as each route carries it: a vendor's JSON response, a service's log line, an export's
+    /// row and an XML feed. A phone's identifiers and the ones its advertisers know it by are the person's who holds it.
+    static func renderDevice(_ path: Path) -> (Data, String) {
+        let ids = [("device", "d3f1c9a2-7b44-4e0e-9a1f-5c2b8e6d4a10"), ("idfa", "EA7583CD-A667-48BC-B806-42ECB2B48606"), ("idfv", "6F9619FF-8B86-D011-B42D-00C04FC964FF"),
+                   ("gaid", "38400000-8cf0-11bd-b23e-10b96e40000d"), ("android_id", "9774d56d682e549c"), ("device_fingerprint", "8c1f2e9ab07d4c63")]
+        switch path {
+        case .text:
+            let pairs = ids.map { "\($0.0)=\($0.1)" }.joined(separator: " ")
+            return (Data("2026-09-14T10:22:32.007Z INFO [risk] lookup \(pairs) os=iOS-19.0.1 model=iPhone16,2 score=0.83\n2026-09-14T10:22:32.110Z INFO [risk] decision=review\n".utf8), "risk.log")
+        case .json:
+            let fields = ids.map { #""\#($0.0)": "\#($0.1)""# }.joined(separator: ", ")
+            return (Data(#"{"event_id": "evt_5c1f0a77e2", "account": {"email": "ottoline.w@example.com"}, "device": {\#(fields), "os": "iOS 19.0.1", "model": "iPhone16,2"}, "risk_score": 23}"#.utf8), "device.json")
+        case .csv:
+            return (Data((["event_id"] + ids.map(\.0) + ["model"]).joined(separator: ",").appending("\n").appending((["evt_5c1f0a77e2"] + ids.map(\.1) + ["iPhone16"]).joined(separator: ",")).appending("\n").utf8), "devices.csv")
+        case .xml:
+            let fields = ids.map { "<\($0.0)>\($0.1)</\($0.0)>" }.joined()
+            return (Data("<lookup><event_id>evt_5c1f0a77e2</event_id><signals>\(fields)<model>iPhone16,2</model></signals></lookup>".utf8), "lookup.xml")
+        }
+    }
+
+    @Test(arguments: Path.allCases)
+    func aPhonesIdentifiersAreReplacedInEveryRoute(_ path: Path) throws {
+        let originals = ["d3f1c9a2-7b44-4e0e-9a1f-5c2b8e6d4a10", "EA7583CD-A667-48BC-B806-42ECB2B48606", "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+                         "38400000-8cf0-11bd-b23e-10b96e40000d", "9774d56d682e549c", "8c1f2e9ab07d4c63"]
+        let (data, name) = Self.renderDevice(path)
+        let result = try Scrubber.scrub(data, name: name, forceFullDetection: false, seed: 3)
+        let output = String(decoding: result.output, as: UTF8.self)
+        for id in originals {
+            #expect(!output.contains(id), "[\(path)] \(id) left: \(output)")
+            // Each takes a stand-in of its own shape: a UUID stays a UUID in its case, sixteen hex digits stay sixteen.
+            let finding = try #require(result.findings.first { $0.original == id }, "[\(path)] \(id) not found")
+            #expect(IdentifierLeakTests.shaped(finding.standIn, like: id), "[\(path)] \(id) -> \(finding.standIn)")
+        }
+        // The event, the model and the score name no one.
+        #expect(output.contains("iPhone16"), "[\(path)] \(output)")
+        #expect(path == .text || output.contains("evt_5c1f0a77e2"), "[\(path)] \(output)")
+    }
+
+    @Test func aDeviceModelOrARequestBesideADeviceStays() throws {
+        let log = "2026-09-14 10:31:02,118 INFO device-intel - lookup request=4b9e2a1c-55d0-4f7e-8c3a-2e1f0d9b7a66 device: iPhone16,2 os: 19.0.1 took 41ms\n"
+        let result = try Scrubber.scrub(Data(log.utf8), name: "service.log", forceFullDetection: false, seed: 1)
+        #expect(String(decoding: result.output, as: UTF8.self) == log)
+    }
+
+    @Test func aBiometricEnrolmentsIDIsReplaced() throws {
+        // "Biometric ID: BIO-5048597196" stayed as written beside a replaced name and birth date.
+        let card = "**Ottoline Wexcombe, DOB: 1984-03-07, Biometric ID: QX-5048597196**\nBiometric template for Tobiah Quennell, DOB: 1961-06-10, Biometric ID: B7716204953.\n"
+        let check = #"{"result": {"status": "match", "score": 0.97, "subject": {"name": "Ottoline Wexcombe", "biometric_id": "FP-88203117", "biometricTemplateId": "T4410982751"}}}"#
+        for seed in UInt64(0)..<3 {
+            for (document, name) in [(card, "card.txt"), (check, "check.json")] {
+                let output = String(decoding: try Scrubber.scrub(Data(document.utf8), name: name, forceFullDetection: false, seed: seed).output, as: UTF8.self)
+                for gone in ["5048597196", "B7716204953", "88203117", "T4410982751", "Wexcombe"] { #expect(!output.contains(gone), "\(gone) in \(name): \(output)") }
+                #expect(!name.hasSuffix(".json") || output.contains(#""status": "match", "score": 0.97"#), "\(output)")
+            }
+        }
+    }
 }
 
 /// IDs made of a word and a number, written in a sentence with nothing to
@@ -361,5 +418,321 @@ struct UnlabelledIdentifierTests {
         let output = String(decoding: result.output, as: UTF8.self)
         #expect(output.contains(note), "[\(path)] \(output)")
         #expect(result.findings.isEmpty, "[\(path)] \(result.findings.map(\.original))")
+    }
+}
+
+/// An identifier beside a person found, under a key no rule knows, is never kept
+/// unseen: it is replaced, or asked about as an identifier in that person's record.
+struct PersonRecordIdentifierTests {
+    struct Out {
+        let output: String
+        let result: ScrubResult
+        var findings: [(original: String, suspected: Bool, doubt: Doubt?)] { (result.review?.findings ?? []).map { ($0.original, $0.suspected, $0.doubt) } }
+    }
+    static func scrub(_ text: String, name: String, seed: UInt64 = 5) throws -> Out {
+        let result = try Scrubber.scrub(Data(text.utf8), name: name, forceFullDetection: false, seed: seed)
+        return Out(output: String(decoding: result.output, as: UTF8.self), result: result)
+    }
+    static func seen(_ value: String, _ out: Out) -> Bool {
+        !out.output.contains(value) || out.findings.contains { $0.original == value && $0.suspected && $0.doubt == .personIdentifier }
+    }
+
+    @Test func anIdentifierUnderAnUnknownKeyBesideAPersonIsAskedAbout() throws {
+        let json = #"{"request_id": "8812734455", "case_id": "77120034", "created_at": "2026-03-01T10:00:00Z", "amount": "1250.00", "version": "2.4.1", "subject": {"firstName": "Liesel", "lastName": "Okafor", "birthDate": "1987-06-21", "natRegNo": "4382-1957-6034-2018", "status": "VERIFIED", "score": "98"}}"#
+        let out = try Self.scrub(json, name: "response.json")
+        #expect(Self.seen("4382-1957-6034-2018", out), "\(out.output)")
+        for kept in [#""request_id": "8812734455""#, #""case_id": "77120034""#, #""amount": "1250.00""#, #""version": "2.4.1""#, #""status": "VERIFIED""#, #""score": "98""#] {
+            #expect(out.output.contains(kept), "\(kept): \(out.output)")
+        }
+        #expect(!out.findings.contains { $0.doubt == .personIdentifier && $0.original != "4382-1957-6034-2018" }, "\(out.findings.map(\.original))")
+        // With no person in its record, it is no one's to ask about.
+        let alone = try Self.scrub(#"{"batch": {"label": "nightly", "natRegNo": "4382-1957-6034-2018"}}"#, name: "response.json")
+        #expect(!alone.findings.contains { $0.doubt == .personIdentifier }, "\(alone.output)")
+    }
+
+    @Test func aCSVColumnOfIdentifiersInPeoplesRowsIsAskedAbout() throws {
+        let csv = "row,surname,given,birth,carte_ref,branch\n1,Benmoussa,Youssef,1990-05-12,BE123456,Centre\n2,Alaoui,Samira,1985-11-02,J987654,Agdal\n3,Tazi,Karim,1979-01-30,AB34567,Medina\n"
+        let out = try Self.scrub(csv, name: "people.csv")
+        for value in ["BE123456", "J987654", "AB34567"] { #expect(Self.seen(value, out), "\(value): \(out.output)") }
+        #expect(out.output.hasPrefix("row,surname,given,birth,carte_ref,branch\n1,") && out.output.contains(",Centre\n2,"), "\(out.output)")
+    }
+
+    /// For generated records under keys no rule knows, every identifier beside a
+    /// person is replaced or asked about, and every non-personal value stays unasked.
+    @Test func generatedRecordsLeaveNoIdentifierUnseen() throws {
+        let run = PropertyRun("personRecordIDs")
+        defer { run.finish() }
+        let keys = ["xrefNo", "regNumber", "holder_ident", "bureauKey", "cardRef", "fileNo", "docNum", "member_tag", "kennung", "numeroRegistro"]
+        let given = ["Liesel", "Tomasz", "Ines", "Kwame", "Mirela", "Haruto", "Oona", "Dario"], family = ["Okafor", "Brandvold", "Szekely", "Achterberg", "Marangoni", "Quispe"]
+        for index in 0..<run.count {
+            var gen = Gen(seed: run.seed(index))
+            let key = gen.choose(keys)
+            let value: String = {
+                switch gen.int(0...3) {
+                case 0: return gen.string("0123456789", count: 4) + "-" + gen.string("0123456789", count: 4) + "-" + gen.string("0123456789", count: 4)
+                case 1: return gen.string("ABCDEFGHJKLMNPRSTUVWXYZ", count: gen.int(1...2)) + String(gen.int(1...9)) + gen.string("0123456789", count: 5)
+                case 2: return String(gen.int(1...9)) + gen.string("0123456789", count: gen.int(7...11))
+                default: return gen.string("0123456789", count: 3) + " " + gen.string("0123456789", count: 3) + " " + gen.string("0123456789", count: 3)
+                }
+            }()
+            let first = gen.choose(given), last = gen.choose(family)
+            let format = ["json", "csv", "xml"][index % 3]
+            let text: String
+            switch format {
+            case "json": text = #"{"request_id": "req_\#(gen.int(1000...9999))", "status": "complete", "subject": {"first_name": "\#(first)", "last_name": "\#(last)", "\#(key)": "\#(value)", "updated_at": "2026-04-0\#(gen.int(1...9))"}}"#
+            case "csv": text = "first_name,last_name,\(key),status\n\(first),\(last),\(value),complete\n"
+            default: text = "<records><subject><firstName>\(first)</firstName><lastName>\(last)</lastName><\(key)>\(value)</\(key)><status>complete</status></subject></records>"
+            }
+            let out = try Self.scrub(text, name: "record." + format, seed: run.seed(index))
+            #expect(Self.seen(value, out), "\(key)=\(value) left unseen in \(format): \(out.output)\nseed \(run.seed(index))")
+            #expect(out.output.contains("complete"), "\(out.output)")
+            #expect(!out.findings.contains { finding in finding.doubt == .personIdentifier && ["complete", "2026", "req_"].contains { finding.original.hasPrefix($0) } }, "\(out.findings.map(\.original))")
+        }
+    }
+}
+
+/// A number beside the type it is of ({"tipo": "DNI", "numero": …}) is that type's, however
+/// the pair's keys are written; a bank account written after its country's and bank's codes is
+/// its holder's; a Saudi ID under its own words is one; and a birth date in the Hijri calendar
+/// takes a Hijri stand-in.
+struct TypedIdentifierTests {
+    typealias Out = PersonRecordIdentifierTests.Out
+    static func scrub(_ text: String, name: String, seed: UInt64 = 5) throws -> Out { try PersonRecordIdentifierTests.scrub(text, name: name, seed: seed) }
+    /// The value's characters, a digit for a digit and a letter for a letter.
+    static func shape(_ value: String) -> [Int] { value.map { $0.isNumber ? 0 : $0.isLetter ? 1 : 2 } }
+    static func strings(_ json: String) throws -> [String] {
+        func walk(_ value: JSONValue) -> [String] {
+            switch value {
+            case .object(let pairs): return pairs.flatMap { walk($0.1) }
+            case .array(let values): return values.flatMap(walk)
+            case .string(let text): return [text]
+            case .number(let text): return [text]
+            default: return []
+            }
+        }
+        return walk(try OrderedJSON.parse(json))
+    }
+
+    @Test func aTypeAndValuePairReadsTheValueAsTheTypesKind() throws {
+        let json = #"""
+        {"solicitud": "SOL-2026-0412", "estado": "APROBADA",
+         "solicitante": {"nombres": "Rosa Elena", "apellidos": "Mendieta Huamán",
+          "documento_identidad": {"tipo": "DNI", "numero": "41827367", "pais_emision": "PE"},
+          "identificacion": [{"tipo": "DNI", "numero": "41827368", "vigente": true}, {"tipo": "CE", "numero": "001827364", "vigente": false}],
+          "otros": [{"tipo": "DNI", "numero": 41827366}],
+          "ids": [{"type": "PAS", "value": "Y2837465"}, {"idType": "NIN", "idValue": "71827364519"}, {"documentType": "PP", "documentNumber": "Z3948576"},
+                  {"kind": "CC", "number": "1018273645"}, {"tip": "JMBG", "broj": "0101990710006"}, {"tipo_documento": "CC", "numero_documento": "1018273646"},
+                  {"tipo": "TIN", "numero": "918273645", "emitido": "2019-05-02"}]}}
+        """#
+        let out = try Self.scrub(json, name: "solicitud.json")
+        for value in ["41827367", "41827368", "001827364", "41827366", "Y2837465", "71827364519", "Z3948576", "1018273645", "0101990710006", "1018273646", "918273645"] {
+            #expect(!out.output.contains(value), "\(value) kept: \(out.output)")
+        }
+        for kept in [#""solicitud": "SOL-2026-0412""#, #""estado": "APROBADA""#, #""pais_emision": "PE""#, #""vigente": true"#, #""tipo": "DNI""#, #""emitido": "2019-05-02""#] {
+            #expect(out.output.contains(kept), "\(kept): \(out.output)")
+        }
+        // Each stand-in written as its original was: as long, a letter for a letter.
+        let before = try Self.strings(json), after = try Self.strings(out.output)
+        #expect(before.count == after.count)
+        for (original, made) in zip(before, after) where original != made && original.contains(where: \.isNumber) && !original.contains(" ") {
+            #expect(Self.shape(original) == Self.shape(made), "\(original) → \(made)")
+        }
+        // An export's type and value columns, the same way.
+        let csv = "first_name,last_name,ident_type,ident_value,estado\nAndrea,Quiroga,CC,1018273645,ACTIVO\nHelena,Barros,PAS,Y2837465,ACTIVO\nIvo,Marin,PP,Z3948576,ACTIVO\n"
+        let table = try Self.scrub(csv, name: "clientes.csv")
+        for value in ["1018273645", "Y2837465", "Z3948576"] { #expect(!table.output.contains(value), "\(value) kept: \(table.output)") }
+        #expect(table.output.hasPrefix("first_name,last_name,ident_type,ident_value,estado\n") && table.output.contains(",CC,") && table.output.contains(",ACTIVO\n"), "\(table.output)")
+    }
+
+    @Test func aGermanOrFrenchTypeAndNumberPairReadsTheNumberAsItsKind() throws {
+        let json = #"""
+        {"vorgang": "KYC-2026-0193", "status": "GEPRUEFT",
+         "person": {"vorname": "Liesel", "nachname": "Brandvold", "geburtsdatum": "1987-06-21",
+          "ausweis": {"typ": "Personalausweis", "nummer": "T7K2M9R41", "ablauf": "2031-03-14"},
+          "dokumente": [{"art": "REISEPASS", "wert": "C01X00T47", "ausstellungsland": "D"}, {"dokumententyp": "AUSWEIS", "nummer": "L01X00T47"},
+                        {"Typ": "Führerschein", "Nummer": "B072RRE2I55"}, {"type": "ID_CARD", "nummer": "M8RTV4PL1"}],
+          "pièces": [{"type": "PASSEPORT", "numéro": "18AB52731"}, {"tipo": "PASSAPORTO", "numero": "YA4827361"}]}}
+        """#
+        let out = try Self.scrub(json, name: "pruefung.json")
+        for value in ["T7K2M9R41", "C01X00T47", "L01X00T47", "B072RRE2I55", "M8RTV4PL1", "18AB52731", "YA4827361"] {
+            #expect(!out.output.contains(value), "\(value) kept: \(out.output)")
+        }
+        for kept in [#""vorgang": "KYC-2026-0193""#, #""status": "GEPRUEFT""#, #""typ": "Personalausweis""#, #""ablauf": "2031-03-14""#, #""art": "REISEPASS""#, #""ausstellungsland": "D""#] {
+            #expect(out.output.contains(kept), "\(kept): \(out.output)")
+        }
+        let before = try Self.strings(json), after = try Self.strings(out.output)
+        #expect(before.count == after.count)
+        for (original, made) in zip(before, after) where original != made && original.contains(where: \.isNumber) && !original.contains(" ") && !original.contains("-") {
+            #expect(Self.shape(original) == Self.shape(made), "\(original) → \(made)")
+        }
+        // A kind no table knows still has its number asked about.
+        let unknown = try Self.scrub(#"{"person": {"vorname": "Liesel", "nachname": "Brandvold", "dokument": {"art": "ZQXV", "wert": "T7K2M9R41"}}}"#, name: "pruefung.json")
+        #expect(PersonRecordIdentifierTests.seen("T7K2M9R41", unknown), "\(unknown.output)")
+    }
+
+    @Test func aTypeNoTableKnowsStillHasItsValueAskedAbout() throws {
+        let json = #"{"cliente": {"nombre": "Rosa Mendieta", "correo": "rosa.m@example.com", "identificacion": [{"tipo": "ZQX", "numero": "81726354", "vigente": true}]}}"#
+        let out = try Self.scrub(json, name: "cliente.json")
+        #expect(PersonRecordIdentifierTests.seen("81726354", out), "\(out.output)")
+        // A card's number stays a card's whatever its type's code, and a type that is a word names nothing.
+        let card = try Self.scrub(#"{"holder": {"name": "Rosa Mendieta", "payment": {"type": "CC", "number": "4111111111111111"}, "event": {"type": "page_view", "value": "20260301"}}}"#, name: "pago.json")
+        #expect(!card.output.contains("4111111111111111") && card.output.contains(#""value": "20260301""#), "\(card.output)")
+        let made = try #require(try Self.strings(card.output).first { $0.count == 16 && $0.allSatisfy(\.isNumber) })
+        #expect(Patterns.luhn(made.compactMap(\.wholeNumberValue)), "\(made)")
+    }
+
+    @Test func aSaudiIDUnderItsOwnWordsIsReplaced() throws {
+        let json = #"{"customer": {"name": "Faisal Qahtani", "huwiya": 1082746155, "hawiyah": "2082746153", "national_id_sa": "1049382714", "status": "ACTIVE"}}"#
+        let out = try Self.scrub(json, name: "customer.json")
+        for value in ["1082746155", "2082746153", "1049382714"] { #expect(!out.output.contains(value), "\(value) kept: \(out.output)") }
+        let sa = try #require(Recognizers.all.first { $0.name == "SA_NATIONAL_ID" })
+        for made in try Self.strings(out.output) where made.count == 10 && made.allSatisfy(\.isNumber) {
+            #expect(sa.passes(made), "\(made) fails its check")
+        }
+        #expect(out.output.contains(#""status": "ACTIVE""#))
+    }
+
+    @Test func anAccountAfterItsBanksCodesKeepsThemAndLosesItsDigits() throws {
+        let json = #"{"cliente": {"nombre": "Martín Olivera", "cuenta": "UY-BROU-001827364500", "konto": "PL-PKO-8273645512", "compte": "FR-SG-00192837465", "hesap": "TR-ZB-5512837465", "račun": "HR-ZABA-1827364551", "moneda": "UYU"}}"#
+        let out = try Self.scrub(json, name: "cliente.json")
+        for (value, codes) in [("UY-BROU-001827364500", "UY-BROU-"), ("PL-PKO-8273645512", "PL-PKO-"), ("FR-SG-00192837465", "FR-SG-"), ("TR-ZB-5512837465", "TR-ZB-"), ("HR-ZABA-1827364551", "HR-ZABA-")] {
+            #expect(!out.output.contains(value), "\(value) kept: \(out.output)")
+            let made = try #require(try Self.strings(out.output).first { $0.hasPrefix(codes) }, "\(codes): \(out.output)")
+            #expect(made.count == value.count && made.dropFirst(codes.count).allSatisfy(\.isNumber), "\(value) → \(made)")
+        }
+        #expect(out.output.contains(#""moneda": "UYU""#))
+        // Under a key no rule knows, beside a person, it is asked about.
+        let unknown = try Self.scrub(#"{"cliente": {"nombre": "Martín Olivera", "correo": "m.olivera@example.com", "ref_banco": "UY-BROU-001827364500", "estado": "ACTIVO"}}"#, name: "cliente.json")
+        #expect(PersonRecordIdentifierTests.seen("UY-BROU-001827364500", unknown), "\(unknown.output)")
+        #expect(!unknown.findings.contains { $0.doubt == .personIdentifier && $0.original == "ACTIVO" })
+    }
+
+    @Test func aHijriBirthDateTakesAHijriYear() throws {
+        let json = #"{"customer": {"name": "Faisal Qahtani", "dob_hijri": "1405-03-12", "hijri": "12/03/1406", "تاريخ الميلاد هجري": "1407/03/12", "dobHijri": "14080312", "birth_year_hijri": 1409, "dob": "1404-07-01", "dob_gregorian": "1984-12-05"}}"#
+        let out = try Self.scrub(json, name: "customer.json")
+        let made = try Self.strings(out.output)
+        for original in ["1405-03-12", "12/03/1406", "1407/03/12", "14080312", "1409", "1404-07-01"] { #expect(!made.contains(original), "\(original) kept: \(out.output)") }
+        for value in made.dropFirst() {
+            let digits = value.filter(\.isNumber)
+            guard digits.count >= 4 else { continue }
+            let year = digits.count == 8 && !value.contains(where: { !$0.isNumber }) ? Int(digits.prefix(4))! : Int(value.split(whereSeparator: { !$0.isNumber }).first { $0.count == 4 }.map(String.init) ?? "") ?? 0
+            if value.hasPrefix("19") || value.hasPrefix("20") && value.contains("-") && year > 1900 { #expect((1900...2030).contains(year), "\(value)"); continue }
+            #expect((1340...1440).contains(year), "\(value): a Hijri birth's stand-in year out of range in \(out.output)")
+        }
+    }
+
+    /// For generated person records, every number a type field names and every
+    /// identifier under a key no rule knows is replaced or asked about.
+    @Test func generatedRecordsWithTypedPairsLeaveNoIdentifierUnseen() throws {
+        let run = PropertyRun("typedIdentifiers")
+        defer { run.finish() }
+        let pairs = [("tipo", "numero"), ("type", "value"), ("idType", "idValue"), ("documentType", "documentNumber"), ("kind", "number"), ("tip", "broj"), ("tipo_documento", "numero_documento")]
+        let codes = ["DNI", "CE", "RUC", "CI", "CC", "NIT", "PASSPORT", "PAS", "PP", "NIN", "BVN", "TIN", "ZQX", "KV7"]
+        let unknownKeys = ["huwiya", "registro", "xref", "kennzahl", "holderTag", "refBanco", "matricula_int"]
+        let given = ["Liesel", "Tomasz", "Ines", "Kwame", "Mirela", "Haruto", "Oona", "Dario"], family = ["Okafor", "Brandvold", "Szekely", "Achterberg", "Marangoni", "Quispe"]
+        for index in 0..<run.count {
+            var gen = Gen(seed: run.seed(index))
+            let (typeKey, valueKey) = gen.choose(pairs)
+            let code = gen.choose(codes)
+            let number: String = code.hasPrefix("P") ? gen.string("ABCDEFGHJKLMNPRSTUVWXYZ", count: 1) + gen.string("0123456789", count: 7)
+                : String(gen.int(1...9)) + gen.string("0123456789", count: gen.int(7...10))
+            let key = gen.choose(unknownKeys)
+            let other: String = gen.int(0...1) == 0 ? String(gen.int(1...2)) + gen.string("0123456789", count: 9)
+                : gen.string("ABCDEFGHJKLMNPRSTUVWXYZ", count: 2) + "-" + gen.string("ABCDEFGHJKLMNPRSTUVWXYZ", count: 4) + "-" + gen.string("0123456789", count: 10)
+            let first = gen.choose(given), last = gen.choose(family)
+            let format = ["json", "csv"][index % 2]
+            let text: String
+            switch format {
+            case "json": text = #"{"request_id": "req_\#(gen.int(1000...9999))", "status": "complete", "subject": {"first_name": "\#(first)", "last_name": "\#(last)", "\#(key)": "\#(other)", "documents": [{"\#(typeKey)": "\#(code)", "\#(valueKey)": "\#(number)", "verified": true}], "updated_at": "2026-04-0\#(gen.int(1...9))"}}"#
+            default: text = "first_name,last_name,\(key),ident_type,ident_value,status\n\(first),\(last),\(other),\(code),\(number),complete\n"
+            }
+            let out = try Self.scrub(text, name: "record." + format, seed: run.seed(index))
+            for value in [number, other] { #expect(PersonRecordIdentifierTests.seen(value, out), "\(value) left unseen in \(format): \(out.output)\nseed \(run.seed(index))") }
+            #expect(out.output.contains("complete") && out.output.contains(code), "\(out.output)")
+            #expect(!out.findings.contains { finding in finding.doubt == .personIdentifier && ["complete", "2026", "req_", code].contains { finding.original.hasPrefix($0) } }, "\(out.findings.map(\.original))")
+        }
+    }
+}
+
+/// A run of nine digits or more beside a person, under a key no rule knows, is asked about however its field
+/// is written and whatever date or time its digits could also spell; one under
+/// a time's, an amount's or a request's key stays as written and unasked. A Luxembourg national number under
+/// its own words is replaced by one passing its checks.
+struct LongNumberIdentifierTests {
+    typealias Out = PersonRecordIdentifierTests.Out
+    static func scrub(_ text: String, name: String, seed: UInt64 = 5) throws -> Out { try PersonRecordIdentifierTests.scrub(text, name: name, seed: seed) }
+
+    @Test func aLongNumberBesideAPersonIsAskedAbout() throws {
+        let json = #"""
+        {"request_id": "4400112233445", "created_ms": 1712345678901,
+         "client": {"prenom": "Mireille", "nom": "Wagener", "date_naissance": "1985-06-14", "registre_national": "1985061499871",
+          "dossier": "4820193374", "contrat": {"amount": 123456789012, "order_id": "100200300400", "port": 443, "signed_at": 1712345600}}}
+        """#
+        let out = try Self.scrub(json, name: "client.json")
+        _ = try OrderedJSON.parse(out.output)
+        for value in ["1985061499871", "4820193374"] { #expect(PersonRecordIdentifierTests.seen(value, out), "\(value) left unseen: \(out.output)") }
+        for kept in [#""request_id": "4400112233445""#, #""created_ms": 1712345678901"#, #""amount": 123456789012"#, #""order_id": "100200300400""#, #""signed_at": 1712345600"#] {
+            #expect(out.output.contains(kept), "\(kept): \(out.output)")
+        }
+        #expect(!out.findings.contains { $0.doubt == .personIdentifier && ["4400112233445", "1712345678901", "123456789012", "100200300400"].contains($0.original) }, "\(out.findings.map(\.original))")
+        // A table's row and an element group the same way.
+        let csv = "nom,prenom,registre_national,montant,statut\nWagener,Mireille,1985061499871,125.40,ACTIF\nSchmit,Luc,1990120312345,88.10,ACTIF\n"
+        let table = try Self.scrub(csv, name: "clients.csv")
+        for value in ["1985061499871", "1990120312345"] { #expect(PersonRecordIdentifierTests.seen(value, table), "\(value) left unseen: \(table.output)") }
+        let xml = "<clients><client><prenom>Mireille</prenom><nom>Wagener</nom><registre>1985061499871</registre><statut>ACTIF</statut></client></clients>"
+        let tree = try Self.scrub(xml, name: "clients.xml")
+        #expect(PersonRecordIdentifierTests.seen("1985061499871", tree), "\(tree.output)")
+    }
+
+    @Test func aLuxembourgNationalNumberIsReplacedByOnePassingItsChecks() throws {
+        let valid = ["1985061412356", "1972022904600"]
+        for number in valid { #expect(Recognizers.candidates(number).contains { $0.name == "LU_MATRICULE" }, "\(number)") }
+        // One digit off fails both checks.
+        #expect(!Recognizers.candidates("1985061412357").contains { $0.name == "LU_MATRICULE" })
+        let json = #"{"assure": {"prenom": "Mireille", "nom": "Wagener", "matricule": "1985061412356", "cns": "1972022904600", "statut": "ACTIF"}}"#
+        let out = try Self.scrub(json, name: "assure.json")
+        let lu = try #require(Recognizers.all.first { $0.name == "LU_MATRICULE" })
+        for number in valid { #expect(!out.output.contains(number), "\(number) kept: \(out.output)") }
+        let made = try TypedIdentifierTests.strings(out.output).filter { $0.count == 13 && $0.allSatisfy(\.isNumber) }
+        #expect(made.count == 2, "\(out.output)")
+        for value in made { #expect(lu.passes(value), "\(value) fails its checks") }
+        #expect(out.output.contains(#""statut": "ACTIF""#), "\(out.output)")
+    }
+}
+
+/// An instant payment's key beside its type ({"tipo": "EMAIL", "chave": …}) is replaced as that type's kind, a random
+/// key keeping a UUID's shape; under a type no table knows, it is asked about whatever it is written as.
+struct PaymentKeyTests {
+    typealias Out = PersonRecordIdentifierTests.Out
+    static let uuid = TextPattern(#"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"#)
+
+    @Test func aPaymentKeyBesideItsTypeIsReplacedAsThatKind() throws {
+        let json = #"""
+        {"titular": {"nome": "Beatriz Araújo",
+          "chaves_pix": [{"tipo": "ALEATORIA", "chave": "7c1e3b2a-90d4-4e5b-b61f-28a4c9e07d13", "ativa": true},
+                         {"tipo": "EVP", "chave": "d41c7e09-8b2a-4f63-a9e5-3c70b18f2d64"},
+                         {"tipo": "EMAIL", "chave": "beatriz.araujo@example.com"},
+                         {"tipo": "TELEFONE", "chave": "+55 11 5550-0142"},
+                         {"tipo": "CNPJ", "chave": "11.222.333/0001-81"}]}}
+        """#
+        let out = try PersonRecordIdentifierTests.scrub(json, name: "titular.json")
+        for value in ["7c1e3b2a-90d4-4e5b-b61f-28a4c9e07d13", "d41c7e09-8b2a-4f63-a9e5-3c70b18f2d64", "beatriz.araujo", "5550-0142", "11.222.333/0001-81"] {
+            #expect(!out.output.contains(value), "\(value) kept: \(out.output)")
+        }
+        let strings = try TypedIdentifierTests.strings(out.output)
+        #expect(strings.filter { !TextRanges.matches(Self.uuid, in: $0).isEmpty }.count == 2, "\(out.output)")
+        for kept in [#""tipo": "ALEATORIA""#, #""tipo": "EVP""#, #""ativa": true"#] { #expect(out.output.contains(kept), "\(kept): \(out.output)") }
+    }
+
+    @Test func aKeyUnderATypeNoTableKnowsIsAskedAboutWhateverItsShape() throws {
+        let json = #"""
+        {"cliente": {"nombre": "Rosa Mendieta", "cuentas": [{"tipo": "QRKEY", "clave": "5f2a9c1e-0b3d-4e7f-8a6c-2d4b1f9e3a70"},
+          {"tipo": "ZQX", "valor": "9f1e2d3c4b5a69788796a5b4c3d2e1f0"}, {"tipo": "XKV", "clave": "rosa.pagos@example.org"}]}}
+        """#
+        let out = try PersonRecordIdentifierTests.scrub(json, name: "cliente.json")
+        for value in ["5f2a9c1e-0b3d-4e7f-8a6c-2d4b1f9e3a70", "9f1e2d3c4b5a69788796a5b4c3d2e1f0", "rosa.pagos@example.org"] {
+            #expect(!out.output.contains(value) || out.result.unresolved.contains { $0.original == value }, "\(value) left unseen: \(out.output)")
+        }
+        for kept in [#""tipo": "QRKEY""#, #""tipo": "ZQX""#] { #expect(out.output.contains(kept), "\(kept): \(out.output)") }
     }
 }

@@ -92,8 +92,8 @@ final class AddressModel: Sendable {
     private let convBiases: [[Float]]
     private let out: [Float]
     private let outBias: [Float]
-    /// Features by word, shared across calls.
-    private let known = Mutex<[String: [Float]]>([:])
+    /// Features by word, shared across calls, keyed by its exact scalars (see `NameModel`).
+    private let known = Mutex<[[UInt32]: [Float]]>([:])
     private static let knownLimit = 100_000
 
     /// Whether it reads lines with no number and addresses with none (see `Weights`).
@@ -163,7 +163,8 @@ final class AddressModel: Sendable {
             guard probabilities.count == tokens.count else { return ([], []) }
             for range in Self.decode(tokens, probabilities, numberless: numberless).compactMap({ Self.refined($0, tokens) }) {
                 let value = TextRanges.substring(part, range)
-                guard Self.accepts(value) || Self.cued(value, before: (part as NSString).substring(to: range.lowerBound)) else { continue }
+                let before = (part as NSString).substring(to: range.lowerBound)
+                guard !Self.misread(value), !Self.machineNumbers(value, before: before), Self.accepts(value) || Self.cued(value, before: before) else { continue }
                 spans.append(Span(range: (range.lowerBound + window.lowerBound)..<(range.upperBound + window.lowerBound), entity: "ADDRESS", score: Self.score))
             }
             guard numberless else { continue }
@@ -370,6 +371,14 @@ final class AddressModel: Sendable {
         func text(_ index: Int) -> String { String(String.UnicodeScalarView(tokens[index].scalars)) }
         func lowercaseWord(_ index: Int) -> Bool { tokens[index].isWord && tokens[index].scalars.allSatisfy { isLetter($0) || $0 == "'" || $0 == "’" } && tokens[index].scalars.first?.properties.isLowercase == true }
         func marked(_ index: Int) -> Bool { tokens[index].scalars.contains(where: isDigit) || tokens[index].scalars.first?.properties.isUppercase == true }
+        // A postcode's city ends the address before a full stop and the sentence after it ("…, 50674 Köln. Der Vogel …").
+        if let stop = (first...last).first(where: { index in
+            guard text(index) == ".", index + 1 <= last, index - 2 > first, tokens[index + 1].range.lowerBound > tokens[index].range.upperBound,
+                  tokens[index + 1].scalars.first?.properties.isUppercase == true else { return false }
+            var city = index - 1
+            while city > first, tokens[city].isWord, tokens[city].scalars.first?.properties.isUppercase == true, !tokens[city].scalars.contains(where: isDigit), index - city <= 3 { city -= 1 }
+            return city < index - 1 && city > first && (4...5).contains(tokens[city].scalars.count) && tokens[city].scalars.allSatisfy(isDigit)
+        }) { last = stop - 1 }
         // The last piece: what follows the last comma or line break.
         var pieceStart = ((first...last).last { [",", "\n", ";"].contains(text($0)) }).map { $0 + 1 } ?? first
         // In a written address, a last piece of lowercase words alone is the sentence going on
@@ -416,6 +425,12 @@ final class AddressModel: Sendable {
                 }
                 if end < last, (end + 1...last).contains(where: { tokens[$0].isWord && tailWords.contains(text($0)) }) { last = end }
             }
+        }
+        // One that opens on its street's kind ("Tce, Fremantle WA 2601") takes the name and house number before it: "289 Coolabah Tce".
+        if AddressBlock.englishKinds.contains(text(first).lowercased()) {
+            var start = first, names = 0
+            while start - 1 >= 0, names < 3, tokens[start - 1].isWord, tokens[start - 1].scalars.first?.properties.isUppercase == true, !tokens[start - 1].scalars.contains(where: isDigit) { start -= 1; names += 1 }
+            if names > 0, start - 1 >= 0, !tokens[start - 1].scalars.isEmpty, tokens[start - 1].scalars.allSatisfy(isDigit) { first = start - 1 }
         }
         let words = tokens[first...last].filter { $0.scalars.contains(where: isLetter) }
         guard words.count >= 2, tokens[first...last].contains(where: { $0.scalars.contains(where: isDigit) }) || parted(tokens[first...last]) else { return nil }
@@ -464,6 +479,35 @@ final class AddressModel: Sendable {
         guard lower else { return true }
         return !TextRanges.matches(lowercasePostcode, in: value).isEmpty || !TextRanges.matches(numberedUnit, in: value).isEmpty || pieces.contains(where: AddressBlock.knownPlace)
     }
+    private static let writtenDate = TextPattern("(?i)(?<![\\p{L}\\p{N}])" + ProseLabels.day + "[ \\t]+(?:(?:de|of|del)[ \\t]+)?" + ProseLabels.month
+                                                  + "(?:,?[ \\t]+(?:(?:de|del|of)[ \\t]+)?" + ProseLabels.year + ")?(?![\\p{L}\\p{N}])")
+    /// A date written out ("el 14 de febrero de 1988", "15. März 1980") is when, not where, whatever cue is
+    /// before it: a span with no number but the date's is no address. Nor is one a bracket opens or closes
+    /// alone, which runs over the text around an address.
+    static func misread(_ value: String) -> Bool {
+        let dates = TextRanges.matches(writtenDate, in: value)
+        if !dates.isEmpty, !dates.reversed().reduce(value, { rest, match in (rest as NSString).replacingCharacters(in: match.range, with: " ") }).contains(where: \.isNumber) { return true }
+        // "sierpnia 1971 r.": a month's name in any language Scrub reads, and a year with at most a day, is a date too.
+        if WrittenDates.yearAlone(value), value.split(whereSeparator: { !$0.isLetter }).contains(where: { WrittenDates.months[$0.lowercased()] != nil }) { return true }
+        return value.filter { $0 == "(" }.count != value.filter { $0 == ")" }.count || value.filter { $0 == "[" }.count != value.filter { $0 == "]" }.count
+    }
+    /// A port, a timeout or a limit named before a number, or a unit of time or size after it, in the languages
+    /// Scrub reads: "na porcie 5432", "limit czasu 30000 ms", "timeout po 5000 ms", "on port 8443". A machine's number, never a house's.
+    static let machineBefore = #"(?i)(?<![\p{L}\p{N}])(?:ports?|porcie|portu|portem|poort|portti|portissa|portul|timeout|time-out|timed out|ttl|limit|limitu|limite|límite|limiet|zeitlimit|czasu|délai|tempo limite|tiempo de espera)[ \t]*[:=#]?[ \t]*(?:(?:po|of|after|nach|von|de|di|na|en|w|z|=)[ \t]+)?$"#
+    private static let machineNumber = TextPattern(#"(?i)(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?(?:[ \t]*(?:ms|msec|millis\p{L}*|s|sec|secs|seconds?|sek|sekund\p{L}*|segund\p{L}*|secondes?|minut\p{L}*|min|kb|mb|gb|tb|kib|mib|gib|bytes?|bajt\p{L}*|hz|khz|mhz|ghz|rpm|rps|qps)(?![\p{L}\p{N}/])|[ \t]*%)"#)
+    private static let number = TextPattern(#"\d+(?:[.,]\d+)?"#)
+    /// Whether every number of a span is a machine's, by the words before it or the unit after it.
+    static func machineNumbers(_ value: String, before: String) -> Bool {
+        guard value.contains(where: \.isNumber) else { return false }
+        let ns = value as NSString
+        var rest = value as NSString
+        for match in TextRanges.matches(machineNumber, in: value).reversed() { rest = rest.replacingCharacters(in: match.range, with: String(repeating: " ", count: match.range.length)) as NSString }
+        let numbers = TextRanges.matches(number, in: rest as String)
+        return numbers.allSatisfy { match in
+            let lead = String((before + ns.substring(to: match.range.location)).suffix(32))
+            return lead.range(of: machineBefore, options: .regularExpression) != nil
+        }
+    }
     private static let lowercasePostcode = TextPattern(AddressBlock.postcode.regex?.pattern ?? "$^", options: .caseInsensitive)
     private static let numberedUnit = TextPattern(#"(?i)(?<![\p{L}])(?:flat|apt|apartment|unit|suite|ste|room|floor|level|appt|piso|wohnung|top|p\.?\s?o\.?\s?box|box|postfach|postbus|apartado)\.?\s*#?\s*\d"#)
     /// Lowercase words that open an address: a kind of street or a box.
@@ -507,9 +551,9 @@ final class AddressModel: Sendable {
     private func run(_ tokens: ArraySlice<NameModel.Token>, lines: ArraySlice<[Float]>) -> [Float] {
         let count = tokens.count, width = embed + shapes
         var input = [Float](repeating: 0, count: count * width)
-        let keys = tokens.map { String(String.UnicodeScalarView($0.scalars)) }
+        let keys = tokens.map { $0.scalars.map(\.value) }
         var found = known.withLock { cache in keys.map { cache[$0] } }
-        var fresh: [String: [Float]] = [:]
+        var fresh: [[UInt32]: [Float]] = [:]
         for (row, token) in tokens.enumerated() where found[row] == nil {
             let features = fresh[keys[row]] ?? self.features(token.scalars)
             fresh[keys[row]] = features

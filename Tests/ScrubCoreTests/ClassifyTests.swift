@@ -14,7 +14,12 @@ import Testing
     ("Pasted text", "[INFO] 2026-09-24 user robert@acme.com logged in\n[INFO] done\n", "text"),
     ("Pasted text", "Hi Ana, thanks for the call.\nBest, Bo\n", "text"),
     ("Pasted text", "  \n<?xml version=\"1.0\"?><r/>", "xml"),
-    ("Pasted text", "<p>Hi <b>there</p>", "text")
+    ("Pasted text", "<p>Hi <b>there</p>", "text"),
+    ("Pasted text", "{\"email\":\"a@example.org\",\"count\":1}\n{\"email\":\"b@example.org\",\"count\":2}\n{\"email\":\"c@example.org\",\"count\":3}", "jsonl"),
+    ("Pasted text", "[1,{\"id\":2}]\r\n\r\n{}\r\n", "jsonl"),
+    ("Pasted text", "{\"id\":1}\n{\"id\":2}\nid,name\n", "text"),
+    ("a.jsonl", "{\"id\":1}\n", "jsonl"),
+    ("a.NDJSON", "{\"id\":1}\n{\"id\":2}\n", "jsonl")
 ])
 func classifiesInput(_ name: String, _ text: String, _ expected: String) throws {
     #expect(try Scrubber.classify(Data(text.utf8), name: name) == expected)

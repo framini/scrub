@@ -334,3 +334,31 @@ struct SeveralPeopleTests {
         }
     }
 }
+
+/// Two account holders in one value, joined by "and" in their own language, are
+/// two people: each keeps the stand-in their own field gives them, and no two
+/// people share one.
+struct JointHoldersTests {
+    @Test(arguments: [
+        ("conta.json", "e", "Leonor Faria Quintela", "Duarte Quintela Avelar"),
+        ("cuenta.json", "y", "Remedios Alcaraz Pons", "Ignacio Pons Lafuente"),
+        ("compte.json", "et", "Maëlle Quintard Roussel", "Bastien Roussel Ferrand"),
+    ])
+    func jointHoldersAreTwoPeople(_ name: String, _ joiner: String, _ first: String, _ second: String) throws {
+        let json = """
+        {"accounts": [{"resourceId": "acc-5d1e", "ownerName": "\(first) \(joiner) \(second)", "currency": "EUR",
+          "owners": [{"role": "primary", "name": "\(first)"}, {"role": "secondary", "name": "\(second)"}]}]}
+        """
+        for seed in UInt64(0)..<4 {
+            let result = try Scrubber.scrub(Data(json.utf8), name: name, forceFullDetection: false, seed: seed)
+            let object = try #require(try JSONSerialization.jsonObject(with: result.output) as? [String: Any])
+            let account = try #require((object["accounts"] as? [[String: Any]])?.first)
+            let owners = try #require(account["owners"] as? [[String: String]]).compactMap { $0["name"] }
+            #expect(owners.count == 2 && owners[0] != owners[1], "seed \(seed): \(owners)")
+            #expect(account["ownerName"] as? String == "\(owners[0]) \(joiner) \(owners[1])", "seed \(seed): \(account["ownerName"] ?? "")")
+            for word in (first + " " + second).split(separator: " ") {
+                #expect(!String(decoding: result.output, as: UTF8.self).contains(word), "seed \(seed): \(word)")
+            }
+        }
+    }
+}

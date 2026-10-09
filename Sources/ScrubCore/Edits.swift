@@ -732,7 +732,7 @@ extension ScrubResult {
                 if let replacement { edits.setReplacement(replacement, of: id) }
                 choices.set(target, leave: false)
             } else {
-                let made = findings.indices.contains(target.id) ? findings[target.id] : target
+                let made = review?.findings.indices.contains(target.id) == true ? review?.findings[target.id] ?? target : target
                 if let kind { edits.setKind(kind == made.entity ? nil : kind, of: made.id) }
                 if let replacement { edits.setReplacement(replacement == made.standIn ? nil : replacement, of: made.id) }
                 choices.set(made, leave: false)
