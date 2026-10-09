@@ -262,4 +262,30 @@ struct AddressModelTests {
             #expect(!result.findings.contains { $0.entity == "ADDRESS" }, "\(result.findings.map { "\($0.entity) \($0.original)" })")
         }
     }
+
+    /// A date whose day is spelled out or an ordinal ("veintiuno de agosto", "1er mars", "August 21st") is
+    /// no address either, in any language: a supposed address whose only long number is a year, with no
+    /// street, is a date. An address beside it with its street and postcode is still one.
+    @Test func aDateWithItsDaySpelledOutIsNoAddress() throws {
+        let notes = [
+            "Hola, me llamo Lucía Ferrer Ortega y nací el veintiuno de agosto de 1988 en Valencia.",
+            "Eu nasci em vinte e três de maio de 1990, no Porto, e moro sozinha.",
+            "Je suis née le premier mars 1985 à Lyon, et ma sœur le 1er avril 1987.",
+            "Sono nato il 1º aprile 1979 e mia moglie il ventitré giugno 1982.",
+            "Ich bin am einundzwanzigsten August 1988 in Graz zur Welt gekommen.",
+            "Ik ben op eenentwintig augustus 1988 in Utrecht ter wereld gekomen.",
+            "I was born on the twenty-first of August 1988, or August 21st, 1988 if you prefer.",
+        ]
+        for note in notes {
+            for (data, name) in [(Data(note.utf8), "Pasted text"), (Data(#"{"ticket": {"id": 5521, "body": "\#(note)"}}"#.utf8), "ticket.json")] {
+                let result = try Scrubber.scrub(data, name: name, forceFullDetection: false, seed: 3)
+                #expect(!result.findings.contains { $0.entity == "ADDRESS" }, "\(name): \(result.findings.map { "\($0.entity) \($0.original)" })")
+                #expect(String(decoding: result.output, as: UTF8.self).range(of: #"(?<!\d)19[789]\d(?!\d)"#, options: .regularExpression) != nil || result.findings.contains { $0.entity == "DATE_OF_BIRTH" })
+            }
+        }
+        let both = "Nací el veintiuno de agosto de 1988 y vivo en Calle Mayor 12, 28013 Madrid."
+        let result = try Scrubber.scrub(Data(both.utf8), name: "Pasted text", forceFullDetection: false, seed: 3)
+        let written = String(decoding: result.output, as: UTF8.self)
+        #expect(!written.contains("Calle Mayor 12") && written.contains("veintiuno de agosto"), "\(written)")
+    }
 }

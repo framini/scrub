@@ -217,7 +217,7 @@ enum NameEvidence {
         }
         for span in spans {
             let person = names.contains(span.entity)
-            if span.entity == "ADDRESS", WrittenDates.holds(TextRanges.substring(text, span.range)) { continue }
+            if span.entity == "ADDRESS", WrittenDates.holds(TextRanges.substring(text, span.range)) || WrittenDates.yearAlone(TextRanges.substring(text, span.range)) { continue }
             guard (person || span.entity == "LOCATION") && span.url == nil && span.score < 1 && !span.range.isEmpty else { kept.append(span); continue }
             if person, company(span, in: text) { continue }
             if evidenced.contains(where: { $0.overlaps(span.range) }) { kept.append(span); continue }
@@ -309,6 +309,20 @@ enum WrittenDates {
         return made.lowercased()
     }
     private static let pattern = TextPattern(#"(?i)(?<![\p{L}\p{N}])(\d{1,2})\.?[ \t]+(?:(?:de|del|of)[ \t]+)?(\p{L}{3,})\.?,?[ \t]+(?:(?:de|del|of)[ \t]+)?(\d{4})(?![\p{L}\p{N}])"#)
+    /// Whether a supposed address's only number of any length is a year, beside at most a day's
+    /// ("el veintiuno de agosto de 1988", "le 1er mars 1985", "August 21st, 1988"), with no word that
+    /// names a kind of street: a date, or a life's event, and no address. An address has a street or a postcode.
+    private static let boxes: Set<String> = ["box", "postfach", "postbus", "postboks", "apartado", "casella", "caixa", "bag"]
+    static func yearAlone(_ text: String) -> Bool {
+        let numbers = text.split(whereSeparator: { !$0.isNumber }).map(String.init)
+        guard numbers.contains(where: { $0.count == 4 && (1800...2099).contains(Int($0) ?? 0) }),
+              numbers.allSatisfy({ $0.count <= 2 || $0.count == 4 && (1800...2099).contains(Int($0) ?? 0) }) else { return false }
+        let words = text.lowercased().split(whereSeparator: { !$0.isLetter && $0 != "/" }).map(String.init)
+        return !words.contains { word in
+            AddressBlock.streetKinds.contains(word) || AddressBlock.englishKinds.contains(word) || AddressBlock.placeWords.contains(word) || boxes.contains(word)
+                || AddressBlock.streetSuffixes.contains { word.hasSuffix($0) && word.count > $0.count + 2 }
+        }
+    }
     /// Whether the text holds a whole date written with its month's name: day, month and year.
     static func holds(_ text: String) -> Bool {
         TextRanges.matches(pattern, in: text).contains { match in
