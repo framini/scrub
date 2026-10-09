@@ -155,8 +155,32 @@ enum Correction {
         // So is a person made of ordinary words that the tagger reads only now:
         // "Later" opening a sentence after a stand-in "Quinn Ramos" is no one,
         // and the first pass, reading the original, said so.
-        found.spans.append(contentsOf: detected.filter { $0.entity != "LOCATION" && !ours($0.range, $0.entity) && !readOffStandIns($0, in: output) })
+        let fresh = detected.filter { $0.entity != "LOCATION" && !ours($0.range, $0.entity) && !readOffStandIns($0, in: output) }
+        // A given name alone that people of two surnames share ("Tobias" beside Tobias Wren and Tobias Hale)
+        // is either of them, or someone else: asked about, never a third stand-in.
+        for span in fresh {
+            if span.entity == "PERSON", job.sharedFirsts.contains(TextRanges.substring(output, span.range)) {
+                found.suspects.append(Span(range: span.range, entity: "PERSON", score: LeakGate.suspectConfidence))
+            } else { found.spans.append(span) }
+        }
         found.spans = Links.outside(found.spans, in: output)
+        // Once any part of a name is replaced, no other part of it written beside it stays as written:
+        // it is replaced as more of that name, or asked about where it may be a word.
+        let named = ordered.filter { ["PERSON", "FIRST_NAME", "LAST_NAME"].contains($0.entity) && $0.original != nil }
+        if !named.isEmpty {
+            let known = Set(named.flatMap { $0.original!.split { !$0.isLetter }.map { $0.lowercased() } }.filter { $0.count >= 2 })
+            var taken = IndexSet()
+            for span in found.spans { taken.insert(integersIn: span.range) }
+            for mark in named {
+                let written = TextRanges.substring(output, mark.range)
+                let slug = written == written.lowercased() && !written.contains(" ")
+                for part in NameShape.adjacentParts(mark.range, in: output, known: known, slug: slug) where !ours(part.range, "PERSON") && !taken.intersects(integersIn: part.range) {
+                    taken.insert(integersIn: part.range)
+                    if part.sure { found.spans.append(Span(range: part.range, entity: "PERSON", score: 1)) }
+                    else { found.suspects.append(Span(range: part.range, entity: "PERSON", score: LeakGate.suspectConfidence)) }
+                }
+            }
+        }
         // The leak gate: variants of values already replaced, which no detector
         // reads, and numbers that check themselves left as written. A pass fixes
         // a bounded number of variants, in proportion to the text; the rest are suspects.

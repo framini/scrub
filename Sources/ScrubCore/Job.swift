@@ -7,6 +7,9 @@ public final class Job {
     private(set) var nameParts: Set<String> = []
     /// Parts that are also ordinary words, and short forms: someone only where written as a name (see `NameCues.position`).
     private(set) var cuedParts: Set<String> = []
+    /// Given names people of more than one surname share ("Tobias" of Tobias Wren and Tobias Hale): alone, either's.
+    private(set) var sharedFirsts: Set<String> = []
+    private var families: [String: String] = [:]
     private(set) var replacements: [Replacement] = []
     private(set) var sensitiveOriginals: [SensitiveOriginal] = []
     /// How sure the detectors that found each original were, by its lowercase
@@ -196,6 +199,7 @@ public final class Job {
         // holds it and no list of names does, so it too counts only where written as a name.
         func wordlike(_ part: String) -> Bool { Names.ambiguousFirst.contains(part.lowercased()) || NameLists.isWordlike(part) || NameLists.isOrdinary(part) || NameLists.isUnlistedWord(part) }
         let parts = [first, last].filter(usable)
+        if let family = families[first], family != last.lowercased() { sharedFirsts.insert(first) } else { families[first] = last.lowercased() }
         for part in parts {
             learn(part)
             if wordlike(part) { cuedParts.insert(part); nameParts.insert(part) }

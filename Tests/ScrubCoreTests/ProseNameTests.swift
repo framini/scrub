@@ -224,3 +224,98 @@ extension ProseNameTests {
         }
     }
 }
+
+/// A given name alone that two people found share is either of them, or someone else: it is asked about,
+/// left as written, never a third stand-in drawn silently, wherever in the text it is written.
+@Test(arguments: [UInt64(3), 14])
+func aGivenNameTwoPeopleShareIsAskedAbout(_ seed: UInt64) throws {
+    let notes = [
+        "Meeting note. Tobias Wren and Tobias Hale both attended the review. Afterwards Tobias said he would send the documents.",
+        "Tobias Wren and Tobias Hale both attended the review.\n\nAfterwards Tobias said he would send the documents.",
+    ]
+    for note in notes {
+        let result = try Scrubber.scrub(Data(note.utf8), name: "note.txt", forceFullDetection: false, seed: seed)
+        let output = String(decoding: result.output, as: UTF8.self)
+        #expect(!output.contains("Wren") && !output.contains("Hale"), "\(output)")
+        let alone = try #require(result.findings.first { $0.original == "Tobias" }, "\(output)")
+        #expect(alone.suspected && alone.needsReview, "\(alone)")
+    }
+}
+
+/// Capitalised words after a form of address, in any language, that are no word of the text's language
+/// are a person's name, opening a sentence or inside one.
+@Test(arguments: [UInt64(3), 14])
+func aNameAfterAFormOfAddressIsFound(_ seed: UInt64) throws {
+    let notes: [(text: String, name: String)] = [
+        ("Notitie van het gesprek op 12 mei.\nDhr. Pieter Hoogeveen belde over zijn aanvraag. Mevr. Anouk Verbeek belde ook.\nSr. Tomás Iribarren llamó. Sra. Lucía Echeverría también. Herr Dietmar Kowalczyk rief an. Sig. Gianluca Brambati ha chiamato.", "Hoogeveen"),
+        ("Notitie van 12 mei. Gisteren belde Dhr. Pieter Hoogeveen over zijn aanvraag.", "Hoogeveen"),
+        ("Nota del 12 de mayo. Ayer llamó la Sra. Lucía Echeverría por la cuenta.", "Echeverría"),
+        ("Nota del 12 maggio. Sig. Gianluca Brambati ha chiamato per il conto.", "Brambati"),
+    ]
+    for note in notes {
+        let result = try Scrubber.scrub(Data(note.text.utf8), name: "note.txt", forceFullDetection: false, seed: seed)
+        let output = String(decoding: result.output, as: UTF8.self)
+        #expect(!output.contains(note.name), "\(output)")
+    }
+}
+
+/// A son written with the word for it in his language ("Filho", "Hijo", "Jr.") shares his father's stand-in
+/// family and keeps that word, so the two stay apart in the output as in the input.
+@Test(arguments: [UInt64(3), 14])
+func aFamilySuffixKeepsFatherAndSonApart(_ seed: UInt64) throws {
+    let cases: [(father: String, son: String, suffix: String)] = [
+        ("Rogério Tavares Lins", "Rogério Tavares Lins Filho", "Filho"),
+        ("Joaquim Prates Moura", "Joaquim Prates Moura Neto", "Neto"),
+        ("Robert Hale", "Robert Hale Jr.", "Jr."),
+    ]
+    for item in cases {
+        let json = #"{"titular": {"nome_completo": "\#(item.father)", "cpf": "529.982.247-25"}, "dependentes": [{"nome_completo": "\#(item.son)"}], "observacao": "\#(item.son) assina junto com \#(item.father)."}"#
+        let result = try Scrubber.scrub(Data(json.utf8), name: "proposal.json", forceFullDetection: false, seed: seed)
+        let output = String(decoding: result.output, as: UTF8.self)
+        let object = try #require(try JSONSerialization.jsonObject(with: result.output) as? [String: Any])
+        let father = try #require((object["titular"] as? [String: Any])?["nome_completo"] as? String)
+        let son = try #require(((object["dependentes"] as? [[String: Any]])?.first)?["nome_completo"] as? String)
+        for word in item.father.split(separator: " ") { #expect(!output.contains(word), "\(word): \(output)") }
+        #expect(son == father + " " + item.suffix, "\(father) / \(son)")
+    }
+}
+
+/// Once a part of a name is replaced, the rest of that name written beside it is more of it: a capitalised word
+/// a space or a hyphen away, past a particle, a given name after a Vietnamese middle name, or a slug's next word.
+/// A word of the language that may be a name is asked about; an ordinary word, a title or a number ends the name.
+@Test func thePartsBesideAReplacedNameAreMoreOfIt() {
+    func parts(_ text: String, _ name: String, known: Set<String> = [], slug: Bool = false) -> [String] {
+        let range = (text as NSString).range(of: name)
+        return NameShape.adjacentParts(range.location..<NSMaxRange(range), in: text, known: known, slug: slug)
+            .map { TextRanges.substring(text, $0.range) + ($0.sure ? "" : "?") }.sorted()
+    }
+    #expect(parts("A cliente Marta Queiroz Lemos Bastos ligou.", "Lemos") == ["Bastos?", "Marta", "Queiroz"])
+    #expect(parts("Note: customer Søren Kierkegaard-Holm asked about the refund.", "Kierkegaard-Holm") == ["Søren"])
+    #expect(parts("Gesprek met Wiebke de Boer over haar rekening.", "Boer") == ["Wiebke"])
+    #expect(parts("Khách hàng Trịnh Văn Khoa đã gọi.", "Trịnh") == ["Khoa", "Văn"])
+    #expect(parts("https://social.example.com/in/ingrid-fjeld-1984", "ingrid", slug: true) == ["fjeld"])
+    // Ordinary words, a title, a sentence's first word and a number stay.
+    #expect(parts("Yesterday Ethan Garcia Called back about Order 4411.", "Ethan Garcia").isEmpty)
+    #expect(parts("Thanks. Dr Ethan Garcia, 2024.", "Ethan Garcia").isEmpty)
+}
+
+/// A doubted name is asked about whole, never a part of it left as written outside the question; and a surname
+/// at birth after its cue in any language ("z domu", "geb.", "née", "født") is replaced.
+@Test(arguments: [UInt64(3), 14])
+func noPartOfANameIsLeftOutsideItsReplacementOrQuestion(_ seed: UInt64) throws {
+    let notes: [(text: String, words: [String])] = [
+        ("Khách hàng Trịnh Văn Khoa đã gọi về tài khoản.", ["Trịnh", "Văn", "Khoa"]),
+        ("Pani Halina Wrona z domu Zając zadzwoniła w sprawie konta.", ["Halina", "Wrona", "Zając"]),
+        ("Frau Greta Lindner geb. Hofbauer rief wegen des Kontos an.", ["Greta", "Lindner", "Hofbauer"]),
+        ("Mme Odile Garnier née Martel a appelé au sujet du compte.", ["Odile", "Garnier", "Martel"]),
+        ("Fru Astrid Lunde født Brekke ringte i dag om kontoen.", ["Astrid", "Lunde", "Brekke"]),
+    ]
+    for note in notes {
+        let result = try Scrubber.scrub(Data(note.text.utf8), name: "note.txt", forceFullDetection: false, seed: seed)
+        let output = String(decoding: result.output, as: UTF8.self)
+        let asked = result.findings.filter(\.needsReview).map(\.original).joined(separator: " ")
+        for word in note.words where output.contains(word) {
+            #expect(asked.contains(word), "\(word) left unasked: \(output)")
+        }
+    }
+}

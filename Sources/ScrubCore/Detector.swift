@@ -93,6 +93,25 @@ public final class Detector {
             // A person written in pieces is one person (see `JoinedNames`).
             (kept, doubts) = JoinedNames.joined(kept, doubts, in: text)
             kept = Self.withNameEnds(kept, in: text)
+            if let maiden = Self.maidenNames(in: text) {
+                // "Greta Lindner geb. Hofbauer": the name before the cue ends at it, and the word after it is her surname at birth.
+                kept = kept.compactMap { span in
+                    guard span.entity == "PERSON", let cue = maiden.cues.first(where: { span.range.contains($0.lowerBound) && $0.lowerBound > span.range.lowerBound }) else { return span }
+                    var end = cue.lowerBound
+                    while end > span.range.lowerBound, [32, 9].contains((text as NSString).character(at: end - 1)) { end -= 1 }
+                    return end > span.range.lowerBound ? Span(range: span.range.lowerBound..<end, entity: span.entity, score: span.score) : nil
+                }
+                kept.removeAll { span in maiden.names.contains { $0.range.overlaps(span.range) } && span.entity != "PERSON" && span.entity != "LAST_NAME" }
+                let names = maiden.names.filter { name in !kept.contains { $0.range.overlaps(name.range) } }
+                kept += names
+                evidenced += maiden.names.map(\.range)
+                doubts.removeAll { doubt in names.contains { $0.range.overlaps(doubt.range) } }
+            }
+            if NameEvidence.mayHoldTitle(text) {
+                let titled = Self.titledNames(in: text, document: language).filter { name in !kept.contains { $0.range.overlaps(name.range) } }
+                kept += titled
+                doubts.removeAll { doubt in titled.contains { $0.range.overlaps(doubt.range) } }
+            }
             let called = Self.firstNamesOfLowercasePeople(kept, in: text)
             if !called.isEmpty {
                 kept += called
@@ -108,6 +127,37 @@ public final class Detector {
             return given.spans
         }
     }
+    /// "z domu Zając", "geb. Hofbauer", "née Martel": the capitalised word after a cue for a surname at birth, in the
+    /// languages Scrub reads, is that surname; with the cues' own ranges.
+    static func maidenNames(in text: String) -> (names: [Span], cues: [Range<Int>])? {
+        let matches = TextRanges.matches(maidenCue, in: text)
+        guard !matches.isEmpty else { return nil }
+        let names = matches.map { Span(range: $0.range(at: 2).location..<NSMaxRange($0.range(at: 2)), entity: "LAST_NAME", score: ListedNames.cuedScore) }
+        return (names, matches.map { $0.range(at: 1).location..<NSMaxRange($0.range(at: 1)) })
+    }
+    private static let maidenCue = TextPattern(#"(?<![\p{L}\p{N}])((?i:née|nee|geb\.|geborene|z domu|nacida|nata|født|fødd|född|roz\.|rozená|rodená|dite|detta|apelido de solteira|de soltera|nom de jeune fille|meisjesnaam))[ \t]+(\p{Lu}[\p{Ll}'’]+(?:[-‐‑]\p{Lu}[\p{Ll}'’]+)?)(?![\p{L}\p{N}])"#)
+    /// "Dhr. Pieter Hoogeveen", "Sig. Gianluca Brambati": capitalised words after a form of address, in any language,
+    /// that are no word of the text's language there, are a person; the name ends at the first word that is one.
+    static func titledNames(in text: String, document: NLLanguage?) -> [Span] {
+        var found: [Span] = []
+        for match in TextRanges.matches(titledName, in: text) {
+            let title = TextRanges.substring(text, match.range(at: 1).location..<NSMaxRange(match.range(at: 1)))
+            guard title.first?.isUppercase == true, NameEvidence.titles.contains(title.lowercased()), !ambiguousTitles.contains(title.lowercased()) else { continue }
+            let start = match.range(at: 2).location
+            let language = NameEvidence.language(around: start..<NSMaxRange(match.range(at: 2)), in: text, document: document) ?? .english
+            var end = start
+            for word in NameShape.words(start..<NSMaxRange(match.range(at: 2)), in: text) {
+                guard word.text.first?.isUppercase == true, !NameEvidence.isLowercaseWord(word.text, in: language), !People.isTitle(word.text),
+                      language != .english || !NameLists.isWord(word.text) || NameLists.isFirst(word.text.lowercased()) || NameLists.isSurname(word.text.lowercased()) && !NameLists.isOrdinary(word.text.lowercased()) else { break }
+                end = word.range.upperBound
+            }
+            if end > start { found.append(Span(range: start..<end, entity: "PERSON", score: ListedNames.cuedScore)) }
+        }
+        return found
+    }
+    private static let titledName = TextPattern(#"(?<![\p{L}\p{N}.])((?i:"# + NameEvidence.titles.filter { $0.count >= 2 }.sorted { $0.count > $1.count }.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|") + #"))\.?[ \t]+(\p{Lu}[\p{Ll}'’-]+(?:[ \t]+\p{Lu}[\p{Ll}'’-]+){0,3})(?![\p{L}\p{N}])"#)
+    /// Forms of address that are also a word or a name written before another ("Don", "Pan", "Bay").
+    private static let ambiguousTitles: Set<String> = ["don", "pan", "bay", "ing", "mag", "anh", "heer", "dame", "sir", "miss", "lady"]
     /// "Pieter" alone after "Pieter Hoogeveen": a given name of a person found here, written later on its own,
     /// is that person, and the evidence that found them is evidence for it. Where it is also an ordinary word
     /// of the text's language, or two people found here share it, it is asked about instead.
@@ -122,9 +172,17 @@ public final class Detector {
         }
         guard !surnames.isEmpty else { return (spans, doubts) }
         let ns = text as NSString
+        var found = spans, doubted = doubts
+        // One already read alone, whichever reader read it, is still either of two people who share it: asked about.
+        let shared = spans.filter { span in
+            span.entity == "PERSON" && span.url == nil && surnames[TextRanges.substring(text, span.range)].map { $0.count > 1 } == true
+        }
+        if !shared.isEmpty {
+            found.removeAll { span in shared.contains { $0.range == span.range } }
+            doubted += shared.map { Span(range: $0.range, entity: "PERSON", score: Doubt.unconfirmed.confidence) }
+        }
         var taken = IndexSet()
         for span in spans where !span.range.isEmpty { taken.insert(integersIn: span.range) }
-        var found = spans, doubted = doubts
         for (first, families) in surnames {
             let pattern = TextPattern("(?<![\\p{L}\\p{N}@._-])" + NSRegularExpression.escapedPattern(for: first) + "(?![\\p{L}\\p{N}@_-])(?!\\.[\\p{L}\\p{N}])")
             for match in TextRanges.matches(pattern, in: text) {

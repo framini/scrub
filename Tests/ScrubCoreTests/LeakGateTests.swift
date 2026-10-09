@@ -263,6 +263,28 @@ import Testing
         #expect(LeakGate.usable("Ferriter") && !LeakGate.usable("Rose") && !LeakGate.usable("Will") && !LeakGate.usable("Refund") && !LeakGate.usable("Ana"))
     }
 
+    /// A part of a known name beside a surname or a given name no one replaced is another person's
+    /// name, replaced whole: never the part alone, the rest of that name left as written.
+    @Test func aKnownPartBesideAnotherNameIsReplacedWhole() {
+        var gate = LeakGate()
+        gate.add([Replacement(original: "Lucien Moreau", fake: "Ethan Garcia", entity: "PERSON"),
+                  Replacement(original: "Chiara Benedetti", fake: "Diana Harrison", entity: "PERSON")])
+        let cases = [("Later Lucien Fabre called about the loan.", "Lucien Fabre"),
+                     ("Poi Chiara Valli ha firmato il modulo.", "Chiara Valli"),
+                     ("Ensuite Brigitte Moreau a rappelé.", "Brigitte Moreau"),
+                     ("Lucien Fabre-Rousseau signed.", "Lucien Fabre-Rousseau")]
+        for (text, name) in cases {
+            let leaks = gate.scan(text).leaks
+            #expect(leaks.count == 1, "\(text): \(leaks)")
+            guard let leak = leaks.first else { continue }
+            #expect(TextRanges.substring(text, leak.range) == name && leak.fake == nil && leak.entity == "PERSON", "\(text): \(TextRanges.substring(text, leak.range))")
+        }
+        // The person's own name, a title before a part, or a word of the sentence after it stays the part's.
+        for text in ["Lucien Moreau called.", "Mr Moreau called.", "Lucien Called back.", "Thanks Lucien."] {
+            #expect(gate.scan(text).leaks.allSatisfy { $0.fake != nil }, "\(text): \(gate.scan(text).leaks)")
+        }
+    }
+
     @Test func casesFollowTheVariant() {
         #expect(LeakGate.cased("Garcia", like: "FERRITER") == "GARCIA")
         #expect(LeakGate.cased("Garcia", like: "ferriter") == "garcia")

@@ -432,6 +432,28 @@ enum DocumentPipeline {
             let leaf = leaves[index]
             job.enter(value: index, records: leaf.enclosing, part: leaf.datePart, object: leaf.objectPath, naming: leaf.naming, kind: leaf.decided)
             var found = founds[index]
+            // A given name alone that two people found share, or one detection doubted that a name found
+            // elsewhere matched again, stays a doubt: either person's, or someone else's, so asked about.
+            var doubted = doubts.indices.contains(index) ? doubts[index] : []
+            let sharing = found.filter { span in
+                span.entity == "PERSON" && (job.sharedFirsts.contains(TextRanges.substring(leaf.seen, span.range)) || doubted.contains { $0.entity == "PERSON" && $0.range == span.range })
+            }
+            if !sharing.isEmpty {
+                found.removeAll { span in sharing.contains { $0.range == span.range } }
+                doubted += sharing.filter { span in !doubted.contains { $0.range == span.range } }.map { Span(range: $0.range, entity: "PERSON", score: Doubt.unconfirmed.confidence) }
+            }
+            // A doubted name is asked about whole: the parts of it written beside the part that was doubted come with it.
+            if doubted.contains(where: { $0.entity == "PERSON" }) {
+                let known = Set(found.filter { $0.entity == "PERSON" }.flatMap { TextRanges.substring(leaf.seen, $0.range).split { !$0.isLetter }.map { $0.lowercased() } })
+                doubted = doubted.map { doubt in
+                    guard doubt.entity == "PERSON" else { return doubt }
+                    let parts = NameShape.adjacentParts(doubt.range, in: leaf.seen, known: known).map(\.range).filter { part in !found.contains { $0.range.overlaps(part) } }
+                    guard !parts.isEmpty else { return doubt }
+                    let low = parts.map(\.lowerBound).min().map { min($0, doubt.range.lowerBound) } ?? doubt.range.lowerBound
+                    let high = parts.map(\.upperBound).max().map { max($0, doubt.range.upperBound) } ?? doubt.range.upperBound
+                    return Span(range: low..<high, entity: "PERSON", score: doubt.score)
+                }
+            }
             if leaf.machineAddress { found.removeAll { $0.entity == "IP_ADDRESS" } }
             // So is one after a machine's key in a log's pairs ("node=10.0.4.17", "gateway: 192.168.1.1").
             else if leaf.key == nil { found.removeAll { $0.entity == "IP_ADDRESS" && Self.machineAddress($0.range, in: leaf.seen) } }
@@ -453,9 +475,9 @@ enum DocumentPipeline {
                     marks = [Mark(range: 0..<(text as NSString).length, entity: "TIME_ZONE", original: leaf.text, confidence: 1)]
                 } else { (text, marks) = (leaf.text, []) }
             } else {
-                held = doubts.indices.contains(index) ? doubts[index].map { doubt in
+                held = doubted.map { doubt in
                     Mark(range: leaf.view?.raw(doubt.range) ?? doubt.range, entity: doubt.entity, original: TextRanges.substring(leaf.seen, doubt.range), confidence: min(doubt.score, Doubt.unconfirmed.confidence), doubt: .unconfirmed)
-                } : []
+                }
                 (text, marks) = try job.apply(leaf.text, spans: found, owner: owner, address: addresses[index], held: &held)
             }
             // An age with no birth date to follow stays as it was.

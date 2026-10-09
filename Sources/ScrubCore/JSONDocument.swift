@@ -225,6 +225,7 @@ final class JSONDocument {
                 if KeyHints.hint(inherited) == nil, let born = KeyHints.birthField(pair.0, value: pair.1.stringValue ?? pair.1.numberText, siblings: named, kind: kind) { inherited = born }
                 if individualField, KeyHints.hint(inherited) == nil, Self.codedValueKeys.contains(KeyHints.words(pair.0).joined()), let text = pair.1.stringValue,
                    let field = Self.individualsField(text) { inherited = field }
+                if inherited == pair.0, case .string(let name) = pair.1, KeyHints.holdsWholeName(pair.0, value: name, siblings: pairs.map(\.0)) { inherited = "name" }
                 if KeyHints.isBareName(pair.0), case .string(let name) = pair.1,
                    !KeyHints.bareNameIsPerson(name, siblings: pairs.map(\.0), parent: key, values: named.map(\.1)) {
                     inherited = nil

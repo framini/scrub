@@ -97,6 +97,7 @@ public enum CSVFile: FileFormat {
                     unsure = KeyHints.writtenAsName(cell, parent: column < parents.count ? parents[column].joined(separator: "_") : nil)
                 }
                 if let fields = owned[column], KeyHints.ownRecord(fields, value: rows[row][column]) { key = "name" }
+                if KeyHints.holdsWholeName(key, value: cell, siblings: keys.compactMap { $0 }) { key = "name" }
                 if KeyHints.hint(key) == nil, column < keys.count, let part = nameParts[keys[column]] { key = part }
                 if let siblings = named[column] {
                     let texts = siblings.compactMap { $0 < rows[row].count ? (KeyHints.words(columns[$0]).last!, rows[row][$0]) : nil }

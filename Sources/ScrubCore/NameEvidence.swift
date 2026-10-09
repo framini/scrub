@@ -109,6 +109,10 @@ enum NameEvidence {
 
     private static let titleBefore = TextPattern("(?i)(?<![\\p{L}\\p{N}])(?:" + titles.sorted { $0.count > $1.count }.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|") + ")\\.?[ \\t]+$")
     /// A title or form of address right before the name, or a Turkish one right after it.
+    /// Whether a form of address could open a name in `text`: a cheap check before reading them.
+    static func mayHoldTitle(_ text: String) -> Bool {
+        text.split { !$0.isLetter }.contains { $0.count <= 11 && $0.first?.isUppercase == true && titles.contains($0.lowercased()) }
+    }
     static func titled(_ range: Range<Int>, in text: String) -> Bool {
         let ns = text as NSString
         let start = max(0, range.lowerBound - 20)

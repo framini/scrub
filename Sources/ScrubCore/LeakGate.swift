@@ -46,6 +46,9 @@ struct LeakGate {
 
     private struct Piece { let length: Int; let fake: String }
     private var parts: [String: (fake: String, source: String)] = [:]
+    /// Parts two people replaced share ("Tobias" of Tobias Wren and Tobias Hale): either's, so asked about.
+    private var sharedParts: Set<String> = []
+    private var families: [String: String] = [:]
     /// A name's parts joined: "odalysferriter", "oferriter", "odalysf", each piece with its stand-in.
     private var combos: [String: (pieces: [Piece], source: String)] = [:]
     private var numbers: [String: (entity: String, fake: String, source: String)] = [:]
@@ -113,6 +116,10 @@ struct LeakGate {
         for (part, stand) in zip(real, made) where Self.usable(part) {
             let key = part.lowercased()
             if parts[key] == nil { parts[key] = (stand, original); lengths.insert(part.count); shortest = min(shortest, part.utf16.count) }
+            // A given name two people of other surnames share.
+            if real.count >= 2, part == real.first, let last = real.last?.lowercased() {
+                if let family = families[key], family != last { sharedParts.insert(key) } else { families[key] = last }
+            }
         }
         guard real.count >= 2, let first = real.first, let last = real.last, let fakeFirst = made.first, let fakeLast = made.last else { return }
         let f = Self.letters(first), l = Self.letters(last), ff = Self.letters(fakeFirst), fl = Self.letters(fakeLast)
@@ -287,6 +294,16 @@ struct LeakGate {
             }
             if lengths.contains(key.count) {
                 if let part = parts[key] {
+                    if plain, segments.count == 1, sharedParts.contains(key), otherName(segment.range, units, ns) == nil {
+                        found.suspects.append(Span(range: segment.range, entity: "PERSON", score: Self.suspectConfidence))
+                        index += 1
+                        continue
+                    }
+                    if plain, segments.count == 1, let whole = otherName(segment.range, units, ns) {
+                        found.leaks.append(Leak(range: whole, entity: "PERSON", fake: nil, source: part.source))
+                        index += 1
+                        continue
+                    }
                     // Alone it is a name; inside a handle it is the handle's.
                     found.leaks.append(Leak(range: segment.range, entity: plain ? "PERSON" : "USERNAME", fake: Self.cased(part.fake, like: segment.letters), source: part.source))
                 } else if let combo = combos[key] {
@@ -298,6 +315,45 @@ struct LeakGate {
         }
     }
 
+    /// "Lucien" of a Lucien Moreau replaced, written before "Fabre": a part of a name beside capitalised words
+    /// of a name no one replaced is part of another person's name, replaced whole as a name of its own,
+    /// never the part alone with the rest of it left as written.
+    private func otherName(_ range: Range<Int>, _ units: [UInt16], _ ns: NSString) -> Range<Int>? {
+        func word(from start: Int, forward: Bool) -> Range<Int>? {
+            var index = start
+            if forward {
+                while index < units.count, Self.isLetter(units[index]) || [39, 0x2019, 45].contains(units[index]) { index += 1 }
+                while index > start, [39, 0x2019, 45].contains(units[index - 1]) { index -= 1 }
+                return index > start ? start..<index : nil
+            }
+            while index > 0, Self.isLetter(units[index - 1]) || [39, 0x2019, 45].contains(units[index - 1]) { index -= 1 }
+            while index < start, [39, 0x2019, 45].contains(units[index]) { index += 1 }
+            return index < start ? index..<start : nil
+        }
+        func named(_ word: Range<Int>) -> Bool {
+            let text = ns.substring(with: NSRange(location: word.lowerBound, length: word.count))
+            guard text.count >= 2, text.first?.isUppercase == true, text.dropFirst().contains(where: \.isLowercase), parts[text.lowercased()] == nil,
+                  !People.isTitle(text), !People.isSuffix(text), !NameEvidence.titles.contains(text.lowercased()) else { return false }
+            return !NameLists.isWord(text) || NameLists.isName(text)
+        }
+        var whole = range
+        for _ in 0..<2 {
+            guard whole.upperBound + 1 < units.count, units[whole.upperBound] == 32, let next = word(from: whole.upperBound + 1, forward: true),
+                  next.upperBound == units.count || !Self.isLetter(units[next.upperBound]) && !Self.isDigit(units[next.upperBound]), named(next) else { break }
+            whole = whole.lowerBound..<next.upperBound
+        }
+        for _ in 0..<2 {
+            guard whole.lowerBound >= 2, units[whole.lowerBound - 1] == 32, let previous = word(from: whole.lowerBound - 1, forward: false),
+                  previous.lowerBound == 0 || !Self.isLetter(units[previous.lowerBound - 1]) && !Self.isDigit(units[previous.lowerBound - 1]), named(previous) else { break }
+            // A sentence's first word ("Ensuite", "Danach") is a given name only as a list of them knows it.
+            var before = previous.lowerBound
+            while before > 0, [32, 9].contains(units[before - 1]) { before -= 1 }
+            if before == 0 || [46, 33, 63, 58, 10, 13, 34, 0x201C, 40].contains(units[before - 1]),
+               !NameLists.isFirst(ns.substring(with: NSRange(location: previous.lowerBound, length: previous.count))) { break }
+            whole = previous.lowerBound..<whole.upperBound
+        }
+        return whole == range ? nil : whole
+    }
     /// The runs of letters in a token, each read without its soft hyphens ("Fer\u{AD}riter").
     private func segments(_ range: Range<Int>, _ units: [UInt16], _ ns: NSString) -> [Segment] {
         var result: [Segment] = []

@@ -1502,6 +1502,9 @@ final class StandIns {
     /// stand-in first name, another given name takes one of its own, a particle stays, and a
     /// surname takes the stand-in that surname takes anywhere, so a relative's name beside it agrees.
     private func shapedFirst(_ original: String, of person: Persona) -> String {
+        // "Rogério Tavares Lins Filho": the son keeps the word that tells him from his father, and the family's stand-in.
+        let suffix = People.familySuffix(of: original.trimmingCharacters(in: .whitespaces))
+        if !suffix.isEmpty { return shapedFirst(String(original.trimmingCharacters(in: .whitespaces).dropLast(suffix.count)), of: person) + suffix }
         let words = original.trimmingCharacters(in: .whitespaces).split(separator: " ").map(String.init)
         guard words.count >= 2, words.count <= 6, words.allSatisfy({ $0.count >= 2 && $0.allSatisfy { $0.isLetter || "-'’".contains($0) } }) else { return person.first }
         let particle = words.dropFirst().firstIndex { JoinedNames.particles.contains($0.lowercased()) }
@@ -1595,7 +1598,7 @@ final class StandIns {
                    words[1].first?.isUppercase == true, words[1].dropFirst().contains(where: \.isLowercase) {
                     return persona.last.uppercased() + " " + persona.first
                 }
-                return persona.full
+                return persona.full + People.familySuffix(of: original)
             }
             let name = people.name(for: original)
             owner = people.lastNamed
@@ -1604,7 +1607,7 @@ final class StandIns {
             // Another of the person's given names ("middle_name": "Rose" beside "first_name":
             // "Cordelia") is a name of its own, never the stand-in their first name takes.
             if let persona, let other = people.otherGiven(original, of: persona) { return other }
-            let person = persona ?? people.register(original, nil)
+            let person = persona ?? people.register(String(original.dropLast(People.familySuffix(of: original).count)), nil)
             owner = person
             return shapedFirst(original, of: person)
         case "LAST_NAME":

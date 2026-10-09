@@ -547,7 +547,10 @@ final class People {
         guard !last.isEmpty, !rest.isEmpty, !surname.name.contains(where: \.isWhitespace) else { return nil }
         return rest + " " + surname.name
     }
-    private static let suffixes: Set<String> = ["jr", "sr", "ii", "iii", "iv"]
+    /// The words that say which of a family someone is, in the languages Scrub reads: a son's or a grandson's
+    /// ("Filho", "Neto", "Hijo", "fils"), a father's ("Sr.", "père"), or a generation's number.
+    private static let suffixes: Set<String> = ["jr", "sr", "ii", "iii", "iv", "junior", "júnior", "senior", "filho", "filha", "neto", "neta", "sobrinho", "sobrinha",
+                                                "hijo", "fils", "père", "pere", "jun", "sen", "jnr", "snr"]
     static func isSuffix(_ word: String) -> Bool { suffixes.contains(word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".,"))) }
     /// "Bowen Jr." as the surname and the suffix after it.
     private static func suffixed(_ last: String) -> (name: String, suffix: String?) {
@@ -676,7 +679,14 @@ final class People {
             let last = named.last.map { $0 == $0.uppercased() && $0.count > 1 } == true ? person.last.uppercased() : person.last
             return title + (initials + [last]).joined(separator: " ")
         }
-        return title + (parts == 1 ? person.first : parts == -1 ? person.last : person.full)
+        // "Rogério Tavares Lins Filho" beside his father: the son keeps the word that tells them apart, and the family's stand-in.
+        return title + (parts == 1 ? person.first : parts == -1 ? person.last : person.full + Self.familySuffix(of: value))
+    }
+    /// The word after a full name that says which of a family it is (" Filho", " Jr."), as written, or nothing.
+    static func familySuffix(of value: String) -> String {
+        let tokens = value.split(separator: " ").map(String.init)
+        guard tokens.count > 2, let last = tokens.last, isSuffix(last) else { return "" }
+        return " " + last
     }
     func find(email: String) -> Persona? {
         if let associated = associatedEmails[fold(email)] { return associated }

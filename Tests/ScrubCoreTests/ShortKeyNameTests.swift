@@ -229,4 +229,26 @@ struct ShortKeyNameTests {
         let zone = try #require(scan["mrz_raw"] as? String)
         #expect(number != "LX4R8T2N6" && !zone.contains("LX4R8T2N6") && zone.hasPrefix("I<UTO" + number), "\(output)")
     }
+
+    /// "nome", "nombre" and "nom" hold a whole name when it is written as one, and the stand-in is a whole name too;
+    /// beside a key for the name's other part ("sobrenome", "apellidos", "prenom") each is still its own part.
+    @Test func aWordForNameHoldsAWholeNameUnlessItsPartIsBesideIt() throws {
+        let whole: [(document: String, file: String, name: String)] = [
+            (#"{"cliente": {"nome": "Helena Prado", "cpf": "529.982.247-25", "telefone": "+55 11 5555-0142"}}"#, "response.json", "Helena Prado"),
+            (#"{"solicitante": {"nombre": "Lucía Ferrer Gil", "fecha_nacimiento": "1984-05-09"}}"#, "response.json", "Lucía Ferrer Gil"),
+            (#"{"titulaire": {"nom": "Odile Marchand", "email": "o.marchand@example.fr"}}"#, "response.json", "Odile Marchand"),
+            ("nome,cpf\nHelena Prado,529.982.247-25\n", "clientes.csv", "Helena Prado"),
+        ]
+        for item in whole {
+            let (result, output, _) = try Self.scrub(item.document, item.file)
+            for word in item.name.split(separator: " ") { #expect(!output.contains(word), "\(word): \(output)") }
+            let finding = try #require(result.findings.first { $0.original == item.name }, "\(output)")
+            #expect(finding.standIn.split(separator: " ").count >= 2, "\(finding.entity) \(finding.standIn)")
+        }
+        let parts = [#"{"conjuge": {"nome": "Ana Lúcia", "sobrenome": "Duarte Lopes"}}"#, #"{"titular": {"nombre": "María José", "apellidos": "Ferrer Gil"}}"#]
+        for document in parts {
+            let (result, output, _) = try Self.scrub(document)
+            #expect(result.findings.contains { $0.entity == "FIRST_NAME" } && result.findings.contains { $0.entity == "LAST_NAME" }, "\(output)")
+        }
+    }
 }

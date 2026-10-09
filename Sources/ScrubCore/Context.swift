@@ -802,6 +802,18 @@ public enum KeyHints {
     private static let birthFields: [String: String] = ["date": "date_of_birth", "fulldate": "date_of_birth", "value": "date_of_birth", "datetime": "date_of_birth", "datetimevalue": "date_of_birth",
                                                         "datevalue": "date_of_birth", "year": "birth_year", "yyyy": "birth_year", "month": "birth_month", "day": "day_of_birth"]
     /// A bare "name" key, or its abbreviation "nm", which names accounts, products and plans as often as people.
+    /// "nome": "Helena Prado": a word a form uses for a given name ("nome", "nombre") or a surname ("nom") holds the
+    /// whole name when it is written as one, two words or more, unless a key beside it holds the name's other part
+    /// ("nome" beside "sobrenome", "nom" beside "prenom").
+    static func holdsWholeName(_ key: String?, value: String, siblings: [String]) -> Bool {
+        guard wholeNameWords.contains(words(key).joined()), ["FIRST_NAME", "LAST_NAME"].contains(hint(key) ?? "") else { return false }
+        let parts = value.split(separator: " ")
+        // Three words or more, or a particle, under a given name's key are read as a whole name already (see `StandIns.shapedFirst`).
+        guard hint(key) == "LAST_NAME" ? (2...6).contains(parts.count) : parts.count == 2, value.allSatisfy({ $0.isLetter || " '’-.".contains($0) }), let lead = parts.first,
+              lead.first?.isUppercase == true, !JoinedNames.particles.contains(lead.lowercased()) else { return false }
+        return !siblings.contains { $0 != key && ["FIRST_NAME", "LAST_NAME"].contains(hint($0) ?? "") }
+    }
+    private static let wholeNameWords: Set<String> = ["nome", "nombre", "nom"]
     static func isBareName(_ key: String?) -> Bool {
         let parts = words(key)
         return parts == ["name"] || parts == ["nm"]

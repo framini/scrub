@@ -238,6 +238,89 @@ enum NameShape {
         // so is a surname listed before a first name ("; Hunter, Larry").
         return !(NameLists.isFirst(parts[0].bare) && NameCues.position(span.range, in: text) || NameCues.listedLastFirst(span.range, in: text))
     }
+
+    /// The words written beside a name at `range` that are more of the same name: a capitalised word
+    /// one space or a hyphen away ("Fontes" beside "Leal", "Søren" before "Kierkegaard-Holm"), past a particle
+    /// ("de Boer"), and, in a link's or a handle's slug (`slug`), a word of small letters joined by a hyphen or an
+    /// underscore ("ingrid-fjeld"). `sure`: no word of the text's language, a part of someone `known` holds, or
+    /// a given name after a Vietnamese middle name; otherwise a listed name or a word of another language that
+    /// may be one, to ask about. The search stops at anything else, a title, a suffix or a number.
+    static func adjacentParts(_ range: Range<Int>, in text: String, known: Set<String>, slug: Bool = false, document: NLLanguage? = nil) -> [(range: Range<Int>, sure: Bool)] {
+        let ns = text as NSString
+        func isWordUnit(_ at: Int) -> Bool {
+            guard at >= 0, at < ns.length else { return false }
+            let unit = ns.character(at: at)
+            if unit == 39 || unit == 0x2019 { return true }
+            if (0xD800...0xDFFF).contains(unit) { return true }
+            return Unicode.Scalar(unit).map { CharacterSet.letters.contains($0) || CharacterSet.nonBaseCharacters.contains($0) } ?? false
+        }
+        func isDigitUnit(_ at: Int) -> Bool { at >= 0 && at < ns.length && (48...57).contains(ns.character(at: at)) }
+        let language = NameEvidence.language(around: range, in: text, document: document) ?? .english
+        let joiners: Set<UInt16> = slug ? [45, 95, 0x2010, 0x2011] : [32, 45, 0x2010, 0x2011]
+        var found: [(range: Range<Int>, sure: Bool)] = []
+        func classify(_ word: String, after previous: String?, opening: Bool) -> Bool? {
+            let lower = word.lowercased()
+            guard word.count >= 2, !People.isTitle(word), !People.isSuffix(word), !NameEvidence.titles.contains(lower) else { return nil }
+            // "I'm", "We'll", "Garcia's": a contraction or a possessive is the sentence's, no part of a name.
+            if let mark = word.firstIndex(where: { $0 == "'" || $0 == "’" }), word[word.index(after: mark)...].count <= 2 || lower == "i" { return nil }
+            if word.first?.isUppercase != true && !(slug && word.count >= 3) { return nil }
+            if known.contains(lower) { return true }
+            if Self.vietnameseMiddles.contains(lower) && word.first?.isUppercase == true || previous.map({ Self.vietnameseMiddles.contains($0.lowercased()) }) == true { return true }
+            let listed = NameLists.isFirst(lower) || NameLists.isSurname(lower)
+            if NameEvidence.isLowercaseWord(word, in: language) || NameLists.isOrdinary(lower) {
+                if opening && !listed { return nil }
+                if listed { return false }
+                return language != .english && !NameLists.isOrdinary(lower) && !NameLists.isWordlike(lower) ? false : nil
+            }
+            return opening && !listed && NameLists.isWord(word) ? nil : true
+        }
+        func opensSentence(_ start: Int) -> Bool {
+            var at = start
+            while at > 0, [32, 9].contains(ns.character(at: at - 1)) { at -= 1 }
+            return at == 0 || [46, 33, 63, 58, 10, 13, 34, 0x201C, 40, 62].contains(ns.character(at: at - 1))
+        }
+        // Forward.
+        var at = range.upperBound, previous: String? = ns.substring(with: NSRange(location: range.lowerBound, length: range.count)).split(separator: " ").last.map(String.init)
+        for _ in 0..<4 {
+            guard at < ns.length, joiners.contains(ns.character(at: at)), at + 1 < ns.length, isWordUnit(at + 1), !(at + 2 < ns.length && ns.character(at: at) == 32 && ns.character(at: at + 1) == 32) else { break }
+            var end = at + 1
+            while isWordUnit(end) { end += 1 }
+            guard !isDigitUnit(end) else { break }
+            let word = ns.substring(with: NSRange(location: at + 1, length: end - at - 1))
+            if !slug, ns.character(at: at) == 32, JoinedNames.particles.contains(word), end < ns.length, ns.character(at: end) == 32, end + 1 < ns.length,
+               ns.substring(with: NSRange(location: end + 1, length: 1)).first?.isUppercase == true {
+                at = end
+                previous = word
+                continue
+            }
+            guard let sure = classify(word, after: previous, opening: false) else { break }
+            found.append(((at + 1)..<end, sure))
+            if !sure { break }
+            at = end
+            previous = word
+        }
+        // Backward.
+        at = range.lowerBound
+        for _ in 0..<4 {
+            guard at >= 2, joiners.contains(ns.character(at: at - 1)), isWordUnit(at - 2) else { break }
+            var start = at - 1
+            while isWordUnit(start - 1) { start -= 1 }
+            guard !isDigitUnit(start - 1) else { break }
+            let word = ns.substring(with: NSRange(location: start, length: at - 1 - start))
+            if !slug, ns.character(at: at - 1) == 32, JoinedNames.particles.contains(word) {
+                at = start
+                continue
+            }
+            guard let sure = classify(word, after: nil, opening: !slug && opensSentence(start)) else { break }
+            found.append((start..<(at - 1), sure))
+            if !sure { break }
+            at = start
+        }
+        return found
+    }
+    /// The middle names Vietnamese writes between a family name and a given name ("Trịnh Văn Khoa", "Lương Thị Hạnh").
+    static let vietnameseMiddles: Set<String> = ["văn", "thị", "van", "thi"]
+
 }
 
 /// Where a word stands as a name: after a title or "named", in a greeting
