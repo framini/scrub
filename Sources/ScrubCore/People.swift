@@ -275,8 +275,8 @@ final class People {
     /// so the stand-in first name fits it.
     static func gender(_ value: String) -> String? {
         switch value.lowercased().trimmingCharacters(in: CharacterSet.letters.inverted) {
-        case "f", "female", "woman", "w", "girl", "ms", "mrs", "miss", "madam", "dame", "lady", "she", "she/her", "mother", "wife", "sister", "daughter": "female"
-        case "m", "male", "man", "boy", "mr", "sir", "he", "he/him", "father", "husband", "brother", "son": "male"
+        case "f", "female", "woman", "w", "girl", "ms", "mrs", "miss", "madam", "dame", "lady", "she", "she/her", "mother", "wife", "sister", "daughter", "doña", "dona": "female"
+        case "m", "male", "man", "boy", "mr", "sir", "he", "he/him", "father", "husband", "brother", "son", "don", "dom": "male"
         default: nil
         }
     }
@@ -579,7 +579,29 @@ final class People {
     private static func isInitials(_ word: String) -> Bool {
         word.count == 1 && word.first?.isUppercase == true || word.count >= 2 && word.allSatisfy { $0 == "." || $0 == "-" || $0.isUppercase } && word.hasSuffix(".") && word.first?.isUppercase == true
     }
-    static func isTitle(_ word: String) -> Bool { titles.contains(word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) }
+    /// A degree's or an office's word that a compound title joins to a title: "Univ.-Prof.", "Dr. rer. nat.", "Dipl.-Ing.", "Mag.a".
+    static let titleParts: Set<String> = ["univ", "prof", "dr", "dipl", "ing", "mag", "med", "dent", "vet", "oec", "jur", "phil", "rer", "nat", "pol", "habil",
+                                          "techn", "mont", "kfm", "kff", "theol", "math", "phys", "psych", "chem", "biol", "inf", "soz", "päd", "wirt", "agr", "forest",
+                                          "h", "c", "a", "in", "hon", "em", "apl", "pd", "ao", "o", "mult", "sc", "ma", "ba", "msc", "bsc", "dent", "sen", "jun"]
+    static func isTitle(_ word: String) -> Bool {
+        let bare = word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        if titles.contains(bare) { return true }
+        // A title joined of several by a full stop or a hyphen is one title, never a name.
+        let pieces = bare.split { $0 == "." || $0 == "-" }.map(String.init)
+        return pieces.count >= 2 && pieces.allSatisfy { titles.contains($0) || titleParts.contains($0) } && pieces.contains { titles.contains($0) && $0.count >= 2 }
+    }
+    /// Spanish's and Portuguese's "Don", "Doña", "Dom", "Dona": with a capital before a given name, a form of
+    /// address and no part of the name. "Don" and "Dona" are given names too, so before a word no list knows
+    /// as a given name ("Don Okafor") they are the name.
+    static func leadingTitle(_ tokens: [String]) -> Bool {
+        guard tokens.count >= 2, let first = tokens.first, first.first?.isUppercase == true else { return false }
+        if isTitle(first) { return true }
+        switch first.lowercased() {
+        case "doña": return true
+        case "don", "dona", "dom": return NameLists.isFirst(tokens[1])
+        default: return false
+        }
+    }
     func registerFull(_ value: String, emailSafe: Bool = false, gender: String? = nil) -> (Persona, Int) {
         if let names = Self.jointNames(value) { return (names.map { registerFull($0.name, emailSafe: emailSafe).0 }[0], 2) }
         if Self.naturalOrder(value) == nil, let (surname, given) = Self.surnameFirst(value) {
@@ -591,13 +613,18 @@ final class People {
         if tokens.count > 2, let last = tokens.last, Self.isSuffix(last) { tokens.removeLast() }
         var gender = gender
         var titled = false
-        while let first = tokens.first, Self.titles.contains(first.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) {
+        var given = false
+        while let first = tokens.first, Self.isTitle(first) || Self.leadingTitle(tokens) {
             gender = gender ?? Self.gender(first)
+            given = !Self.isTitle(first)
             tokens.removeFirst()
             titled = true
         }
-        // "Ms. Okafor": a title comes before a surname.
-        if titled, tokens.count == 1 { return (register(nil, tokens[0], emailSafe: emailSafe, gender: gender), -1) }
+        // "Ms. Okafor": a title comes before a surname; "Doña Carmen" before a given name.
+        if titled, tokens.count == 1 {
+            if given { return (register(tokens[0], nil, emailSafe: emailSafe, gender: gender), 1) }
+            return (register(nil, tokens[0], emailSafe: emailSafe, gender: gender), -1)
+        }
         if !titled, let found = surname(tokens) { return (found, -1) }
         if tokens.count >= 2 {
             let person = register(tokens.first, tokens.last, emailSafe: emailSafe, middle: tokens.count > 2 ? tokens.dropFirst().dropLast().joined(separator: " ") : nil, gender: gender)
@@ -667,7 +694,8 @@ final class People {
         let (person, parts) = registerFull(value)
         lastNamed = person
         // "Ms. Siobhan Okafor" keeps its title, which the stand-in name fits.
-        let title = value.split(separator: " ").first.map(String.init).flatMap { Self.titles.contains($0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))) ? $0 + " " : nil } ?? ""
+        let words = value.split(separator: " ").map(String.init)
+        let title = words.first.flatMap { Self.isTitle($0) || Self.leadingTitle(words) ? $0 + " " : nil } ?? ""
         if parts == 3 || parts == 2 && Self.naturalOrder(value) != nil {
             let halves = value.split(separator: ",", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
             let (surname, suffix) = Self.suffixed(halves[0])
@@ -677,7 +705,7 @@ final class People {
             return last + (suffix.map { " " + $0 } ?? "") + ", " + first
         }
         // "Ms E. Okafor" and "Mrs H.S. Lind" keep their initials, and a surname in capitals its capitals.
-        let named = value.split(separator: " ").map(String.init).drop { Self.isTitle($0) }
+        let named = words.dropFirst(title.isEmpty ? 0 : 1).drop { Self.isTitle($0) }
         if parts == 2, named.count >= 2, named.dropLast().allSatisfy(Self.isInitials) {
             // Read off the stand-in, so the same person keeps the same initials everywhere.
             var seed = person.full.unicodeScalars.reduce(UInt32(5381)) { ($0 &* 33) &+ $1.value }

@@ -24,6 +24,19 @@ enum ProseLabels {
         + "\(month)[ \\t]+\(day),?[ \\t]+\(year)|\(day)[ \\t]+\(month),?[ \\t]+\(year)|\(month)[ \\t]+\(year)|\(month)[ \\t]+\(day)\\b|\(day)[ \\t]+\(month)"
         + #"|\d{1,2}[/.\-]\d{1,2}[/.\-](?:\d{4}|\d{2})|\d{4}-\d{1,2}-\d{1,2})(?![\w/.\-]*\d)"#,
         options: [.caseInsensitive])
+    /// A date written with its month's name in any language Scrub reads, its day in digits or in words and a weekday
+    /// before it or not ("el jueves doce de agosto de 1971", "12 sierpnia 1971 r."), or year first as Hungarian writes it
+    /// ("1975. március 21-én", "1975. március huszonegyedikén").
+    private static let anyMonth = "(?:" + WrittenDates.months.keys.sorted { $0.count > $1.count }.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|") + ")\\.?"
+    private static let anyWeekday = "(?:" + WrittenDates.weekdays.sorted { $0.count > $1.count }.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|") + ")"
+    private static let dayFirstDate = "(?:" + anyWeekday + ",?[ \\t]+)?(?:(?:el|the|le|der|den|il|o)[ \\t]+)?(?:[0-3]?\\d\\.?|\\p{L}{3,}(?:-\\p{L}+)?)[ \\t]+(?:(?:de|of)[ \\t]+)?" + anyMonth + ",?[ \\t]+(?:(?:de|del|of)[ \\t]+)?" + year + "(?:[ \\t]*r\\.)?"
+    private static let yearFirstDate = year + "\\.?[ \\t]+" + anyMonth + "[ \\t]+(?:[0-3]?\\d\\.?(?:-?\\p{L}{1,4})?|\\p{L}{3,})"
+    /// A birth cue in the languages of central and southeastern Europe and Finland, or any other Scrub reads, then a date written out.
+    private static let writtenBirth = TextPattern(
+        #"(?<![\p{L}\p{N}])(születtem|született|szül\.|urodził[aoy]?(?:[ \t]+się)?|ur\.|narodil[aoy]?(?:[ \t]+(?:se|sa))?|nar\.|n[ăa]scut[ăa]?|γεννήθηκε|syntynyt|syntyi|rođen[aio]?|roden[aio]?|rojen[aio]?|born|geboren|nacid[oa]|nat[oa]|n[ée]e?|nascid[oa]|f[öø]dd|f[öø]dt)(?:[ \t]+(?:on|am|el|le|pe|la|dne|w|v|στις|den|il|em|a|in))?[ \t]+("#
+        + dayFirstDate + "|" + yearFirstDate + ")(?![\\p{L}\\p{N}])", options: [.caseInsensitive])
+    /// Hungarian writes the cue after the date: "1975. március huszonegyedikén született".
+    private static let birthAfter = TextPattern("(?<![\\p{L}\\p{N}])(" + yearFirstDate + "|" + dayFirstDate + ")[ \\t]+(született|születtem|szül\\.)(?![\\p{L}])", options: [.caseInsensitive])
     private static let idLabel = TextPattern(
         #"\b(passport(?:[ \t]+(?:number|no\.?|#))?|national[ \t]+insurance[ \t]+number|ni[ \t]+number|nino|national[ \t]+id(?:[ \t]+number)?|id[ \t]+number|identity[ \t]+number|id[ \t]+card[ \t]+number|dni|nie|cpf|curp|sin|ssn|social[ \t]+(?:insurance|security)[ \t]+number|(?:employee|staff)[ \t]+(?:id|number|no\.?)|badge[ \t]+(?:number|#)|mrn|medical[ \t]+record[ \t]+number|patient[ \t]+(?:id|number)|nhs[ \t]+number|health[ \t]+card[ \t]+number|member(?:ship)?[ \t]+(?:number|id|no\.?)|tax[ \t]+(?:id|number)|tin|ein|student[ \t]+(?:number|id)|policy[ \t]+(?:number|no\.?)|(?:driver'?s|drivers|driving)[ \t]+licen[cs]e(?:[ \t]+(?:number|no\.?))?|licen[cs]e[ \t]+number|account[ \t]+number|customer[ \t]+(?:number|id))\b(?:[ \t]*[:#=]|[ \t]+(?:is|was))?[ \t]*"#,
         options: [.caseInsensitive])
@@ -76,6 +89,13 @@ enum ProseLabels {
             if isCancelled() { return found }
             found.labels.append(range(match.range(at: 1)))
             found.spans.append(Span(range: range(match.range(at: 2)), entity: "DATE_OF_BIRTH", score: 0.9))
+        }
+        let written = TextRanges.matches(writtenBirth, in: text, isCancelled: isCancelled).map { ($0.range(at: 1), $0.range(at: 2)) }
+            + TextRanges.matches(birthAfter, in: text, isCancelled: isCancelled).map { ($0.range(at: 2), $0.range(at: 1)) }
+        for (cue, date) in written where !found.spans.contains(where: { $0.range.overlaps(range(date)) }) {
+            if isCancelled() { return found }
+            found.labels.append(range(cue))
+            found.spans.append(Span(range: range(date), entity: "DATE_OF_BIRTH", score: 0.9))
         }
         for match in TextRanges.matches(idLabel, in: text, isCancelled: isCancelled) {
             if isCancelled() { return found }

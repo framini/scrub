@@ -687,4 +687,20 @@ struct NonPersonalKeptTests {
             }
         }
     }
+
+    /// A company's name ending in its form ("Co., Ltd.", "Sdn Bhd", "Pte Ltd", "K.K.", "GK") is no one's, and
+    /// nothing in it is replaced or asked about.
+    @Test func aCompanysFormKeepsItsName() throws {
+        let note = """
+        Payment received from Hangzhou Lianxin Co., Ltd. for invoice 2207.
+        Supplier Penang Rimba Sdn Bhd signed the order; Tan Brothers Pte Ltd and Kumar Textiles Pvt Ltd countersigned.
+        Invoice to Yamato Shoji K.K. and Mori Holdings GK.
+        """
+        for seed: UInt64 in 1...3 {
+            let result = try Scrubber.scrub(Data(note.utf8), name: "Pasted text", forceFullDetection: false, seed: seed)
+            #expect(String(decoding: result.output, as: UTF8.self) == note, "seed \(seed)")
+            #expect(result.findings.isEmpty, "seed \(seed): \(result.findings.map(\.original))")
+        }
+    }
 }
+

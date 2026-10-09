@@ -22,7 +22,7 @@ enum CapitalNames {
         "note", "notes", "urgent", "important", "todo", "fixme", "warning", "error", "info", "debug", "null", "none", "nil", "true", "false", "yes", "no", "not",
         "all", "team", "everyone", "everybody", "folks", "guys", "there", "world", "both", "again", "now", "today", "tomorrow", "tonight", "please", "pls",
         "thanks", "thank", "you", "must", "never", "always", "only", "very", "really", "also", "still", "just", "done", "new", "free", "sale", "stop", "help",
-        "attention", "reminder", "update", "action", "required", "confidential", "draft", "final", "subject", "agenda", "summary", "inc", "ltd", "llc", "plc", "corp", "co",
+        "attention", "reminder", "update", "action", "required", "confidential", "draft", "final", "subject", "agenda", "summary", "inc", "ltd", "llc", "plc", "corp", "co", "gk", "kk", "pte", "pvt", "sdn", "bhd",
     ]
 
     /// Whether a word in capitals may be a name: two letters or more, all

@@ -144,6 +144,12 @@ enum NameTagger {
                     let known = Names.firstFolded.contains(value.lowercased()) || Names.lastFolded.contains(value.lowercased())
                     let cue = cued(mapped, in: original)
                     if (!known && !cue) || (Names.ambiguousFirst.contains(value.lowercased()) && !cue) || (value == value.uppercased() && value.count >= 2 && !known) { return true }
+                } else {
+                    // "Possible SYN flooding": a word and an acronym, neither a name anyone is known by, are no person.
+                    let words = tokens.map { (value as NSString).substring(with: $0.range) }
+                    func known(_ word: String) -> Bool { Names.firstFolded.contains(word.lowercased()) || Names.lastFolded.contains(word.lowercased()) }
+                    if !words.contains(where: known), words.contains(where: { $0.count >= 2 && $0 == $0.uppercased() }),
+                       words.contains(where: { $0 != $0.uppercased() && NameLists.isOrdinary($0.lowercased()) }) { return true }
                 }
             }
             if variant {

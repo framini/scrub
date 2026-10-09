@@ -163,7 +163,8 @@ final class AddressModel: Sendable {
             guard probabilities.count == tokens.count else { return ([], []) }
             for range in Self.decode(tokens, probabilities, numberless: numberless).compactMap({ Self.refined($0, tokens) }) {
                 let value = TextRanges.substring(part, range)
-                guard !Self.misread(value), Self.accepts(value) || Self.cued(value, before: (part as NSString).substring(to: range.lowerBound)) else { continue }
+                let before = (part as NSString).substring(to: range.lowerBound)
+                guard !Self.misread(value), !Self.machineNumbers(value, before: before), Self.accepts(value) || Self.cued(value, before: before) else { continue }
                 spans.append(Span(range: (range.lowerBound + window.lowerBound)..<(range.upperBound + window.lowerBound), entity: "ADDRESS", score: Self.score))
             }
             guard numberless else { continue }
@@ -486,7 +487,26 @@ final class AddressModel: Sendable {
     static func misread(_ value: String) -> Bool {
         let dates = TextRanges.matches(writtenDate, in: value)
         if !dates.isEmpty, !dates.reversed().reduce(value, { rest, match in (rest as NSString).replacingCharacters(in: match.range, with: " ") }).contains(where: \.isNumber) { return true }
+        // "sierpnia 1971 r.": a month's name in any language Scrub reads, and a year with at most a day, is a date too.
+        if WrittenDates.yearAlone(value), value.split(whereSeparator: { !$0.isLetter }).contains(where: { WrittenDates.months[$0.lowercased()] != nil }) { return true }
         return value.filter { $0 == "(" }.count != value.filter { $0 == ")" }.count || value.filter { $0 == "[" }.count != value.filter { $0 == "]" }.count
+    }
+    /// A port, a timeout or a limit named before a number, or a unit of time or size after it, in the languages
+    /// Scrub reads: "na porcie 5432", "limit czasu 30000 ms", "timeout po 5000 ms", "on port 8443". A machine's number, never a house's.
+    static let machineBefore = #"(?i)(?<![\p{L}\p{N}])(?:ports?|porcie|portu|portem|poort|portti|portissa|portul|timeout|time-out|timed out|ttl|limit|limitu|limite|límite|limiet|zeitlimit|czasu|délai|tempo limite|tiempo de espera)[ \t]*[:=#]?[ \t]*(?:(?:po|of|after|nach|von|de|di|na|en|w|z|=)[ \t]+)?$"#
+    private static let machineNumber = TextPattern(#"(?i)(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?(?:[ \t]*(?:ms|msec|millis\p{L}*|s|sec|secs|seconds?|sek|sekund\p{L}*|segund\p{L}*|secondes?|minut\p{L}*|min|kb|mb|gb|tb|kib|mib|gib|bytes?|bajt\p{L}*|hz|khz|mhz|ghz|rpm|rps|qps)(?![\p{L}\p{N}/])|[ \t]*%)"#)
+    private static let number = TextPattern(#"\d+(?:[.,]\d+)?"#)
+    /// Whether every number of a span is a machine's, by the words before it or the unit after it.
+    static func machineNumbers(_ value: String, before: String) -> Bool {
+        guard value.contains(where: \.isNumber) else { return false }
+        let ns = value as NSString
+        var rest = value as NSString
+        for match in TextRanges.matches(machineNumber, in: value).reversed() { rest = rest.replacingCharacters(in: match.range, with: String(repeating: " ", count: match.range.length)) as NSString }
+        let numbers = TextRanges.matches(number, in: rest as String)
+        return numbers.allSatisfy { match in
+            let lead = String((before + ns.substring(to: match.range.location)).suffix(32))
+            return lead.range(of: machineBefore, options: .regularExpression) != nil
+        }
     }
     private static let lowercasePostcode = TextPattern(AddressBlock.postcode.regex?.pattern ?? "$^", options: .caseInsensitive)
     private static let numberedUnit = TextPattern(#"(?i)(?<![\p{L}])(?:flat|apt|apartment|unit|suite|ste|room|floor|level|appt|piso|wohnung|top|p\.?\s?o\.?\s?box|box|postfach|postbus|apartado)\.?\s*#?\s*\d"#)

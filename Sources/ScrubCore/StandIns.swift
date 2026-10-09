@@ -1968,7 +1968,17 @@ final class StandIns {
         if let named, numbers.count == 1 {
             var output = runs
             let only = numbers[0]
-            if runs[only].count == 4, let real = Int(runs[only]) { output[only] = String(self.year(for: real)) }
+            if runs[only].count == 4, let real = Int(runs[only]) {
+                let stand = self.year(for: real)
+                output[only] = String(stand)
+                // "el jueves doce de agosto de 1971", "1975. március huszonegyedikén": a day and a weekday spelled out take the stand-in's.
+                for index in runs.indices where index != named && runs[index].first?.isLetter == true {
+                    if let made = WrittenDates.spelledDay(runs[index], as: day) { output[index] = made }
+                }
+                for index in runs.indices where index != named && runs[index].first?.isLetter == true {
+                    if let made = WrittenDates.weekday(runs[index], of: (stand, month, day)) { output[index] = made }
+                }
+            }
             else { output[only] = padded(day, like: runs[only]) }
             output[named] = monthWord(like: runs[named])
             return output.joined()
@@ -1987,6 +1997,10 @@ final class StandIns {
         if let named {
             output[named] = monthWord(like: runs[named])
             output[rest[0]] = padded(day, like: runs[rest[0]])
+            // "Donnerstag, 12. August 1971": a weekday written with it is the stand-in's.
+            for index in runs.indices where index != named && runs[index].first?.isLetter == true {
+                if let made = WrittenDates.weekday(runs[index], of: (year, month, day)) { output[index] = made }
+            }
             // "March 7th": the day's ordinal ending follows the stand-in day.
             if rest[0] + 1 < runs.count, ["st", "nd", "rd", "th"].contains(runs[rest[0] + 1].lowercased()) {
                 let ending = (11...13).contains(day % 100) ? "th" : [1: "st", 2: "nd", 3: "rd"][day % 10] ?? "th"

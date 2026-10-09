@@ -2186,6 +2186,31 @@ enum Recognizers {
             let d = [Int.random(in: 1...9, using: &rng)] + randomDigits(6, &rng)
             return (like.first == "H" ? ["H", "U"] : []) + characters(d + [(10 - eastWeighted(d, [9, 7, 3, 1, 9, 7, 3]) % 10) % 10])
         }),
+        Recognizer("HU_ADOAZONOSITO", keys: ["adoazonositojel", "adoazonosito", "adoazonositoszam", "adoazonositojelszam", "adoszam"], forms: [
+            .init(#"\b8\d{9}\b"#, 0.1),
+        ], context: ["adóazonosító jel", "adoazonosito jel", "adóazonosító", "adoazonosito", "adóazonosító szám", "adószám"], separators: " -", check: { characters in
+            // Hungary's personal tax number: an 8, the days from 1867 to the birth date, a serial, then digits weighted by place, mod 11.
+            guard let d = numbers(characters), d.count == 10, d[0] == 8 else { return false }
+            let check = zip(d.prefix(9), 1...9).reduce(0) { $0 + $1.0 * $1.1 } % 11
+            return check < 10 && check == d[9]
+        }, draw: { _, rng in
+            while true {
+                let days = Int.random(in: 20_000...50_000, using: &rng)
+                let body = [8] + [days / 10_000 % 10, days / 1000 % 10, days / 100 % 10, days / 10 % 10, days % 10] + randomDigits(3, &rng)
+                let check = zip(body, 1...9).reduce(0) { $0 + $1.0 * $1.1 } % 11
+                if check < 10 { return characters(body + [check]) }
+            }
+        }),
+        Recognizer("HU_TAJ", keys: ["taj", "tajszam", "tajszama", "tajkartyaszam", "tarsadalombiztositasiazonosito", "tarsadalombiztositasiazonositojel"], forms: [
+            .init(#"\b\d{3}[ -]?\d{3}[ -]?\d{3}\b"#, 0.05),
+        ], context: ["taj", "taj szám", "taj szam", "tajszám", "társadalombiztosítási azonosító jel", "tarsadalombiztositasi azonosito jel"], weak: true, separators: " -", check: { characters in
+            // Hungary's social insurance number: eight digits weighted 3 and 7 in turn, mod 10.
+            guard let d = numbers(characters), d.count == 9 else { return false }
+            return zip(d.prefix(8), [3, 7, 3, 7, 3, 7, 3, 7]).reduce(0) { $0 + $1.0 * $1.1 } % 10 == d[8]
+        }, draw: { _, rng in
+            let body = [Int.random(in: 0...9, using: &rng)] + randomDigits(7, &rng)
+            return characters(body + [zip(body, [3, 7, 3, 7, 3, 7, 3, 7]).reduce(0) { $0 + $1.0 * $1.1 } % 10])
+        }),
         Recognizer("LT_PVM", keys: ["pvm", "pvmkodas", "pvmmoketojokodas"], forms: [
             .init(#"\bLT ?(?:\d{7}1\d|\d{10}1\d)\b"#, 0.3),
             .init(#"\b\d{7}1\d\b"#, 0.05),

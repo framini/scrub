@@ -107,7 +107,7 @@ enum NameEvidence {
     private static let closings = TextPattern(#"(?i)(?:regards|thanks|thank you|cheers|best|sincerely|grüßen|grüße|gruß|groet|groeten|saludos?|saludo cordial|atentamente|atenciosamente|cumprimentos|abraços|saluti|cordialement|distinguées|distingués|poważaniem|pozdrawiam|pozdrowienia|hälsningar|hälsning|saygılarımla|selamlar|trân trọng)[ \t]*[,.!]*[ \t]*$"#)
     private static let particles: Set<String> = ["de", "da", "das", "do", "dos", "del", "della", "di", "du", "des", "la", "le", "van", "von", "der", "den", "ten", "ter", "zu", "y", "e", "bin", "al", "el"]
 
-    private static let titleBefore = TextPattern("(?i)(?<![\\p{L}\\p{N}])(?:" + titles.sorted { $0.count > $1.count }.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|") + ")\\.?[ \\t]+$")
+    private static let titleBefore = TextPattern("(?i)(?<![\\p{L}\\p{N}])(?:" + titles.sorted { $0.count > $1.count }.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|") + ")(?:\\.-?(?:" + People.titleParts.sorted { $0.count > $1.count }.joined(separator: "|") + "))*\\.?[ \\t]+$")
     /// A title or form of address right before the name, or a Turkish one right after it.
     /// Whether a form of address could open a name in `text`: a cheap check before reading them.
     static func mayHoldTitle(_ text: String) -> Bool {
@@ -178,15 +178,15 @@ enum NameEvidence {
 
     // MARK: Lines and spans that hold no one
 
-    private static let technical = TextPattern(#"(?im)^[ \t]*(?:[*<>$][ \t]|\[?\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}|\[?\d{2}:\d{2}:\d{2}[\] ]|\[?(?:INFO|WARN|WARNING|ERROR|DEBUG|TRACE|FATAL|NOTICE)\b)|\bHTTP/\d|\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /|\b(?:TLS|SSL)v?\d?\b"#)
-    /// A log's or a tool's line: a timestamp or level opening it, a command's or a transfer's marks, an HTTP request.
+    private static let technical = TextPattern(#"(?im)^[ \t]*(?:[*<>$][ \t]|\[?\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}|\[?\d{2}:\d{2}:\d{2}[\] ]|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[ \t]+\d{1,2}[ \t]+\d{2}:\d{2}:\d{2}[ \t]|\[?(?:INFO|WARN|WARNING|ERROR|DEBUG|TRACE|FATAL|NOTICE)\b)|\bHTTP/\d|\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /|\b(?:TLS|SSL)v?\d?\b"#)
+    /// A log's or a tool's line: a timestamp (a system log's "Oct  9 03:12:44" too) or level opening it, a command's or a transfer's marks, an HTTP request.
     static func technicalLine(_ range: Range<Int>, in text: String) -> Bool {
         let ns = text as NSString
         let line = ns.substring(with: ns.lineRange(for: NSRange(location: range.lowerBound, length: 0)))
         return !TextRanges.matches(technical, in: line).isEmpty
     }
-    /// The forms a company's name ends with: "Lda.", "S.A.", "GmbH", "B.V.", "S.r.l.", "Ltd", "A.Ş.", "d.o.o.", "Sp. z o.o.", "ООО".
-    static let companyForm = #"(?:S\.?A\.?\s?de\s?C\.?V|GmbH\s?&\s?Co\.?\s?KG|\(Pty\)\s?Ltd|Pte\.?\s?Ltd|Lda|Ltda|S\.?A\.?S?|S\.?L\.?U?|S\.?r\.?l|S\.?p\.?A|S\.?A\.?R\.?L|SARL|GmbH|AG|KG|OHG|e\.?V|B\.?V|N\.?V|V\.?O\.?F|Ltd|Limited|LLC|LLP|L\.?P|Inc|Corp|Co|PLC|AB|ASA|AS|A/S|ApS|Oy|Oyj|A\.?Ş|Ltd\.?\s?Şti|[sS]p\.?\s?z\s?o\.?\s?o|[dD]\.?\s?o\.?\s?o|[sS]\.?\s?r\.?\s?o|S\.?C|SpA|Srl|SAS|SE|S\.?C\.?A|Unipessoal|EIRELI|ME|EPP|Pty|BVBA|SRL|OÜ|SIA|UAB|Kft|Zrt|Nyrt|Bt|Α\.?Ε|Ε\.?Π\.?Ε|ΙΚΕ|ЕООД|ООД|ЕАД|ООО|ОАО|ЗАО|ТОВ|ПАО)\.?"#
+    /// The forms a company's name ends with: "Lda.", "S.A.", "GmbH", "B.V.", "S.r.l.", "Ltd", "Co., Ltd.", "Sdn Bhd", "K.K.", "A.Ş.", "d.o.o.", "Sp. z o.o.", "ООО".
+    static let companyForm = #"(?:S\.?A\.?\s?de\s?C\.?V|GmbH\s?&\s?Co\.?\s?KG|\(Pty\)\s?Ltd|Co\.?,?\s?Ltd|Pte\.?\s?Ltd|Pvt\.?\s?Ltd|Sdn\.?\s?Bhd|Bhd|Berhad|K\.K|G\.?K|Lda|Ltda|S\.?A\.?S?|S\.?L\.?U?|S\.?r\.?l|S\.?p\.?A|S\.?A\.?R\.?L|SARL|GmbH|AG|KG|OHG|e\.?V|B\.?V|N\.?V|V\.?O\.?F|Ltd|Limited|LLC|LLP|L\.?P|Inc|Corp|Co|PLC|AB|ASA|AS|A/S|ApS|Oy|Oyj|A\.?Ş|Ltd\.?\s?Şti|[sS]p\.?\s?z\s?o\.?\s?o|[dD]\.?\s?o\.?\s?o|[sS]\.?\s?r\.?\s?o|S\.?C|SpA|Srl|SAS|SE|S\.?C\.?A|Unipessoal|EIRELI|ME|EPP|Pty|BVBA|SRL|OÜ|SIA|UAB|Kft|Zrt|Nyrt|Bt|Α\.?Ε|Ε\.?Π\.?Ε|ΙΚΕ|ЕООД|ООД|ЕАД|ООО|ОАО|ЗАО|ТОВ|ПАО)\.?"#
     private static let formAround = TextPattern(#"(?:^|[ \t,])"# + companyForm + #"(?![\p{L}\p{N}])"#)
     private static let formOnly = TextPattern(#"^"# + companyForm + #"$"#)
     private static let formAfter = TextPattern(#"^,?[ \t]+"# + companyForm + #"(?![\p{L}\p{N}])"#)
@@ -291,9 +291,26 @@ enum NameEvidence {
         let words = NameShape.words(span.range, in: text)
         // A title that is also a name's part or a word ("Anh", "Don", "Pan", "Me") counts only with its full stop.
         guard words.count >= 3, let index = words.indices.dropLast().last(where: { index in
-            index > 0 && titles.contains(words[index].bare) && (words[index].text.hasSuffix(".") || !namePartTitles.contains(words[index].bare))
+            index > 0 && titles.contains(words[index].bare) && (words[index].text.hasSuffix(".") || !namePartTitles.contains(words[index].bare)
+                || People.leadingTitle(words[index...].map(\.text)))
         }) else { return span }
         return Span(range: words[index + 1].range.lowerBound..<span.range.upperBound, entity: span.entity, score: span.score, url: span.url)
+    }
+    private static let joinedTitle = TextPattern(#"(?<![\p{L}\p{N}.-])\p{L}{1,6}\.(?:-?\p{L}{1,6}\.?)+(?![\p{L}\p{N}])"#)
+    /// "Univ.-Prof.", "Dipl.-Ing.", "Dr.-Ing.", "Mag.a": a title joined of several is one title, and no piece of it is anyone's
+    /// name. A name a reader ran into one starts after it; one inside it is dropped.
+    static func withoutJoinedTitles(_ spans: [Span], in text: String) -> [Span] {
+        // "Estimada Doña Carmen Ruiz": a name a reader ran back over a title starts after it, however sure the reader.
+        let spans = spans.map { names.contains($0.entity) ? afterTitle($0, in: text) : $0 }
+        guard text.contains(".") else { return spans }
+        let titles = TextRanges.matches(joinedTitle, in: text).filter { People.isTitle((text as NSString).substring(with: $0.range)) }
+            .map { $0.range.location..<NSMaxRange($0.range) }
+        guard !titles.isEmpty else { return spans }
+        return spans.compactMap { span in
+            guard names.contains(span.entity), let title = titles.last(where: { $0.overlaps(span.range) }) else { return span }
+            guard let next = NameShape.words(span.range, in: text).first(where: { $0.range.lowerBound >= title.upperBound }) else { return nil }
+            return Span(range: next.range.lowerBound..<span.range.upperBound, entity: span.entity, score: span.score, url: span.url)
+        }
     }
     /// Places only guessed, in the same text, kept only as a place Scrub knows, beside a postcode or an address, or under a place's key
     /// ("Wohnort"); one made of the language's own words ("Kopie Ihres", "Strom") is asked about and left as written.
@@ -337,7 +354,8 @@ enum NameEvidence {
                 doubt(span)
             }
         }
-        doubted.removeAll { smallWords($0, in: text, document: document) }
+        // A company's name, its form and all ("Penang Rimba Sdn Bhd"), is no one to ask about either.
+        doubted.removeAll { smallWords($0, in: text, document: document) || company($0, in: text) }
         doubted.sort { $0.range.lowerBound < $1.range.lowerBound }
         return (kept, doubted)
     }
@@ -346,7 +364,7 @@ enum NameEvidence {
 /// Dates written out in words, in the languages Scrub reads: "3 de marzo de 1975", "3. März 1975",
 /// "3 mars 1975", "12 maja 1966 r.". One unit: never a house number, a postcode and a street.
 enum WrittenDates {
-    private static let locales = ["en_US_POSIX", "de", "es", "pt", "fr", "it", "nl", "pl", "sv", "tr", "da", "nb", "fi", "cs", "ro", "hu", "id", "vi"]
+    private static let locales = ["en_US_POSIX", "de", "es", "pt", "fr", "it", "nl", "pl", "sv", "tr", "da", "nb", "fi", "cs", "ro", "hu", "id", "vi", "sk", "hr", "sl", "el"]
     /// Each month's names, in full and short, as a date writes them and as they stand alone, lowercased: month number by name.
     static let months: [String: Int] = {
         var found: [String: Int] = [:]
@@ -378,6 +396,54 @@ enum WrittenDates {
             return nil
         }
     }
+    private static let ordinals = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "eleventh", "twelfth", "thirteenth",
+                                   "fourteenth", "fifteenth", "sixteenth", "seventeenth", "eighteenth", "nineteenth", "twentieth", "twenty-first", "twenty-second",
+                                   "twenty-third", "twenty-fourth", "twenty-fifth", "twenty-sixth", "twenty-seventh", "twenty-eighth", "twenty-ninth", "thirtieth", "thirty-first"]
+    /// Each locale's days of a month spelled out, 1 to 31, lowercased.
+    private static let spelled: [(identifier: String, days: [String])] = locales.map { identifier in
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: identifier == "en_US_POSIX" ? "en" : identifier)
+        formatter.numberStyle = .spellOut
+        return (identifier, (1...31).map { formatter.string(from: NSNumber(value: $0))?.lowercased().replacingOccurrences(of: "\u{AD}", with: "") ?? "" })
+    }
+    /// A day of the month spelled out in a date ("doce", "twelfth", "huszonegyedikén"): the day, and its stand-in
+    /// `day` written the same way where Scrub can write it so, else in digits. Nil for a word that is no day.
+    static func spelledDay(_ word: String, as day: Int) -> String? {
+        let lower = word.lowercased()
+        guard lower.count >= 3, (1...31).contains(day) else { return nil }
+        func cased(_ made: String) -> String { word.first?.isUppercase == true ? made.prefix(1).uppercased() + made.dropFirst() : made }
+        if ordinals.contains(lower) { return cased(ordinals[day - 1]) }
+        for (identifier, days) in spelled where days.contains(lower) { return cased(days[day - 1]) }
+        // An ordinal or a case ending on the day's stem ("huszonegyedikén", "dvanáctého"): its digits, as that language writes them.
+        for (identifier, days) in spelled where identifier != "en_US_POSIX" {
+            if days.contains(where: { $0.count >= 3 && lower.hasPrefix($0) && lower.count - $0.count <= 7 }) || days.contains(where: { $0.count >= 5 && lower.hasPrefix($0.dropLast(1)) && lower.count - $0.count <= 7 }) {
+                return String(day) + (["hu", "de", "cs", "sk", "fi", "hr", "sl", "da", "nb", "pl"].contains(identifier) ? "." : "")
+            }
+        }
+        return nil
+    }
+    /// A weekday's name in a date ("jueves", "Thursday"), written again as `date`'s weekday in its language and case.
+    static func weekday(_ word: String, of date: (year: Int, month: Int, day: Int)) -> String? {
+        let lower = word.lowercased()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        guard let made = calendar.date(from: DateComponents(year: date.year, month: date.month, day: date.day)) else { return nil }
+        let index = calendar.component(.weekday, from: made) - 1
+        for identifier in locales {
+            let formatter = formatters[identifier]!
+            for symbols in [formatter.weekdaySymbols, formatter.standaloneWeekdaySymbols] where symbols?.contains(where: { $0.lowercased() == lower }) == true {
+                let name = symbols![index]
+                if word == word.uppercased() { return name.uppercased() }
+                return word.first?.isUppercase == true ? name.prefix(1).uppercased() + name.dropFirst() : name.lowercased()
+            }
+        }
+        return nil
+    }
+    /// Every weekday's name the locales write, lowercased.
+    static let weekdays: Set<String> = Set(locales.flatMap { identifier in
+        let formatter = formatters[identifier]!
+        return ((formatter.weekdaySymbols ?? []) + (formatter.standaloneWeekdaySymbols ?? [])).map { $0.lowercased() }
+    })
     /// How many of the languages that write `word` write month `month` as its stand-in name does.
     static func readers(_ month: Int, like word: String) -> Int {
         let found = locales(of: word)

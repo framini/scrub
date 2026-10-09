@@ -58,6 +58,19 @@ public enum KeyHints {
         ("hoten naam adsoyad adisoyadi isimsoyisim nama namalengkap imienazwisko volledigenaam nomcomplet", "PERSON"),
         ("diachi adres adresse direccion domicilio indirizzo residenza endereco morada anschrift wohnadresse adresa alamat ikametadresi", "ADDRESS"),
         ("straat strasse calle ulica", "ADDRESS"),
+        // Central and southeastern Europe's and Finland's forms: Hungarian, Czech, Slovak, Romanian, Greek written in Latin letters, Finnish, Croatian and Slovenian.
+        ("utonev utonevek keresztnev keresztnevek jmeno krestnijmeno krstnemeno meno ime krsnoime osebnoime onoma", "FIRST_NAME"),
+        ("vezeteknev csaladnev csaladinev prijmeni rodneprijmeni priezvisko rodnepriezvisko prezime djevojackoprezime priimek dekliskipriimek numedefamilie eponymo eponimo epitheto epwnymo", "LAST_NAME"),
+        ("nev teljesnev szuletesinev leanykorinev anyjaneve anyjaszuletesineve anyjanev anyaneve celejmeno celemeno jmenoaprijmeni menoapriezvisko jmenomatky menomatky rodnejmenomatky numecomplet numesiprenume numeleprenumele numemama prenumemama numelemamei punoime imeiprezime imemajke imeoca polnoime imeinpriimek imematere onomateponymo onomamitros onomapatros kokonimi aidinnimi aidinnimet", "PERSON"),
+        ("szuletesiido szulido szuldatum szuletesnap datumnar datanastere datanasteriimate imerominiagennisis imerominiagennhshs syntymapaiva szuletett", "DATE_OF_BIRTH"),
+        ("szuletesihely szulhely szuletesiorszag mistonarozeni miestonarodenia loculnasterii locnastere locnasterii mjestorodenja mjestorodjenja krajrojstva toposgennisis topogennisis syntymapaikka syntymakotipaikka", "LOCATION"),
+        ("varos telepules helyseg mesto obec oras localitate grad mjesto naselje poli kaupunki paikkakunta kotikunta asuinpaikka", "LOCATION"),
+        ("lakcim cim allandolakcim tartozkodasihely ertesitesicim levelezesicim bydliste trvalebydliste trvalypobyt prechodnypobyt domiciliu resedinta prebivaliste boraviste naslov stalnoprebivalisce zacasnoprebivalisce diefthinsi dieuthinsi odos osoite lahiosoite katuosoite postiosoite kotiosoite utca ulice strada katu", "ADDRESS"),
+        ("iranyitoszam irsz psc codpostal postanskibroj postnastevilka tachydromikoskodikas postinumero", "POSTAL_CODE"),
+        ("telefonszam mobilszam telefonnicislo telefonnecislo mobil numardetelefon brojtelefona brojmobitela telefonskastevilka tilefono kinito puhelin puhelinnumero matkapuhelin", "PHONE_NUMBER"),
+        ("emailcim sahkoposti sahkopostiosoite", "EMAIL_ADDRESS"),
+        ("szemelyiigazolvanyszam szemelyiigazolvany szemelyiszam szemelyiazonosito szigszam utlevelszam jogositvanyszam cisloobcanskehoprukazu cisloop cislopasu cisloobcianskehopreukazu seriebuletin numarbuletin seriesinumar brojosobneiskaznice brojputovnice stevilkaosebneizkaznice arithmostautotitas arithmosdiavatiriou passinnumero henkilokortinnumero", "ID_NUMBER"),
+
         ("noisinh dogumyeri geburtsort geboorteplaats lieudenaissance lieunaissance luogodinascita luogonascita lugardenacimiento lugarnacimiento localdenascimento localnascimento fodelseort paisnacimiento paisdenacimiento ciudadnacimiento ciudaddenacimiento provincianacimiento paesenascita paesedinascita cittanascita cittadinascita comunenascita comunedinascita provincianascita cidadenascimento cidadedenascimento paisnascimento paisdenascimento estadonascimento ufnascimento municipionascimento naturalidade villenaissance villedenaissance paysnaissance paysdenaissance communenaissance geburtsland geboorteland dogumili", "LOCATION"),
         ("ciudad cidade citta ville stadt plaats woonplaats wohnort miasto miejscowosc municipio comune localidad localita sehir ilce mahalle", "LOCATION"),
         ("codepostal codigopostal codicepostale postnummer postnr plz postleitzahl postakodu kodpocztowy", "POSTAL_CODE"),
@@ -162,9 +175,11 @@ public enum KeyHints {
         return field
     }
     /// A word for a name a relative's key closes with ("babaAdi", "imie_ojca"): their whole name.
-    private static let bareNames: Set<String> = ["name", "nm", "nome", "nombre", "nom", "naam", "names", "nomes", "nombres", "ad", "adi", "isim", "imie"]
+    private static let bareNames: Set<String> = ["name", "nm", "nome", "nombre", "nom", "naam", "names", "nomes", "nombres", "ad", "adi", "isim", "imie",
+                                                 "nev", "neve", "jmeno", "meno", "nume", "numele", "prenume", "ime", "onoma", "nimi"]
     private static let relatives: Set<String> = ["mother", "mothers", "father", "fathers", "mom", "moms", "dad", "dads", "parent", "parents", "spouse", "spouses", "husband", "husbands", "wife", "wifes",
-                                                 "mae", "pai", "madre", "padre", "mere", "pere", "mutter", "vater", "moeder", "vader", "pita", "mata", "pati", "patni", "anne", "baba", "matki", "ojca"]
+                                                 "mae", "pai", "madre", "padre", "mere", "pere", "mutter", "vater", "moeder", "vader", "pita", "mata", "pati", "patni", "anne", "baba", "matki", "ojca",
+                                                 "anyja", "anya", "anyjanak", "apja", "apa", "matky", "otce", "otca", "mamei", "tatalui", "majke", "oca", "matere", "oceta", "mitros", "patros", "aidin", "isan"]
     private static let linkingWords: Set<String> = ["of", "ka", "ki", "ke", "de", "do", "da", "del", "la", "du", "des", "der", "van", "von", "s"]
     /// A field named with a qualifier in front ("billing_email", "home_phone",
     /// "applicant_dob") hints like the field. Only fields that mean the same
@@ -201,6 +216,8 @@ public enum KeyHints {
     /// A hash's hex digest ("5d2a9e0f7c13b48e6a0f9d21c7b3e845"): under a person's key, their value hashed, which looks them up as well as the value.
     static func isDigest(_ value: String) -> Bool { !TextRanges.matches(digest, in: value).isEmpty }
     private static let displayWords: Set<String> = ["display", "displayed", "formatted", "full", "pretty", "readable", "text", "string", "str", "iso",
+                                                      // …written out in words, in other languages too: "fechaNacimientoTexto", "data_nascita_testo".
+                                                      "texto", "testo", "texte", "tekst", "teksti", "szoveg", "words", "written", "letras", "extenso",
                                                       // A field as a document writes it in a script or a language: "last_name_en", "firstNameLatin".
                                                       "en", "eng", "english", "latin", "local", "native", "translit", "transliterated", "romanized", "romanised", "ascii", "original",
                                                       // …by the script's or the language's code or name ("nameKo", "nameLatn", "addressJP", "nameKanji"), or as an alternative ("name_alt").

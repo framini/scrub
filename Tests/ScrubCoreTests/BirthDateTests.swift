@@ -219,3 +219,26 @@ func aWrittenMonthsStandInIsAMonthInItsLanguage(_ identifier: String) {
         }
     }
 }
+
+/// A birth date written out in words under a birth date's key, with its weekday and its day spelled out or not,
+/// is replaced whole: its day, its weekday, its month and its year, in its language.
+@Test func aWrittenBirthDateUnderItsKeyIsReplacedWhole() throws {
+    let xml = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <Solicitud>
+      <Nombre>Lucía Herrera Pons</Nombre>
+      <FechaNacimientoTexto>el jueves doce de agosto de 1971</FechaNacimientoTexto>
+    </Solicitud>
+    """
+    let json = #"{"dob_text": "Thursday, the twelfth of August 1971", "geburtsdatum": "Donnerstag, 12. August 1971", "szuletesi_datum": "1971. augusztus tizenkettedike"}"#
+    for (text, name) in [(xml, "solicitud.xml"), (json, "check.json")] {
+        for seed: UInt64 in 1...4 {
+            let result = try Scrubber.scrub(Data(text.utf8), name: name, forceFullDetection: false, seed: seed)
+            let output = String(decoding: result.output, as: UTF8.self)
+            // The weekday may fall the same by chance; the day, the month and the year never do.
+            for part in ["jueves doce", "doce", "agosto", "1971", "twelfth", "August", ", 12. ", "tizenkettedike", "augusztus"] {
+                #expect(!output.contains(part), "[\(name) seed \(seed)] \(part) → \(output)")
+            }
+        }
+    }
+}

@@ -119,7 +119,7 @@ public final class Detector {
             }
             // A person only guessed is replaced only with evidence where the text's language says what its words are.
             // A value under a key that names a person is evidence enough ("cliente": "Lucía").
-            let whole = NameEvidence.withoutLeadingWords(Self.wholeName(kept, in: text), in: text, document: language)
+            let whole = NameEvidence.withoutJoinedTitles(NameEvidence.withoutLeadingWords(Self.wholeName(kept, in: text), in: text, document: language), in: text)
             if NameEvidence.namesPerson(key) { return whole }
             let gated = NameEvidence.gate(whole, doubts: doubts, evidenced: evidenced, in: text, document: language, key: key)
             let given = Self.givenNamesAlone(gated.spans, doubts: gated.doubts, in: text, document: language)
@@ -1054,10 +1054,10 @@ public final class Detector {
                 // Ten digits from 1 are a Unix time (2001 to 2033), never a North
                 // American number, whose area code starts from 2.
                 if value.count == 10 || value.count == 13, value.first == "1", value.allSatisfy({ $0.isASCII && $0.isNumber }) { return nil }
-                // A log's technical numbers: a connection's port ("from 10.0.0.5 port 52144"), and an access log's
+                // A log's technical numbers: a connection's port or timeout in any language ("from 10.0.0.5 port 52144", "na porcie 5432"), and an access log's
                 // status and size after the request it answers ("GET /x HTTP/1.1" 200 1877).
                 let before = (text as NSString).substring(to: match.range.location)
-                if before.range(of: #"(?i)\bport[ \t]*[:=]?[ \t]*$"#, options: .regularExpression) != nil, value.allSatisfy({ $0.isASCII && $0.isNumber }),
+                if before.range(of: AddressModel.machineBefore, options: .regularExpression) != nil, value.allSatisfy({ $0.isASCII && $0.isNumber }),
                    Int(value).map({ $0 <= 65_535 }) == true { return nil }
                 if before.range(of: Self.servedLead, options: .regularExpression) != nil, value.range(of: #"^\d+(?:[ \t]+\d+){0,3}$"#, options: .regularExpression) != nil { return nil }
                 // A bare run of digits may as well be an account, SSN or ID, so its

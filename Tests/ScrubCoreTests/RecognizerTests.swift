@@ -153,6 +153,8 @@ let recognizerSamples: [String: String] = [
     "HR_OIB": "HR12345678903",
     "AL_NIPT": "L12345678A",
     "HU_ANUM": "HU12345676",
+    "HU_ADOAZONOSITO": "8123456786",
+    "HU_TAJ": "123 456 788",
     "AD_NRT": "U-123456-A",
     "LT_PVM": "LT123456715",
     "EE_REGISTRIKOOD": "12345678",

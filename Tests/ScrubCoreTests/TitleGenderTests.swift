@@ -65,4 +65,22 @@ import Testing
             }
         }
     }
+
+    /// A title is never a name: one joined of several by a full stop or a hyphen ("Univ.-Prof.", "Dipl.-Ing.",
+    /// "Dr.-Ing.", "Mag.a") stays whole, as does Spanish's "Doña" or "Don" before a given name.
+    @Test func aTitleIsNeverReplaced() throws {
+        let letter = """
+        Sehr geehrter Herr Univ.-Prof. Gruber,
+        vielen Dank. Univ.-Prof. Markus Gruber wird teilnehmen, ebenso Dr.-Ing. Sabine Hartl und Dipl.-Ing. Petra Lang.
+        """
+        let carta = "Estimada Doña Carmen Ruiz, gracias por su visita. Saludos de parte de Don Alberto Ruiz.\n"
+        for seed: UInt64 in 1...4 {
+            let output = try [letter, carta].map { String(decoding: try Scrubber.scrub(Data($0.utf8), name: "Pasted text", forceFullDetection: false, seed: seed).output, as: UTF8.self) }.joined()
+            #expect(output.components(separatedBy: "Univ.-Prof. ").count == 3, "seed \(seed): \(output)")
+            for title in ["Dr.-Ing. ", "Dipl.-Ing. ", "Estimada Doña ", "de Don "] { #expect(output.contains(title), "\(title) seed \(seed): \(output)") }
+            for name in ["Gruber", "Markus", "Sabine", "Hartl", "Petra", "Carmen", "Alberto", "Ruiz"] { #expect(!output.contains(name), "\(name) seed \(seed): \(output)") }
+        }
+        #expect(People.isTitle("Univ.-Prof.") && People.isTitle("Dipl.-Ing.") && People.isTitle("Mag.a") && !People.isTitle("J.R."))
+    }
 }
+
