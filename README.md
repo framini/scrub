@@ -232,15 +232,14 @@ Not covered, so check for these yourself:
 - Ages with no birth date in the same file stay as they are.
 - A CSV, TSV or pipe-delimited file with no header row is only partly scrubbed: names, birth dates and ID numbers in it can be left as written without being asked about. Add a header row before you scrub it.
 - Names in Chinese, Japanese, Korean, Hindi, Hebrew, Greek, Persian, Georgian or Armenian script, in text that isn't English, may only be asked about, or missed.
-- Outside plain English, a name only a model guessed is left as written and put to you in review, unless something marks it as a name: a title, a label, a name's field, or the same person found elsewhere. Expect several questions on a non-English document, some of them ordinary words, and answer each before you share.
-- Some replacements in the review list are already applied, and can be wrong: a country or an ordinary word read as a place or a name. Check each one.
+- Outside plain English, a name only a model guessed is left as written and put to you in review, unless something marks it as a name: a title, a greeting, a label, a name's field or table column, or the same person found elsewhere. Expect several questions on a non-English document, some of them ordinary words, and answer each before you share.
+- Some replacements in the review list are already applied, and can be wrong: an office's address, or a place or a name read from running text. Check each one.
 - A name that is also an ordinary word can occasionally be replaced where it is used as a word, and an ordinary word can occasionally be replaced as a name. Greetings in less common languages can occasionally be read as names.
-- Company tax and registration numbers (an EIN, a CNPJ, a VAT number) are replaced like a person's. A company whose legal form is less common, written with dots (`L.L.C.`, `Cía. Ltda.`), can be replaced as a person.
-- Session, case and customer reference numbers, bank routing numbers and private IP addresses can be replaced with stand-ins. Keep your own copy if you need to look them up.
-- A long ID number written as a JSON number rather than a string, under a key ending in `_code`, or in a type and number pair whose keys Scrub doesn't know (like `typ` and `nummer`) can be left as written without being asked about.
-- National-ID stand-ins pass their country's check for most countries, but don't always agree with the person's stand-in sex or birth date, and a few (Uruguay's) may not pass their check digit.
+- Company tax and registration numbers (an EIN, a CNPJ, a VAT number) are replaced like a person's.
+- Session, case and customer reference numbers, bank routing numbers and private IP addresses can be replaced with stand-ins, also in a log that holds no personal data. Keep your own copy if you need to look them up.
+- A long ID number written as a JSON number rather than a string, or under a key ending in `_code`, can be left as written without being asked about.
+- National-ID stand-ins pass their country's check digit, but don't always agree with the person's stand-in sex or birth date.
 - Dates in the Hijri or Solar Hijri calendar get stand-ins that may not be valid dates in that calendar.
-- A label right after an address (`Telefonas:`) can occasionally be taken into the address's stand-in, and the phone number after it can then get the wrong country code.
 - Each scrub draws fresh stand-ins, so two scrubs of the same file can't be linked to each other. A run with a fixed seed, as the tests use, always gives the same output for the same input.
 
 ## Keyboard
