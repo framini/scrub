@@ -10,7 +10,7 @@ come from, and how each claim can be checked.
 | In the app | From |
 |---|---|
 | `Contents/MacOS/Scrub` | `Sources/Scrub` and `Sources/ScrubCore`, built by `swift build -c release` |
-| `Contents/Resources/Scrub_ScrubCore.bundle` | the six files in `Sources/ScrubCore/Resources` (below) |
+| `Contents/Resources/Scrub_ScrubCore.bundle` | the six files in `Sources/ScrubCore/Resources`, and `SpanTagger.bin` from `Models` (below) |
 | `Contents/Info.plist`, `AppIcon.icns` | `Support` |
 | `Contents/Resources/THIRD_PARTY_NOTICES.md` | [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) |
 
@@ -18,6 +18,12 @@ come from, and how each claim can be checked.
 frameworks only: Foundation, SwiftUI, AppKit, Accelerate, CryptoKit,
 NaturalLanguage, UniformTypeIdentifiers, Observation, Synchronization, os and
 Darwin. The build resolves nothing and downloads nothing.
+
+The span tagger's weights are too large for the repository. They are built once
+from a published checkpoint by `scripts/make-span-tagger.py` (numpy only, no
+network) into `Models/SpanTagger.bin`, and `scripts/bundle.sh` copies them into
+the app only if their SHA-256 matches the one in `SpanTagger.swift`.
+`scripts/release.sh` refuses to build without them.
 
 `Sources/NetworkProbe` and `Tests` are test-only and are not in the app.
 `Tools` holds the scripts that made the model files. They are used only to
@@ -50,7 +56,7 @@ retrain by hand, never at build or run time (see [`Tools/README.md`](Tools/READM
 ## The model files
 
 Scrub's detectors are code, Apple's system name tagger and data detector, and
-four small models that run on the CPU through Accelerate. Each model file is
+five models that run on the CPU through Accelerate. Each model file is
 checked against a SHA-256 in the code before it is read. A file that is
 missing or altered is not used, and the result says *Reduced coverage* and
 names it.
@@ -61,6 +67,7 @@ names it.
 | `AddressModel.bin` | 2.0 MB | `68a0742d…` (`AddressModel.swift`) | A network that marks postal addresses in lines that hold a number | `Tools/AddressModel`, from generated addresses built on GeoNames and US Census TIGER/Line data |
 | `AddressModelWide.bin` | 2.0 MB | `eda633fa…` (`AddressModel.swift`) | The same for lines with no number | as above |
 | `ContextModel.1.bin`, `.2.bin` | 39.6 MB each | `7a403a65…` for both joined (`ContextModel.swift`) | A pretrained multilingual encoder (Multilingual-MiniLM-L12-H384), fine-tuned to tag personal details from the sentence around them. Split in two to keep each file under 50 MB | `Tools/ContextModel`, from public labelled text at pinned revisions and generated text |
+| `SpanTagger.bin` | 616 MB | `2472afd8…` (`SpanTagger.swift`) | A pretrained multilingual span tagger for personal details, converted to half precision and otherwise unchanged; reimplemented in Swift. Review only: what it finds is asked about and never replaced on its own, so the output is the same with or without it | `scripts/make-span-tagger.py`, from the published checkpoint and licence named in `THIRD_PARTY_NOTICES.md` |
 | `NameLists.txt` | 0.7 MB | `de82406a…` (`NameLists.swift`) | First names, surnames and word frequencies, used as supporting evidence | `Tools/NameLists/derive.py`, from SSA and US Census name files and public-domain books |
 
 The person scorer, a logistic regression over 25 signals, is 26 numbers in
@@ -70,8 +77,11 @@ Each `Tools` folder's README has the recipe, the data and a parity check that
 the Swift code gives the same answers as the trained model. The data's and
 base model's sources and licences are in `THIRD_PARTY_NOTICES.md`, which ships
 in the app as those licences require. No user data and no private data was
-used to train any of them, and the real-text documents the release gate
-measures with are never used for training or tuning.
+used to train the four models trained here, and the real-text documents the
+release gate measures with are never used for training or tuning. The span
+tagger is used as its publishers released it, untrained further; its threshold
+and the fields it reads were set on invented test documents and public
+sample responses, never on user data.
 
 To check the shipped files match the code:
 
@@ -79,6 +89,7 @@ To check the shipped files match the code:
 cd Sources/ScrubCore/Resources
 shasum -a 256 NameModel.bin AddressModel.bin AddressModelWide.bin NameLists.txt
 cat ContextModel.1.bin ContextModel.2.bin | shasum -a 256
+shasum -a 256 SpanTagger.bin   # in the built app's Scrub_ScrubCore.bundle
 ```
 
 ## Reading hostile input
