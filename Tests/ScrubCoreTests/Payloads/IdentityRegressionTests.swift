@@ -128,6 +128,19 @@ func passportZoneFollowsItsHolder(_ name: String) throws {
     }
 }
 
+/// A city's ZIP+4 first and its five-digit ZIP in a later address: the place
+/// the city became writes both, so the second never falls back to digits of no place.
+@Test func zipPlusFourThenBareZipShareAPlace() throws {
+    let input = #"{"address": {"street": "740 Larkmoor Rd", "city": "Tacoma", "state": "WA", "zip": "98402-3617"}, "previous_addresses": [{"street": "40 Larkmoor Rd", "city": "Tacoma", "state": "WA", "zip": "98402"}]}"#
+    for seed in UInt64(1)...40 {
+        let output = try scrub(input, as: "a.json", seed: seed)
+        let city = try value(output, "previous_addresses", "0", "city"), state = try value(output, "previous_addresses", "0", "state")
+        let zip = try value(output, "previous_addresses", "0", "zip"), plus = try value(output, "address", "zip")
+        let place = try #require(Places.all.first { $0.city == city && $0.country == "US" }, "seed \(seed): \(city) is no place")
+        #expect(place.postal.contains(zip) && plus.hasPrefix(zip + "-") && place.region == state, "seed \(seed): \(zip) / \(plus) is not in \(city), \(state)")
+    }
+}
+
 /// An inline document image and a long hyphenated slug, as identity checks and
 /// watchlist hits send them, are scrubbed in seconds: a name-and-number ID
 /// pattern whose repeated pieces could each start without a separator split a

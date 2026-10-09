@@ -718,10 +718,12 @@ final class StandIns {
     }
     /// Whether the place has a postcode written like the original: no new
     /// leading zero on a bare number, a UK district of the same shape.
+    /// "98402-3617" may be written "98402" as a bare number elsewhere, so
+    /// any code with no leading zero asks for a place with such codes.
     private func canWrite(_ place: Place, like original: String) -> Bool {
         let trimmed = original.trimmingCharacters(in: .whitespaces)
         switch place.country {
-        case "US", "AU": return !(trimmed.allSatisfy(\.isNumber) && trimmed.first != "0") || place.postal.contains { $0.first != "0" }
+        case "US", "AU": return !(trimmed.first?.isNumber == true && trimmed.first != "0") || place.postal.contains { $0.first != "0" }
         case "GB":
             let outward = (trimmed.contains(" ") ? String(trimmed.prefix { $0 != " " }) : String(trimmed.dropLast(3))).uppercased()
             return place.postal.contains { $0 != outward && Self.shape($0) == Self.shape(outward) }
