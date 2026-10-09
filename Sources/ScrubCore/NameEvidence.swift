@@ -155,7 +155,7 @@ enum NameEvidence {
     /// Turkish writes the title after the name: "Barış Bey", "Gülsüm Hanım".
     private static let titlesAfter: Set<String> = ["bey", "hanım", "hanim", "beyefendi", "hanımefendi"]
     /// What introduces a name, ending right before it: "mein Name ist", "me llamo", "ik ben", "nazywam się".
-    private static let introduced = TextPattern(#"(?i)(?:\b(?:my name is|i am|this is|named|called|name is|mein name ist|ich bin|ich heiße|hier ist|hier spricht|spricht|me llamo|mi nombre es|soy|je m'appelle|je m’appelle|je suis|je soussignée?|mi chiamo|il mio nome è|sono|meu nome é|me chamo|chamo-me|sou(?: [oa])?|aqui é(?: [oa])?|ik ben|mijn naam is|spreekt met|met|jag heter|jag är|mitt namn är|pratar med|nazywam się|jestem|mam na imię|benim adım|adım|ben|tôi là|tên tôi là|em là|zovem se|moje ime je|ime mi je|mano vardas(?: yra)?|mani sauc|mans vārds ir|mera naam|mera nam|jina langu ni|naitwa|ang pangalan ko ay|ako si|ako po si|nama saya(?: adalah)?|orúkọ mi ni|oruko mi ni|contacto|contato|kontaktperson|persona de contacto|a la atención de|a/c)|\b(?:name|full name|nombre|nombre completo|nome|nome completo|nom|nom complet|naam|namn|navn|isim|ad soyad|imię i nazwisko|họ và tên|họ tên|contact|contacto|contato|kontakt|kontaktperson|responsable|titular|attn|voornaam|achternaam|prénom|prenom|vorname|nachname|apellidos?|cognome|sobrenome|nimi|imię|imie|jméno|név|ad|aan|geadresseerd aan|an|à|a|para|til|till|do|begünstigter|begunstigde|bénéficiaire|beneficiario|beneficiário|titolare|titulaire|ontvanger|empfänger|destinataire|destinatario|destinatário|rekeninghouder|kontoinhaber|inhaber|houder|verzekerde|versicherungsnehmer|assuré|reisender|expéditeur|absender|afzender|verkoper|koper|verkäufer|käufer|vendeur|acheteur)[ \t]*:)[ \t]*$"#)
+    private static let introduced = TextPattern(#"(?i)(?:\b(?:my name is|i am|this is|named|called|name is|mein name ist|ich bin|ich heiße|hier ist|hier spricht|spricht|me llamo|mi nombre es|soy|je m'appelle|je m’appelle|je suis|je soussignée?|mi chiamo|il mio nome è|sono|meu nome é|me chamo|chamo-me|sou(?: [oa])?|aqui é(?: [oa])?|ik ben|mijn naam is|spreekt met|met|jag heter|jag är|mitt namn är|pratar med|nazywam się|jestem|mam na imię|benim adım|adım|ben|tôi là|tên tôi là|em là|zovem se|moje ime je|ime mi je|mano vardas(?: yra)?|mani sauc|mans vārds ir|mera naam|mera nam|jina langu ni|naitwa|ang pangalan ko ay|ako si|ako po si|nama saya(?: adalah)?|orúkọ mi ni|oruko mi ni|contacto|contato|kontaktperson|persona de contacto|a la atención de|a/c)|\b(?:name|full name|nombre|nombre completo|nome|nome completo|nom|nom complet|naam|namn|navn|isim|ad soyad|imię i nazwisko|họ và tên|họ tên|contact|contacto|contato|kontakt|kontaktperson|responsable|titular|attn)[ \t]*:)[ \t]*$"#)
     private static let introducedAfter = TextPattern(#"^[ \t]+(?i:tōku|toku|taku)[ \t]+ingoa(?![\p{L}\p{N}])"#)
     /// Whether "tōku ingoa" follows the name, saying it is the writer's.
     static func introducedAfter(_ range: Range<Int>, in text: String) -> Bool {
@@ -236,72 +236,9 @@ enum NameEvidence {
             let content = ns.substring(with: previous).trimmingCharacters(in: .whitespacesAndNewlines)
             at = previous.location
             if content.isEmpty { continue }
-            // Or under a label for one on the line above: "Geadresseerd aan:", "Empfänger (Consignee):".
-            if content.hasSuffix(":"), case let label = content.replacingOccurrences(of: #"[ \t]*\([^()\n]{1,32}\)[ \t]*:$"#, with: ":", options: .regularExpression),
-               !TextRanges.matches(introduced, in: String(label.suffix(48))).isEmpty { return true }
             return !TextRanges.matches(closings, in: content).isEmpty
         }
         return false
-    }
-    /// What opens a letter or a chat line to someone, ending right before their name: "Beste", "Sehr geehrte", "Chère",
-    /// "Estimada", "Kära", "Szanowna", "Sehr geehrte Kundin,", or "Agent: Goededag".
-    private static let salutation = TextPattern(#"(?i)^[ \t>*]*(?:\p{L}+[ \t]*:[ \t]*)?(?:beste|geachte|lieve|hallo|goededag|goedemorgen|goedemiddag|goedenavond|liebe|lieber|liebes|sehr geehrte[rs]?|guten (?:tag|morgen|abend)|moin|servus|grüß gott|grüezi|cher|chère|chers|chères|bonjour|bonsoir|salut|estimad[oa]s?|querid[oa]s?|hola|buenos días|buenas tardes|car[oa]|carissim[oa]|gentile|gentilissim[oa]|egregi[oa]|ciao|buongiorno|buonasera|prezad[oa]s?|olá|bom dia|boa tarde|kära|käre|hej|hejsan|kjære|kære|hei|drog[iao]|szanown[ayi]|witaj|dzień dobry|hyvä|tervehdys|sayın|merhaba)(?:[ \t]+(?:kundin|kunde|klant|client|cliente|clienta|cliente|klientin|klient)[ \t]*,)?[ \t]+$"#)
-    /// A salutation before the name, on its own line's start or a speaker's: never one made of the language's own words
-    /// ("Liebe Grüße", "Beste Klant", "Sehr geehrte Damen und Herren").
-    static func saluted(_ range: Range<Int>, in text: String, language: NLLanguage?) -> Bool {
-        let ns = text as NSString
-        let line = ns.lineRange(for: NSRange(location: range.lowerBound, length: 0))
-        let head = ns.substring(with: NSRange(location: line.location, length: range.lowerBound - line.location))
-        guard head.count <= 64, !TextRanges.matches(salutation, in: head).isEmpty else { return false }
-        let words = NameShape.words(range, in: text)
-        // Dictionaries hold given names with their capital ("Femke"), so only a word the language writes in small letters
-        // is its own; German writes its nouns with a capital ("Grüße"), so there any word the dictionary holds is.
-        let language = language ?? .english
-        return !words.isEmpty && words.contains { word in
-            word.text.first?.isUppercase == true && (NameLists.isFirst(word.bare) || NameLists.isSurname(word.bare)
-                || !isLowercaseWord(word.text, in: language) && (language != .german || !isOrdinary(word.text, in: language)))
-        }
-    }
-    /// A value in a column whose header names a person ("Naam", "Nachname", "full_name"), in a table written as text:
-    /// comma-, semicolon- or tab-separated, or Markdown's. The header is the first line of the table's block.
-    static func columned(_ range: Range<Int>, in text: String) -> Bool {
-        let ns = text as NSString
-        let line = ns.lineRange(for: NSRange(location: range.lowerBound, length: 0))
-        guard line.location > 0 else { return false }
-        var top = line.location
-        while top > 0 {
-            let previous = ns.lineRange(for: NSRange(location: top - 1, length: 0))
-            if ns.substring(with: previous).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { break }
-            top = previous.location
-        }
-        guard top < line.location else { return false }
-        let header = ns.substring(with: ns.lineRange(for: NSRange(location: top, length: 0))).trimmingCharacters(in: .newlines)
-        let before = ns.substring(with: NSRange(location: line.location, length: range.lowerBound - line.location))
-        func fields(_ row: String, by separator: Character) -> [String] {
-            var fields = [""], quoted = false
-            for character in row {
-                if character == "\"" { quoted.toggle() } else if character == separator && !quoted { fields.append("") } else { fields[fields.count - 1].append(character) }
-            }
-            return fields
-        }
-        for separator in [",", ";", "\t", "|"] as [Character] where header.contains(separator) {
-            let index = fields(before, by: separator).count - 1, columns = fields(header, by: separator)
-            guard index >= 0, index < columns.count, columns.count >= 2 else { continue }
-            let column = columns[index].trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'*`\\"))
-            return !column.isEmpty && namesPerson(column.replacingOccurrences(of: "\\", with: ""))
-        }
-        return false
-    }
-    private static let element = TextPattern(#"<([\p{L}_][\p{L}\p{N}_.:-]*)(?:[ \t][^<>]*)?>[ \t]*$"#)
-    /// A value that fills an element named for a person: "<name>…</name>", "<accountHolderName>…".
-    static func tagged(_ range: Range<Int>, in text: String) -> Bool {
-        let ns = text as NSString
-        let head = ns.substring(with: NSRange(location: max(0, range.lowerBound - 160), length: min(160, range.lowerBound)))
-        guard let open = TextRanges.matches(element, in: head).last else { return false }
-        let tag = (head as NSString).substring(with: open.range(at: 1))
-        let tail = ns.substring(with: NSRange(location: range.upperBound, length: min(tag.utf16.count + 4, ns.length - range.upperBound)))
-        guard tail.trimmingCharacters(in: .whitespaces).hasPrefix("</" + tag) else { return false }
-        return namesPerson(String(tag.split(separator: ":").last ?? ""))
     }
     /// A known given name that is no word of the language, then a surname: each word after it a
     /// known name or no word of the language, with a surname's particles between ("Pieter de Jong").
@@ -578,9 +515,7 @@ enum NameEvidence {
     /// Organisations are no one, and an address that runs over a date written out is no address. `evidenced`: what rules that read a cue found.
     /// Keys that say their value is a person, in the languages Scrub reads ("cliente", "titular", "Kunde"): evidence for every name in it.
     private static let personKeys: Set<String> = ["cliente", "client", "clients", "customer", "kunde", "kundin", "klant", "titular", "titolare", "musteri", "kund", "klient",
-                                                  "nome", "nombre", "nom", "naam", "name", "namn", "isim", "imie", "holder", "applicant", "solicitante", "beneficiario", "contact", "contacto", "contato",
-                                                  "voornaam", "achternaam", "prenom", "vorname", "nachname", "apellido", "apellidos", "cognome", "sobrenome", "nimi", "jmeno", "nev", "surname",
-                                                  "kontoinhaber", "rekeninghouder", "inhaber", "begunstigter", "beneficiaire", "ontvanger", "empfanger", "destinataire", "deelnemer", "teilnehmer"]
+                                                  "nome", "nombre", "nom", "naam", "name", "namn", "isim", "imie", "holder", "applicant", "solicitante", "beneficiario", "contact", "contacto", "contato"]
     static func namesPerson(_ key: String?) -> Bool {
         KeyHints.words(key).contains { personKeys.contains($0.folding(options: .diacriticInsensitive, locale: nil)) }
     }
@@ -665,8 +600,7 @@ enum NameEvidence {
     static func gate(_ spans: [Span], doubts: [Span], evidenced: [Range<Int>], in text: String, document: NLLanguage?, key: String? = nil) -> (spans: [Span], doubts: [Span]) {
         var kept: [Span] = [], doubted = doubts.map { names.contains($0.entity) ? withoutKo($0, in: text) : $0 }
         // A person a reader was unsure of, written right after a label or a phrase that introduces a name ("Kontakt: …"), is one.
-        let introduced = doubted.filter { $0.entity == "PERSON" && $0.url == nil && !label($0, in: text) && (cued($0.range, in: text) || columned($0.range, in: text) || tagged($0.range, in: text)
-            || saluted($0.range, in: text, language: language(around: $0.range, in: text, document: document))) && !company($0, in: text) && !ordinaryAfterTitle($0.range, in: text, language: .english) }
+        let introduced = doubted.filter { $0.entity == "PERSON" && $0.url == nil && !label($0, in: text) && cued($0.range, in: text) && !company($0, in: text) && !ordinaryAfterTitle($0.range, in: text, language: .english) }
         if !introduced.isEmpty {
             doubted.removeAll { doubt in introduced.contains { $0.range == doubt.range } }
             kept += introduced.map { Span(range: $0.range, entity: "PERSON", score: max($0.score, 0.6)) }
@@ -721,13 +655,12 @@ enum NameEvidence {
             if !technical, language == .english || language == nil && plainEnglish(span, in: text, document: document) { kept.append(span); continue }
             if person, headingName(span, among: spans, in: text) { kept.append(span); continue }
             if ordinaryAfterTitle(span.range, in: text, language: language ?? .english) { doubt(span); continue }
-            if cued(span.range, in: text) || handled(span.range, in: text) || saluted(span.range, in: text, language: language)
-                || columned(span.range, in: text) || tagged(span.range, in: text) { kept.append(span); continue }
+            if cued(span.range, in: text) || handled(span.range, in: text) { kept.append(span); continue }
             if !foreign, !technical, unread(span, in: text, around: language) { doubt(span); continue }
             if paired(span.range, in: text, language: foreign ? language ?? .english : .english) {
                 kept.append(span)
             } else if let rest = NameShape.words(span.range, in: text).dropFirst().first(where: { word in
-                cued(word.range.lowerBound..<span.range.upperBound, in: text) || saluted(word.range.lowerBound..<span.range.upperBound, in: text, language: language)
+                cued(word.range.lowerBound..<span.range.upperBound, in: text)
             }) {
                 // A reader that took in the words introducing the name ("Ik ben Joris Achterberg") keeps the name alone.
                 kept.append(Span(range: rest.range.lowerBound..<span.range.upperBound, entity: span.entity, score: span.score))
@@ -885,4 +818,3 @@ enum WrittenDates {
         }
     }
 }
-
